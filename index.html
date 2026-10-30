@@ -1141,12 +1141,16 @@ const TDX = {
       if (trip) trips.push(trip);
     }
     if (!trips.length) throw new Error('沒有取得任何班次');
+    return trips;
+  },
+  /* 以官方班次取代台鐵與高鐵的推估班次 */
+  applyTimetables(trips) {
     resetTrips(t => t.sys !== 'TRA' && t.sys !== 'THSR');
     trips.forEach(registerTrip);
-    return trips.length;
   },
-  async loadDelays(cred) {
+  async loadDelays(cred, isCurrent = () => true) {
     const j = await this.get('v2/Rail/TRA/LiveTrainDelay', cred);
+    if (!isCurrent()) return 0;
     const map = new Map();
     for (const d of j) map.set(String(d.TrainNo), d.DelayTime);
     for (const t of TRIPS) if (t.sys === 'TRA' && t.live) {
@@ -1484,7 +1488,7 @@ function renderOverview() {
 }
 
 function nextStopIdx(trip, m) {
-  for (let i = 0; i < trip.nodes.length; i++) if (trip.times[i].stop && effTime(trip, i, 'arr') >= m) return i;
+  for (let i = 0; i < trip.nodes.length; i++) if (trip.times[i].stop && effTime(trip, i, 'dep') >= m) return i; // 停靠中仍算目前這一站
   return -1;
 }
 function tripMinute(trip) {
@@ -1715,18 +1719,31 @@ $('#dlgclose').addEventListener('click', () => dlg.hidden = true);
 dlg.addEventListener('click', e => { if (e.target === dlg) dlg.hidden = true; });
 const tdxStatus = msg => { $('#tdxstatus').innerHTML = msg; };
 let delayTimer = null;
+let tdxGen = 0; // 每次連線或改回推估都會遞增，讓過期的請求不再改動狀態
+const twDate = ms => new Date(ms + TW).toISOString().slice(0, 10);
 async function connectTDX(cred, quiet) {
+  const gen = ++tdxGen;
+  const isCurrent = () => gen === tdxGen;
+  clearInterval(delayTimer);
   tdxStatus('連線中…');
   try {
-    const n = await TDX.loadTimetables(cred);
-    TDX.ok = true;
-    let d = 0; try { d = await TDX.loadDelays(cred); } catch {}
-    tdxStatus(`已載入 ${n} 班台鐵與高鐵當日時刻，${d} 列台鐵即時誤點。`);
-    clearInterval(delayTimer);
-    delayTimer = setInterval(() => TDX.loadDelays(cred).catch(() => {}), 60000);
+    const trips = await TDX.loadTimetables(cred);
+    if (!isCurrent()) return;
+    TDX.applyTimetables(trips);
+    TDX.ok = true; TDX.date = twDate(Date.now());
+    let d = 0; try { d = await TDX.loadDelays(cred, isCurrent); } catch {}
+    if (!isCurrent()) return;
+    tdxStatus(`已載入 ${trips.length} 班台鐵與高鐵當日時刻，${d} 列台鐵即時誤點。`);
+    delayTimer = setInterval(() => {
+      // 台灣日期換日後（凌晨 4 點，跨午夜班次已收班）重新載入當日時刻表
+      const now = Date.now();
+      if (twDate(now) !== TDX.date && minOfDay(now) >= 240) { connectTDX(cred, true); return; }
+      TDX.loadDelays(cred, isCurrent).catch(() => {});
+    }, 60000);
     if (S.sel && S.sel.kind === 'train') clearSel();
     updatePositions(); renderPanel();
   } catch (err) {
+    if (!isCurrent()) return;
     TDX.ok = false;
     const blocked = err instanceof TypeError;
     tdxStatus(blocked
@@ -1741,6 +1758,7 @@ $('#tdxgo').addEventListener('click', () => {
   store.set('tdx', cred); connectTDX(cred);
 });
 $('#tdxclear').addEventListener('click', () => {
+  tdxGen++;
   store.set('tdx', {}); TDX.ok = false; clearInterval(delayTimer);
   generateAll(); if (S.sel && S.sel.kind === 'train') clearSel();
   updatePositions(); renderPanel(); tdxStatus('已改回班表推估。');

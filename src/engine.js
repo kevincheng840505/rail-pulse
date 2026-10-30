@@ -350,12 +350,16 @@ const TDX = {
       if (trip) trips.push(trip);
     }
     if (!trips.length) throw new Error('沒有取得任何班次');
+    return trips;
+  },
+  /* 以官方班次取代台鐵與高鐵的推估班次 */
+  applyTimetables(trips) {
     resetTrips(t => t.sys !== 'TRA' && t.sys !== 'THSR');
     trips.forEach(registerTrip);
-    return trips.length;
   },
-  async loadDelays(cred) {
+  async loadDelays(cred, isCurrent = () => true) {
     const j = await this.get('v2/Rail/TRA/LiveTrainDelay', cred);
+    if (!isCurrent()) return 0;
     const map = new Map();
     for (const d of j) map.set(String(d.TrainNo), d.DelayTime);
     for (const t of TRIPS) if (t.sys === 'TRA' && t.live) {
