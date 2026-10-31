@@ -80,17 +80,20 @@ button { cursor:pointer; }
 #plist .empty { color:var(--muted); padding:20px 8px; font-size:14px; }
 
 /* 設定 */
-#settings { position:fixed; top:calc(env(safe-area-inset-top,0px) + 64px); right:max(14px, env(safe-area-inset-right,0px)); z-index:21; width:min(340px, calc(100% - 28px)); box-sizing:border-box; border-radius:18px; padding:16px; background:var(--glass-strong); backdrop-filter:blur(22px); -webkit-backdrop-filter:blur(22px); border:1px solid var(--line); max-height:calc(100% - 100px); overflow:auto; }
-#settings h4 { margin:0 0 8px; font-size:12px; letter-spacing:.12em; color:var(--muted); font-weight:700; }
-#settings section + section { margin-top:16px; padding-top:14px; border-top:1px solid var(--line); }
+#settings, #sky { position:fixed; top:calc(env(safe-area-inset-top,0px) + 64px); right:max(14px, env(safe-area-inset-right,0px)); z-index:21; width:min(340px, calc(100% - 28px)); box-sizing:border-box; border-radius:18px; padding:16px; background:var(--glass-strong); backdrop-filter:blur(22px); -webkit-backdrop-filter:blur(22px); border:1px solid var(--line); max-height:calc(100% - 100px); overflow:auto; }
+.panel h4 { margin:0 0 8px; font-size:12px; letter-spacing:.12em; color:var(--muted); font-weight:700; }
+.panel section + section { margin-top:16px; padding-top:14px; border-top:1px solid var(--line); }
 #settings label { display:block; font-size:12px; color:var(--muted); margin:8px 0 4px; }
 #settings input { width:100%; box-sizing:border-box; border:1px solid var(--line); background:rgba(255,255,255,.06); border-radius:10px; padding:8px 10px; font-size:14px; }
-#settings .row { display:flex; gap:6px; flex-wrap:wrap; }
-#settings .row button { border:1px solid var(--line); background:transparent; border-radius:10px; padding:6px 10px; font-size:13px; }
-#settings .row button[aria-pressed="true"], #settings .row button.primary { background:var(--ink); color:#0B1118; border-color:transparent; }
-#settings .note { font-size:12px; color:var(--muted); line-height:1.6; margin-top:8px; }
+.panel .row { display:flex; gap:6px; flex-wrap:wrap; }
+.panel .row button { border:1px solid var(--line); background:transparent; border-radius:10px; padding:6px 10px; font-size:13px; }
+.panel .row button[aria-pressed="true"], .panel .row button.primary { background:var(--ink); color:#0B1118; border-color:transparent; }
+.panel .note { font-size:12px; color:var(--muted); line-height:1.6; margin-top:8px; }
 #settings .note a { color:var(--accent); }
 #tdxstatus { font-size:12.5px; margin-top:8px; padding:8px 10px; border-radius:10px; background:rgba(255,255,255,.06); line-height:1.6; }
+#precip { position:fixed; inset:0; width:100%; height:100%; pointer-events:none; z-index:2; }
+#fogveil { position:fixed; inset:0; pointer-events:none; z-index:1; opacity:0; transition:opacity 2s ease; }
+#wxbadge { color:var(--muted); }
 #slider { width:100%; accent-color:var(--accent); margin-top:6px; }
 
 /* 開場 */
@@ -130,11 +133,14 @@ button { cursor:pointer; }
 </style>
 
 <div id="map" aria-label="全台鐵道 3D 地圖"></div>
+<div id="fogveil" aria-hidden="true"></div>
+<canvas id="precip" aria-hidden="true"></canvas>
 
-<div id="brand"><h1>鐵道脈動</h1><div class="clock"><b id="clock">--:--</b> <span id="mode">班表推估</span></div></div>
+<div id="brand"><h1>鐵道脈動</h1><div class="clock"><b id="clock">--:--</b> <span id="mode">班表推估</span><span id="wxbadge"></span></div></div>
 
 <div id="tools">
   <button class="ib" id="musicbtn" aria-pressed="false" title="背景音樂" aria-label="背景音樂">♪</button>
+  <button class="ib" id="skybtn" title="光線與天氣" aria-label="光線與天氣">☀</button>
   <button class="ib" id="overview" title="回到全台" aria-label="回到全台">◎</button>
   <button class="ib" id="fullbtn" title="全螢幕（F）" aria-label="全螢幕">⤢</button>
   <button class="ib" id="setbtn" title="設定" aria-label="設定">⚙</button>
@@ -145,6 +151,7 @@ button { cursor:pointer; }
 <div id="dock">
   <button class="pillbtn primary" id="pickbtn">選一列車</button>
   <button class="pillbtn" id="roambtn" aria-pressed="false" title="每隔一段時間自動換一列車">漫遊</button>
+  <button class="pillbtn small" id="viewbtn" title="切換跟車視角（V）" disabled>視角・追車</button>
   <button class="pillbtn small" id="speedbtn" title="播放速度（1–4）">1×</button>
 </div>
 
@@ -161,7 +168,23 @@ button { cursor:pointer; }
   <div id="plist"></div>
 </section>
 
-<section id="settings" hidden aria-label="設定">
+<section id="sky" class="panel" hidden aria-label="光線與天氣">
+  <section>
+    <h4>時段</h4>
+    <div class="row" id="todrow">
+      <button data-v="auto">跟著時間</button><button data-v="dawn">清晨</button><button data-v="day">白天</button><button data-v="dusk">黃昏</button><button data-v="night">夜晚</button>
+    </div>
+  </section>
+  <section>
+    <h4>天氣</h4>
+    <div class="row" id="wxrow">
+      <button data-v="auto">即時天氣</button><button data-v="clear">☀ 晴</button><button data-v="cloudy">☁ 多雲</button><button data-v="rain">☂ 雨</button><button data-v="storm">⛈ 雷雨</button><button data-v="fog">🌫 霧</button>
+    </div>
+    <div class="note" id="wxnote"></div>
+  </section>
+</section>
+
+<section id="settings" class="panel" hidden aria-label="設定">
   <section>
     <h4>時間</h4>
     <input id="slider" type="range" min="0" max="1439" step="1" aria-label="時間">
@@ -193,7 +216,7 @@ button { cursor:pointer; }
   </section>
   <section>
     <h4>說明</h4>
-    <div class="note">空白鍵暫停、1–4 切換速度、←→ 移動 10 分鐘、R 漫遊、F 全螢幕、Esc 離開跟車。軌道與底圖 © OpenStreetMap 貢獻者，地形 © Mapzen／AWS Terrain Tiles，音樂由瀏覽器即時合成。</div>
+    <div class="note">空白鍵暫停、1–4 切換速度、←→ 移動 10 分鐘、R 漫遊、V 切換視角、M 音樂、F 全螢幕、Esc 離開跟車。軌道與底圖 © OpenStreetMap 貢獻者，地形 © Mapzen／AWS Terrain Tiles，音樂由瀏覽器即時合成。</div>
   </section>
 </section>
 
@@ -213,4 +236,5 @@ button { cursor:pointer; }
 <script>/*DATA*/</script>
 <script>/*ENGINE*/</script>
 <script>/*MUSIC*/</script>
+<script>/*SCENE*/</script>
 <script>/*APP*/</script>

@@ -16,29 +16,14 @@ const DEG = 180 / Math.PI;
 const S = {
   simMs: Date.now(), speed: 1, playing: true, live: true,
   positions: [], follow: null, followPaused: false, roam: false, roamAt: 0,
-  cam: null, flying: false, phase: null, mapReady: false,
+  view: store.get('view', 'chase'), rel: null, trans: null, ts: null,
+  flying: false, mapReady: false, P: null, lookKey: '',
+  tod: store.get('tod', 'auto'), wx: store.get('wx', 'auto'), realWx: null, realWxAt: 0, realWxPos: null,
   pickGroup: 'all', terrain: store.get('terrain', true), buildings: store.get('buildings', true), labels: store.get('labels', true),
 };
 const curMin = () => minOfDay(S.simMs);
-
-/* ---------- 底圖配色（依模擬時間切換日夜） ---------- */
-const PALETTE = {
-  night: { sea:'#050A12', land:'#0F1822', edge:'#1C2733', water:'#06101B', wood:'#0F1D1A', road:'#1D2A37', bld:'#1A2533',
-    hsShadow:'#000000', hsHigh:'#3A4C60', hsAccent:'#0A121B', label:'#8FA0AE', halo:'#050A12',
-    sky:'#0A1424', horizon:'#1F2F45', fog:'#0B1320', tra:'#A9BCCD', glow:0.55 },
-  dusk: { sea:'#1B2333', land:'#2B2A33', edge:'#3A3846', water:'#1E2840', wood:'#26302B', road:'#403C48', bld:'#3A3642',
-    hsShadow:'#120E18', hsHigh:'#B08A72', hsAccent:'#2A2230', label:'#D6C8C0', halo:'#1B1A22',
-    sky:'#3B3352', horizon:'#E89A6A', fog:'#4A3A48', tra:'#E8DCCF', glow:0.4 },
-  day: { sea:'#8EB2C7', land:'#DCDDD0', edge:'#C3C4B4', water:'#86AAC0', wood:'#BFCDB0', road:'#F4F2EA', bld:'#D2D0C6',
-    hsShadow:'#4E5C55', hsHigh:'#FFFFFF', hsAccent:'#7D8B80', label:'#3B4650', halo:'#F4F2EA',
-    sky:'#7FB1D8', horizon:'#E2ECF0', fog:'#DCE6EA', tra:'#3F4E5E', glow:0.15 },
-};
-function phaseAt(min) {
-  const h = min / 60;
-  if (h >= 6.5 && h < 17.2) return 'day';
-  if ((h >= 5.2 && h < 6.5) || (h >= 17.2 && h < 18.6)) return 'dusk';
-  return 'night';
-}
+const lookHour = () => S.tod === 'auto' ? curMin() / 60 : TOD_FIXED[S.tod];
+const lookWx = () => S.wx === 'auto' ? (S.realWx ? S.realWx.wx : 'clear') : S.wx;
 
 /* ---------- 地圖樣式 ---------- */
 const COUNTIES_GEOJSON = {
@@ -50,7 +35,8 @@ const COUNTIES_GEOJSON = {
     return [ring];
   }) } })),
 };
-const P0 = PALETTE[phaseAt(minOfDay(Date.now()))];
+S.P = paletteAt(lookHour(), lookWx());
+const P0 = S.P;
 const NAME = ['coalesce', ['get', 'name:zh-Hant'], ['get', 'name:zh'], ['get', 'name']];
 const DEM = { type: 'raster-dem', tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'], tileSize: 256, maxzoom: 13, encoding: 'terrarium' };
 const railColor = P => ['case', ['==', ['get', 'color'], ''], P.tra, ['get', 'color']];
@@ -70,10 +56,10 @@ const STYLE = {
     { id: 'water', type: 'fill', source: 'omt', 'source-layer': 'water', paint: { 'fill-color': P0.water } },
     { id: 'county', type: 'line', source: 'land', paint: { 'line-color': P0.edge, 'line-width': 0.8, 'line-opacity': 0.6 } },
     { id: 'roads', type: 'line', source: 'omt', 'source-layer': 'transportation', minzoom: 8,
-      filter: ['in', ['get', 'class'], ['literal', ['motorway', 'trunk', 'primary', 'secondary']]],
-      paint: { 'line-color': P0.road, 'line-width': ['interpolate', ['linear'], ['zoom'], 8, 0.4, 14, 2.2, 17, 6], 'line-opacity': 0.8 } },
+      filter: ['in', ['get', 'class'], ['literal', ['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'minor']]],
+      paint: { 'line-color': P0.road, 'line-width': ['interpolate', ['exponential', 1.6], ['zoom'], 8, 0.4, 14, 2.2, 18, 16], 'line-opacity': 0.8 } },
     { id: 'buildings', type: 'fill-extrusion', source: 'omt', 'source-layer': 'building', minzoom: 13.5,
-      paint: { 'fill-extrusion-color': P0.bld, 'fill-extrusion-height': ['coalesce', ['get', 'render_height'], 8], 'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0], 'fill-extrusion-opacity': 0.75 } },
+      paint: { 'fill-extrusion-color': P0.bld, 'fill-extrusion-height': ['coalesce', ['get', 'render_height'], 8], 'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0], 'fill-extrusion-opacity': 0.8 } },
     { id: 'places', type: 'symbol', source: 'omt', 'source-layer': 'place', filter: ['in', ['get', 'class'], ['literal', ['city', 'town']]],
       layout: { 'text-field': NAME, 'text-font': ['Noto Sans Regular'], 'text-size': ['interpolate', ['linear'], ['zoom'], 6, 11, 12, 15], 'text-letter-spacing': 0.15 },
       paint: { 'text-color': P0.label, 'text-halo-color': P0.halo, 'text-halo-width': 1.4, 'text-opacity': 0.75 } },
@@ -105,150 +91,278 @@ function stationsGeoJSON() {
 /* ---------- 地圖 ---------- */
 let map = null;
 const TAIWAN = { center: [120.95, 23.65], zoom: 6.7, pitch: 35, bearing: -8 };
+const EMPTY = { type: 'FeatureCollection', features: [] };
+const CAR_ZOOM = 13.5; // 這個縮放以上把列車畫成一節節車廂
 function initMap() {
   if (!window.maplibregl) { $('#intro p').textContent = '地圖元件載入失敗，請確認網路連線後重新整理。'; return; }
   map = new maplibregl.Map({
-    container: 'map', style: STYLE, ...TAIWAN, maxPitch: 78, attributionControl: false,
+    container: 'map', style: STYLE, ...TAIWAN, maxPitch: 85, attributionControl: false,
     localIdeographFontFamily: "'Noto Sans TC','PingFang TC','Microsoft JhengHei',sans-serif",
     fadeDuration: 0,
   });
-  map.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: '© OpenStreetMap 貢獻者 · OpenFreeMap · 地形 Mapzen／AWS' }), 'bottom-right');
+  map.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: '© OpenStreetMap 貢獻者 · OpenFreeMap · 地形 Mapzen／AWS · 天氣 Open-Meteo' }), 'bottom-right');
   // 用 style.load 而非 load：外部圖磚失敗時 load 不會觸發，仍要畫出鐵道與列車
   map.once('style.load', () => {
     try { if (S.terrain) map.setTerrain({ source: 'dem', exaggeration: 1.5 }); } catch {}
     map.addSource('rails', { type: 'geojson', data: railsGeoJSON() });
     map.addLayer({ id: 'rail-glow', type: 'line', source: 'rails', layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': railColor(P0), 'line-width': ['interpolate', ['linear'], ['zoom'], 6, 4, 12, 9, 16, 18], 'line-blur': ['interpolate', ['linear'], ['zoom'], 6, 3, 14, 8], 'line-opacity': P0.glow * 0.5 } });
+      paint: { 'line-color': railColor(P0), 'line-width': ['interpolate', ['linear'], ['zoom'], 6, 4, 12, 9, 16, 18], 'line-blur': ['interpolate', ['linear'], ['zoom'], 6, 3, 14, 8], 'line-opacity': ['interpolate', ['linear'], ['zoom'], 13, P0.glow * 0.5, 16, 0] } });
     map.addLayer({ id: 'rail', type: 'line', source: 'rails', layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: { 'line-color': railColor(P0),
-        'line-width': ['interpolate', ['linear'], ['zoom'], 6, ['case', ['==', ['get', 'sys'], 'THSR'], 1.6, ['==', ['get', 'g'], 'mrt'], 1.1, 1], 12, 2.6, 16, 5] } });
+        'line-width': ['interpolate', ['exponential', 1.7], ['zoom'], 6, ['case', ['==', ['get', 'sys'], 'THSR'], 1.6, ['==', ['get', 'g'], 'mrt'], 1.1, 1], 12, 2.6, 16, 6, 19, 22],
+        'line-opacity': ['interpolate', ['linear'], ['zoom'], 15, 1, 17, 0.75] } });
     map.addSource('stations', { type: 'geojson', data: stationsGeoJSON() });
     map.addLayer({ id: 'st-dot', type: 'circle', source: 'stations',
       filter: ['any', ['<=', ['get', 'rank'], 1], ['all', ['<=', ['get', 'rank'], 2], ['>=', ['zoom'], 9]], ['>=', ['zoom'], 11.5]],
-      paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, 2, 14, 5], 'circle-color': '#0B1118', 'circle-stroke-color': '#EEF3F6', 'circle-stroke-width': 1.3, 'circle-pitch-alignment': 'map' } });
+      paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, 2, 14, 5], 'circle-color': '#0B1118', 'circle-stroke-color': '#EEF3F6', 'circle-stroke-width': 1.3, 'circle-pitch-alignment': 'map', 'circle-opacity': ['interpolate', ['linear'], ['zoom'], 15, 1, 16, 0], 'circle-stroke-opacity': ['interpolate', ['linear'], ['zoom'], 15, 1, 16, 0] } });
     map.addLayer({ id: 'st-label', type: 'symbol', source: 'stations',
       filter: ['any', ['all', ['<=', ['get', 'rank'], 1], ['>=', ['zoom'], 7.2]], ['all', ['<=', ['get', 'rank'], 2], ['>=', ['zoom'], 10]], ['>=', ['zoom'], 12.5]],
-      layout: { 'text-field': ['get', 'name'], 'text-font': ['Noto Sans Regular'], 'text-size': ['interpolate', ['linear'], ['zoom'], 7, 12, 14, 15], 'text-offset': [0, 1.1], 'text-anchor': 'top', 'text-letter-spacing': 0.1, visibility: S.labels ? 'visible' : 'none' },
+      layout: { 'text-field': ['get', 'name'], 'text-font': ['Noto Sans Regular'], 'text-size': ['interpolate', ['linear'], ['zoom'], 7, 12, 14, 15, 18, 20], 'text-offset': [0, 1.1], 'text-anchor': 'top', 'text-letter-spacing': 0.1, visibility: S.labels ? 'visible' : 'none' },
       paint: { 'text-color': '#EEF3F6', 'text-halo-color': 'rgba(5,10,18,.85)', 'text-halo-width': 1.6 } });
-    map.addSource('trains', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
-    map.addSource('bodies', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
-    map.addLayer({ id: 'train-halo', type: 'circle', source: 'trains',
+    map.addSource('trains', { type: 'geojson', data: EMPTY });
+    map.addSource('cars', { type: 'geojson', data: EMPTY });
+    map.addSource('focus', { type: 'geojson', data: EMPTY });
+    map.addLayer({ id: 'train-halo', type: 'circle', source: 'trains', maxzoom: 15,
       paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, ['case', ['get', 'sel'], 14, 6], 13, ['case', ['get', 'sel'], 26, 14]], 'circle-color': ['get', 'color'], 'circle-blur': 1, 'circle-opacity': P0.glow + 0.15, 'circle-pitch-alignment': 'map' } });
-    map.addLayer({ id: 'train-body', type: 'fill-extrusion', source: 'bodies', minzoom: 11,
-      paint: { 'fill-extrusion-color': ['get', 'color'], 'fill-extrusion-height': ['get', 'h'], 'fill-extrusion-base': 0, 'fill-extrusion-opacity': 0.95 } });
-    map.addLayer({ id: 'train', type: 'circle', source: 'trains', maxzoom: 12.5,
+    const carPaint = { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 't'], 'fill-extrusion-base': ['get', 'b'], 'fill-extrusion-opacity': 1, 'fill-extrusion-vertical-gradient': false };
+    map.addLayer({ id: 'cars', type: 'fill-extrusion', source: 'cars', minzoom: CAR_ZOOM, paint: carPaint });
+    map.addLayer({ id: 'focus-cars', type: 'fill-extrusion', source: 'focus', minzoom: CAR_ZOOM, paint: carPaint });
+    map.addLayer({ id: 'train', type: 'circle', source: 'trains', maxzoom: CAR_ZOOM + 0.5,
       paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, ['case', ['get', 'sel'], 5, ['==', ['get', 'g'], 'mrt'], 1.8, 2.6], 12, ['case', ['get', 'sel'], 8, 5]],
         'circle-color': ['get', 'color'], 'circle-stroke-color': '#FFFFFF', 'circle-stroke-width': ['case', ['get', 'sel'], 2, 0.6], 'circle-pitch-alignment': 'map' } });
     map.setLayoutProperty('buildings', 'visibility', S.buildings ? 'visible' : 'none');
     S.mapReady = true;
-    applyPhase(true); pushTrains();
+    applyLook(true); pushTrains(true);
     map.on('click', onMapClick);
-    for (const l of ['train', 'train-halo', 'st-dot']) {
+    for (const l of ['train', 'train-halo', 'cars', 'st-dot']) {
       map.on('mouseenter', l, () => map.getCanvas().style.cursor = 'pointer');
       map.on('mouseleave', l, () => map.getCanvas().style.cursor = '');
     }
   });
   // 使用者自己拖曳、旋轉或縮放時，暫停跟車
   for (const ev of ['dragstart', 'rotatestart', 'pitchstart', 'zoomstart']) {
-    map.on(ev, e => { if (e.originalEvent && S.follow) { S.followPaused = true; S.flying = false; renderCaption(true); } });
+    map.on(ev, e => { if (e.originalEvent && S.follow) { S.followPaused = true; S.flying = false; S.trans = null; renderCaption(true); } });
   }
   map.on('error', e => console.warn('地圖資源載入失敗', e && e.error && e.error.message));
 }
 
-function applyPhase(force) {
-  const ph = phaseAt(curMin());
-  if (!map || !S.mapReady || (ph === S.phase && !force)) return;
-  S.phase = ph; const P = PALETTE[ph];
+/* ---------- 光線與天氣 ---------- */
+function applyLook(force) {
+  if (!map || !S.mapReady) return;
+  const hour = lookHour(), wx = lookWx();
+  const key = Math.round(hour * 30) + wx;
+  if (key === S.lookKey && !force) return;
+  S.lookKey = key;
+  const P = S.P = paletteAt(hour, wx), W = WEATHER[wx];
   const set = (l, k, v) => { try { map.setPaintProperty(l, k, v); } catch {} };
   set('bg', 'background-color', P.sea); set('land', 'fill-color', P.land); set('wood', 'fill-color', P.wood);
   set('water', 'fill-color', P.water); set('county', 'line-color', P.edge); set('roads', 'line-color', P.road); set('buildings', 'fill-extrusion-color', P.bld);
   set('hills', 'hillshade-shadow-color', P.hsShadow); set('hills', 'hillshade-highlight-color', P.hsHigh); set('hills', 'hillshade-accent-color', P.hsAccent);
   set('places', 'text-color', P.label); set('places', 'text-halo-color', P.halo);
   set('rail', 'line-color', railColor(P)); set('rail-glow', 'line-color', railColor(P));
-  set('rail-glow', 'line-opacity', P.glow * 0.5);
+  set('rail-glow', 'line-opacity', ['interpolate', ['linear'], ['zoom'], 13, P.glow * 0.5, 16, 0]);
   set('train-halo', 'circle-opacity', P.glow + 0.15);
-  try { map.setSky({ 'sky-color': P.sky, 'horizon-color': P.horizon, 'fog-color': P.fog, 'sky-horizon-blend': 0.6, 'horizon-fog-blend': 0.6, 'fog-ground-blend': 0.4, 'atmosphere-blend': 0.6 }); } catch {}
-  document.body.dataset.phase = ph;
+  try { map.setSky({ 'sky-color': P.sky, 'horizon-color': P.horizon, 'fog-color': P.fog, 'sky-horizon-blend': 0.6, 'horizon-fog-blend': 0.4 + W.fog, 'fog-ground-blend': P.fogBlend, 'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 1, 12, 0.6, 16, 0.3] }); } catch {}
+  try { map.setLight({ anchor: 'map', color: P.light, intensity: P.lightI, position: [1.2, hour * 15 + 90, 50] }); } catch {}
+  Precip.set(W.rain, P.lit, !!W.flash);
+  const fog = $('#fogveil'); fog.style.background = `radial-gradient(ellipse at 50% 70%, transparent 10%, ${P.fog} 95%)`; fog.style.opacity = W.fog;
+  Music.setRain(W.rain);
+  renderSkyPanel();
+  pushTrains(true);
+}
+let wxBusy = false;
+async function updateRealWeather(force) {
+  if (wxBusy || S.wx !== 'auto' && !force) return;
+  const pos = S.follow && tripPos(S.follow, curMin());
+  const ll = pos ? unproj(pos.x, pos.y) : map ? map.getCenter().toArray() : TAIWAN.center;
+  const moved = !S.realWxPos || Math.hypot((ll[0] - S.realWxPos[0]) * 102, (ll[1] - S.realWxPos[1]) * 111) > 25;
+  if (!force && !moved && Date.now() - S.realWxAt < 10 * 60e3) return;
+  wxBusy = true; S.realWxAt = Date.now(); S.realWxPos = ll;
+  try { S.realWx = await RealWeather.at(ll[0], ll[1]); applyLook(); renderSkyPanel(); }
+  catch (e) { console.warn('天氣資料載入失敗', e); }
+  finally { wxBusy = false; }
 }
 
 /* ---------- 列車位置 ---------- */
-const LLEN = { TRA: 0.22, THSR: 0.3, TRTC: 0.14, TYMC: 0.12, TMRT: 0.08, KRTC: 0.1 };
-function trainBody(trip, pos) {
-  // 沿行進方向的長方體（車長依系統，寬度略為誇大以便辨識）
-  const len = LLEN[trip.sys] || 0.15, w = 0.022;
-  const c = Math.cos(pos.heading), s = Math.sin(pos.heading);
-  const pts = [[-len, -w], [0, -w], [0.012, 0], [0, w], [-len, w]].map(([u, v]) => unproj(pos.x + u * c - v * s, pos.y + u * s + v * c));
-  pts.push(pts[0]);
-  return pts;
-}
 function updatePositions() {
   const m = curMin();
   S.positions = [];
   for (const trip of TRIPS) { const pos = tripPos(trip, m); if (pos) S.positions.push({ trip, pos }); }
 }
-function pushTrains() {
+let lastCars = 0;
+function pushTrains(force) {
   if (!S.mapReady) return;
-  const sel = S.follow;
-  const pts = [], bodies = [];
+  const sel = S.follow, z = map.getZoom();
+  const pts = [], cars = [];
+  // 近看時只替畫面內的列車建車廂模型
+  let bounds = null;
+  const doCars = z >= CAR_ZOOM - 0.3 && (force || performance.now() - lastCars > 110);
+  if (doCars) { const b = map.getBounds(); bounds = [b.getWest() - 0.01, b.getSouth() - 0.01, b.getEast() + 0.01, b.getNorth() + 0.01]; lastCars = performance.now(); }
   for (const { trip, pos } of S.positions) {
     const isSel = trip === sel;
-    pts.push({ type: 'Feature', properties: { idx: trip.idx, color: trip.color, sel: isSel, g: sysGroup(trip.sys) }, geometry: { type: 'Point', coordinates: unproj(pos.x, pos.y) } });
-    bodies.push({ type: 'Feature', properties: { idx: trip.idx, color: isSel ? '#FFFFFF' : trip.color, h: isSel ? 16 : 11 }, geometry: { type: 'Polygon', coordinates: [trainBody(trip, pos)] } });
+    const ll = unproj(pos.x, pos.y);
+    pts.push({ type: 'Feature', properties: { idx: trip.idx, color: trip.color, sel: isSel, g: sysGroup(trip.sys) }, geometry: { type: 'Point', coordinates: ll } });
+    if (doCars && !isSel && ll[0] > bounds[0] && ll[0] < bounds[2] && ll[1] > bounds[1] && ll[1] < bounds[3]) {
+      const start = cars.length;
+      carFeatures(trip, pos, S.P, cars, false);
+      for (let i = start; i < cars.length; i++) cars[i].properties.idx = trip.idx;
+    }
   }
   map.getSource('trains').setData({ type: 'FeatureCollection', features: pts });
-  map.getSource('bodies').setData({ type: 'FeatureCollection', features: bodies });
+  if (doCars) map.getSource('cars').setData({ type: 'FeatureCollection', features: cars });
+  else if (z < CAR_ZOOM - 0.3 && lastCars) { map.getSource('cars').setData(EMPTY); lastCars = 0; }
+  pushFocus();
+}
+// 跟拍的列車每一格都更新，畫面上才不會抖
+function pushFocus() {
+  if (!S.mapReady) return;
+  const t = S.follow, pos = t && tripPos(t, curMin());
+  const out = [];
+  if (pos) { carFeatures(t, pos, S.P, out, false); for (const f of out) f.properties.idx = t.idx; }
+  map.getSource('focus').setData({ type: 'FeatureCollection', features: out });
 }
 
 /* ---------- 跟車鏡頭 ---------- */
-const ZOOM = { TRA: 14.2, THSR: 13.4, TRTC: 15, TYMC: 14.6, TMRT: 15, KRTC: 15 };
-const angDiff = (a, b) => ((b - a + 540) % 360) - 180;
-// 投影座標的 y 軸朝南，heading 為數學角度；換成地圖方位角（北為 0、順時針）
-const bearingOf = h => 90 + h * DEG;
 let flightId = 0;
-function follow(trip, { fly = true } = {}) {
-  S.follow = trip; S.followPaused = false;
-  closePicker();
-  const pos = tripPos(trip, curMin());
-  if (pos && map) {
-    const bearing = bearingOf(pos.heading);
-    S.cam = { bearing, zoom: ZOOM[trip.sys] || 14 };
-    if (fly) {
-      // 先停掉上一段飛行（會同步觸發它的 moveend），再用編號辨認這一段的結束
-      map.stop();
-      const id = ++flightId;
-      S.flying = true;
-      map.once('moveend', () => { if (id === flightId) S.flying = false; });
-      map.flyTo({ center: unproj(pos.x, pos.y), zoom: S.cam.zoom, pitch: 64, bearing, duration: 3200, essential: true, curve: 1.6 });
+const ground = ll => { try { return map.queryTerrainElevation(ll) || 0; } catch { return 0; } };
+const viewName = () => (VIEWS.find(v => v.id === S.view) || VIEWS[0]).name;
+// 依視角算出攝影機位置（from）與注視點（to），回傳 MapLibre 的鏡頭參數
+function viewCamera(trip, pos, now, dt) {
+  const L = liveryOf(trip), H = L.h * EX, len = trainLength(trip);
+  const near = Math.min(len, 0.12);
+  let from, to, fa, ta, anchor = 'to';
+  switch (S.view) {
+    case 'cab': {
+      // 站在車頭後上方往前看，畫面下緣看得到車鼻
+      from = trackPoint(trip, pos.km - 9 * M); fa = H + 3.5;
+      to = trackPoint(trip, pos.km + 140 * M); ta = 0; anchor = 'from'; break;
+    }
+    case 'side': {
+      const mid = trackPoint(trip, pos.km - near * 0.45);
+      from = offsetPt(mid, 10 * M, 68 * M); fa = 13; to = mid; ta = H * 0.5; break;
+    }
+    case 'orbit': {
+      const mid = trackPoint(trip, pos.km - near * 0.35), a = now * 0.00011;
+      from = { x: mid.x + Math.cos(a) * 75 * M, y: mid.y + Math.sin(a) * 75 * M }; fa = 34; to = mid; ta = H * 0.5; break;
+    }
+    case 'trackside': {
+      // 站在前方軌道旁等列車經過，過了再換下一個點
+      if (!S.ts || S.ts.trip !== trip || pos.km - S.ts.km > len + 0.05 || S.ts.km - pos.km > 0.6) {
+        const km = pos.km + 0.22, p = trackPoint(trip, km), side = (Math.random() < 0.5 ? -1 : 1) * 24 * M;
+        S.ts = { trip, km, pt: offsetPt(p, 0, side) };
+      }
+      from = S.ts.pt; fa = 5; to = trackPoint(trip, pos.km - Math.min(len * 0.2, 0.03)); ta = H * 0.5; anchor = null; break;
+    }
+    case 'aerial': {
+      to = trackPoint(trip, pos.km - near * 0.5); from = offsetPt(to, -110 * M, 0); fa = 340; ta = 0; break;
+    }
+    default: { // chase：從列車後上方往前看，車頭落在畫面中間
+      to = trackPoint(trip, pos.km + 12 * M); ta = H * 0.5;
+      from = offsetPt(trackPoint(trip, pos.km - Math.min(80 * M, len * 0.9 + 25 * M)), 0, 4 * M); fa = H + 24;
     }
   }
-  pushTrains(); renderCaption(true);
+  // 讓攝影機相對注視點的位置平滑變化（彎道時鏡頭慢慢轉，不會跳）
+  if (anchor) {
+    const rel = { x: from.x - to.x, y: from.y - to.y, z: fa - ta };
+    if (!S.rel) S.rel = rel;
+    else { const k = 1 - Math.exp(-dt / 450); for (const c of ['x', 'y', 'z']) S.rel[c] += (rel[c] - S.rel[c]) * k; }
+    if (anchor === 'to') { from = { x: to.x + S.rel.x, y: to.y + S.rel.y }; fa = ta + S.rel.z; }
+    else { to = { x: from.x - S.rel.x, y: from.y - S.rel.y }; ta = fa - S.rel.z; }
+  }
+  const fl = unproj(from.x, from.y), tl = unproj(to.x, to.y);
+  return camFromTo(fl, fa + ground(fl), tl, ta + ground(tl));
 }
-function unfollow() { S.follow = null; S.followPaused = false; S.flying = false; pushTrains(); renderCaption(); }
-function stepCamera() {
-  if (!S.follow || S.followPaused || S.flying || !map || !S.cam) return;
+/* 由攝影機位置與注視點（經緯度＋高度公尺）換算 MapLibre 的 center/zoom/pitch/bearing */
+function camFromTo(fl, fa, tl, ta) {
+  const lat = tl[1] * Math.PI / 180, mx = 111320 * Math.cos(lat), my = 110570;
+  const dx = (tl[0] - fl[0]) * mx, dy = (tl[1] - fl[1]) * my, dz = fa - ta;
+  const dh = Math.hypot(dx, dy), D = Math.max(8, Math.hypot(dh, dz));
+  const fov = (map.transform && map.transform.fov) || 36.87;
+  const ctcd = 0.5 / Math.tan(fov / 2 * Math.PI / 180) * map.getCanvas().clientHeight;
+  return {
+    center: { lng: tl[0], lat: tl[1] },
+    bearing: dh > 0.5 ? Math.atan2(dx, dy) * DEG : map.getBearing(),
+    pitch: Math.min(84, Math.atan2(dh, Math.max(0.5, dz)) * DEG),
+    zoom: Math.min(21, Math.log2(40075016.686 * Math.cos(lat) * ctcd / (512 * D))),
+  };
+}
+function follow(trip, { fly = true } = {}) {
+  const changed = trip !== S.follow;
+  S.follow = trip; S.followPaused = false; S.rel = null; S.ts = null;
+  closePicker();
+  if (changed && S.wx === 'auto') S.realWxAt = 0;
+  startCamera(fly);
+  pushTrains(true); renderCaption(true); renderViewBtn();
+}
+function startCamera(fly) {
+  const trip = S.follow; if (!trip || !map) return;
+  const pos = tripPos(trip, curMin()); if (!pos) return;
+  const c = map.getCenter(), [lon, lat] = unproj(pos.x, pos.y);
+  const far = map.getZoom() < 12 || Math.hypot((c.lng - lon) * 102, (c.lat - lat) * 111) > 4;
+  map.stop();
+  if (fly && far) {
+    // 遠距離先用 flyTo 飛過去（目標是列車 3.5 秒後的位置），抵達後再接上即時跟拍
+    const id = ++flightId, dur = 3500;
+    const ahead = tripPos(trip, curMin() + dur * S.speed / 60000 * (S.playing ? 1 : 0)) || pos;
+    S.flying = true; S.trans = null;
+    const target = viewCamera(trip, ahead, performance.now(), 1e6);
+    S.rel = null;
+    map.once('moveend', () => { if (id === flightId) { S.flying = false; blendCamera(900); } });
+    map.flyTo({ ...target, duration: dur, curve: 1.5, essential: true });
+  } else {
+    ++flightId; S.flying = false; blendCamera(1600);
+  }
+}
+function blendCamera(dur) {
+  S.trans = { c: map.getCenter(), zoom: map.getZoom(), pitch: map.getPitch(), bearing: map.getBearing(), t0: performance.now(), dur };
+}
+const angDiff = (a, b) => ((b - a + 540) % 360) - 180;
+const ease = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+function unfollow() { S.follow = null; S.followPaused = false; S.flying = false; S.trans = null; pushTrains(true); renderCaption(); renderViewBtn(); }
+function stepCamera(now, dt) {
+  if (!S.follow || S.followPaused || S.flying || !map || !S.mapReady) return;
   const pos = tripPos(S.follow, curMin());
   if (!pos) return;
-  const [lon, lat] = unproj(pos.x, pos.y);
-  S.cam.bearing += angDiff(S.cam.bearing, bearingOf(pos.heading)) * 0.025;
-  const c = map.getCenter();
-  map.jumpTo({ center: [c.lng + (lon - c.lng) * 0.2, c.lat + (lat - c.lat) * 0.2], bearing: S.cam.bearing });
+  const cam = viewCamera(S.follow, pos, now, dt);
+  if (S.trans) {
+    const T = S.trans, k = ease(Math.min(1, (now - T.t0) / T.dur));
+    cam.center = [T.c.lng + (cam.center.lng - T.c.lng) * k, T.c.lat + (cam.center.lat - T.c.lat) * k];
+    cam.zoom = T.zoom + (cam.zoom - T.zoom) * k;
+    cam.pitch = T.pitch + (cam.pitch - T.pitch) * k;
+    cam.bearing = T.bearing + angDiff(T.bearing, cam.bearing) * k;
+    if (k >= 1) S.trans = null;
+  }
+  map.jumpTo(cam);
 }
+function setView(id) {
+  S.view = id; store.set('view', id); S.rel = null; S.ts = null;
+  if (S.follow) { S.followPaused = false; startCamera(false); }
+  renderViewBtn(); renderCaption(true);
+}
+function cycleView() { const i = VIEWS.findIndex(v => v.id === S.view); setView(VIEWS[(i + 1) % VIEWS.length].id); }
+function renderViewBtn() { const b = $('#viewbtn'); b.textContent = '視角・' + viewName(); b.disabled = !S.follow; }
 
-/* 漫遊：每隔一段時間換一列車，偏好行駛中、不同系統的列車 */
-const ROAM_SEC = 75;
+/* 漫遊：每隔一段時間換一列車，偏好行駛中、不同系統的列車，並換個視角 */
+const ROAM_SEC = 60;
 function pickRoamTrip() {
   const pool = S.positions.filter(p => !p.pos.atStation && p.trip !== S.follow);
   if (!pool.length) return null;
   const lastG = S.follow ? sysGroup(S.follow.sys) : null;
-  const weight = p => (p.trip.sys === 'TRA' ? (p.trip.type === '區間' ? 2 : 5) : p.trip.sys === 'THSR' ? 4 : 1) * (sysGroup(p.trip.sys) === lastG ? 0.4 : 1);
+  const weight = p => (p.trip.sys === 'TRA' ? (p.trip.type === '區間' ? 2 : 5) : p.trip.sys === 'THSR' ? 4 : 2) * (sysGroup(p.trip.sys) === lastG ? 0.4 : 1);
   const total = pool.reduce((a, p) => a + weight(p), 0);
   let r = Math.random() * total;
   for (const p of pool) { r -= weight(p); if (r <= 0) return p.trip; }
   return pool[0].trip;
 }
+function roamNext() {
+  const t = pickRoamTrip(); if (!t) return;
+  const views = VIEWS.map(v => v.id).filter(v => v !== S.view);
+  S.view = views[Math.floor(Math.random() * views.length)];
+  follow(t);
+}
 function setRoam(on) {
   S.roam = on; $('#roambtn').setAttribute('aria-pressed', String(on));
-  if (on) { S.roamAt = performance.now() + ROAM_SEC * 1000; if (!S.follow || S.followPaused) { const t = pickRoamTrip(); if (t) follow(t); } }
+  if (on) { S.roamAt = performance.now() + ROAM_SEC * 1000; if (!S.follow || S.followPaused) roamNext(); }
 }
 
 /* ---------- 字卡 ---------- */
@@ -351,9 +465,9 @@ plist.addEventListener('click', e => {
 let popup = null;
 function onMapClick(e) {
   const box = [[e.point.x - 10, e.point.y - 10], [e.point.x + 10, e.point.y + 10]];
-  const hit = map.queryRenderedFeatures(box, { layers: ['train', 'train-halo', 'train-body', 'st-dot'] });
+  const hit = map.queryRenderedFeatures(box, { layers: ['train', 'train-halo', 'cars', 'focus-cars', 'st-dot'] });
   const tr = hit.find(f => f.layer.id !== 'st-dot');
-  if (tr) { setRoam(false); follow(TRIPS[tr.properties.idx]); return; }
+  if (tr) { const t = TRIPS[tr.properties.idx]; if (t !== S.follow || S.followPaused) { setRoam(false); follow(t); } return; }
   const st = hit.find(f => f.layer.id === 'st-dot');
   if (st) showStation(NODES[st.properties.id]);
 }
@@ -409,7 +523,7 @@ function setMusic(on) {
 musicBtn.addEventListener('click', () => setMusic(!Music.playing));
 $('#setbtn').addEventListener('click', () => {
   settings.hidden = !settings.hidden;
-  if (!settings.hidden) { closePicker(); const c = store.get('tdx', {}); $('#tdxid').value = c.id || ''; $('#tdxsecret').value = c.secret || ''; }
+  if (!settings.hidden) { closePicker(); sky.hidden = true; const c = store.get('tdx', {}); $('#tdxid').value = c.id || ''; $('#tdxsecret').value = c.secret || ''; }
 });
 function toggleBtn(id, key, apply) {
   const b = $(id); b.setAttribute('aria-pressed', String(S[key]));
@@ -419,6 +533,31 @@ toggleBtn('#terrainbtn', 'terrain', on => { try { map.setTerrain(on ? { source: 
 toggleBtn('#buildbtn', 'buildings', on => map.setLayoutProperty('buildings', 'visibility', on ? 'visible' : 'none'));
 toggleBtn('#labelbtn', 'labels', on => map.setLayoutProperty('st-label', 'visibility', on ? 'visible' : 'none'));
 
+$('#viewbtn').addEventListener('click', cycleView);
+
+/* ---------- 光線與天氣面板 ---------- */
+const sky = $('#sky');
+$('#skybtn').addEventListener('click', () => { sky.hidden = !sky.hidden; if (!sky.hidden) { settings.hidden = true; closePicker(); renderSkyPanel(); } });
+$('#todrow').addEventListener('click', e => {
+  const b = e.target.closest('button[data-v]'); if (!b) return;
+  S.tod = b.dataset.v; store.set('tod', S.tod); applyLook(true);
+});
+$('#wxrow').addEventListener('click', e => {
+  const b = e.target.closest('button[data-v]'); if (!b) return;
+  S.wx = b.dataset.v; store.set('wx', S.wx);
+  if (S.wx === 'auto') updateRealWeather(true);
+  applyLook(true);
+});
+function renderSkyPanel() {
+  document.querySelectorAll('#todrow button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === S.tod)));
+  document.querySelectorAll('#wxrow button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === S.wx)));
+  const W = WEATHER[lookWx()];
+  $('#skybtn').textContent = W.icon;
+  const r = S.realWx;
+  $('#wxnote').textContent = r ? `所在位置即時天氣：${WEATHER[r.wx].name} ${r.temp}°C（Open-Meteo，每 10 分鐘更新）` : '即時天氣讀取中，或目前無法取得（先顯示晴天）。';
+  $('#wxbadge').textContent = r && S.wx === 'auto' ? ` · ${WEATHER[r.wx].name} ${r.temp}°` : S.wx !== 'auto' ? ' · ' + W.name : '';
+}
+
 /* ---------- TDX ---------- */
 const tdxStatus = msg => { $('#tdxstatus').innerHTML = msg; };
 let delayTimer = null, tdxGen = 0;
@@ -426,7 +565,7 @@ const twDate = ms => new Date(ms + TW).toISOString().slice(0, 10);
 function afterTripsChanged() {
   // 班次重建後 TRIPS 內的物件已換新，跟車對象要找回同一車次
   if (S.follow) {
-    const f = S.follow, same = TRIPS.find(t => t.sys === f.sys && t.no && t.no === f.no && t.origin === f.origin);
+    const f = S.follow, same = TRIPS.includes(f) ? f : TRIPS.find(t => t.sys === f.sys && t.no && t.no === f.no && t.origin === f.origin);
     if (same) S.follow = same; else unfollow();
   }
   updatePositions(); pushTrains(); renderClock(); renderCaption(true);
@@ -490,7 +629,8 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'f' || e.key === 'F') toggleFull();
   else if (e.key === 'r' || e.key === 'R') setRoam(!S.roam);
   else if (e.key === 'm' || e.key === 'M') setMusic(!Music.playing);
-  else if (e.key === 'Escape') { if (!picker.hidden) closePicker(); else if (!settings.hidden) settings.hidden = true; else { setRoam(false); unfollow(); } }
+  else if ((e.key === 'v' || e.key === 'V') && S.follow) cycleView();
+  else if (e.key === 'Escape') { if (!picker.hidden) closePicker(); else if (!settings.hidden) settings.hidden = true; else if (!sky.hidden) sky.hidden = true; else { setRoam(false); unfollow(); } }
 });
 
 /* ---------- 主迴圈 ---------- */
@@ -501,11 +641,16 @@ function frame(now) {
   if (now - lastPush > 50) {
     updatePositions(); pushTrains(); lastPush = now;
     // 列車抵達終點：漫遊時換下一列
-    if (S.roam && S.follow && !S.flying && !tripPos(S.follow, curMin())) { const t = pickRoamTrip(); if (t) follow(t); }
+    if (S.roam && S.follow && !S.flying && !tripPos(S.follow, curMin())) roamNext();
+  } else if (S.follow) pushFocus();
+  stepCamera(now, dt);
+  Precip.step(dt, now);
+  if (S.roam && now > S.roamAt && !S.flying) { S.roamAt = now + ROAM_SEC * 1000; roamNext(); }
+  if (now - lastUi > 500) {
+    lastUi = now; renderClock(); renderCaption(); applyLook();
+    if (!picker.hidden && document.activeElement !== pq) renderPicker();
+    if (S.mapReady) updateRealWeather();
   }
-  stepCamera();
-  if (S.roam && now > S.roamAt && !S.flying) { S.roamAt = now + ROAM_SEC * 1000; const t = pickRoamTrip(); if (t) follow(t); }
-  if (now - lastUi > 500) { lastUi = now; renderClock(); renderCaption(); applyPhase(); if (!picker.hidden && document.activeElement !== pq) renderPicker(); }
   requestAnimationFrame(frame);
 }
 
@@ -518,7 +663,9 @@ async function boot() {
     if (r.ok) applyRailData(await r.json());
   } catch (e) { console.warn('軌道線形載入失敗，改用站間直線', e); }
   generateAll();
+  Precip.init();
   initMap();
+  renderViewBtn(); renderSkyPanel();
   updatePositions(); renderClock();
   startBtns.forEach(b => { b.disabled = false; });
   requestAnimationFrame(t => { last = t; frame(t); });
