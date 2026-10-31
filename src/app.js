@@ -493,7 +493,7 @@ function applyLook(force) {
   try { map.setLight({ anchor: 'map', color: P.light, intensity: P.lightI, position: [1.2, hour * 15 + 90, 50] }); } catch {}
   Precip.set(W.rain, P.lit, !!W.flash);
   const fog = $('#fogveil'); fog.style.background = `radial-gradient(ellipse at 50% 70%, transparent 10%, ${P.fog} 95%)`; fog.style.opacity = W.fog;
-  Music.setRain(W.rain);
+  Music.setRain(W.rain, !!W.flash);
   renderSkyPanel();
   pushTrains(true);
 }
@@ -980,6 +980,7 @@ let seeking = false;
 function renderMusic() {
   const T = Music.tracks[Music.index];
   musicBtn.setAttribute('aria-pressed', String(Music.playing));
+  $('#ambbtn').setAttribute('aria-pressed', String(Music.ambient));
   if (musicPanel.hidden) return;
   $('#mtitle').textContent = T.title; $('#mmood').textContent = T.mood; $('#mdur').textContent = mmss(T.dur);
   const pb = $('#mplay'); pb.innerHTML = Music.playing ? PAUSE_SVG : PLAY_SVG; pb.setAttribute('aria-label', Music.playing ? '暫停' : '播放');
@@ -992,6 +993,9 @@ function renderMusicPos() {
   $('#mseek').value = String(Math.round(pos / T.dur * 1000)); $('#mcur').textContent = mmss(pos);
 }
 Music.onChange(renderMusic);
+Precip.onFlash = () => Music.thunder();
+$('#ambbtn').addEventListener('click', () => Music.setAmbient(!Music.ambient));
+document.addEventListener('pointerdown', () => Music.unlock(), { once: true, capture: true });
 setInterval(renderMusicPos, 500);
 musicBtn.addEventListener('click', () => {
   musicPanel.hidden = !musicPanel.hidden;
