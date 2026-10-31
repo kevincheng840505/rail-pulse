@@ -877,7 +877,7 @@ cap.addEventListener('keydown', e => {
 /* ---------- 選車 ---------- */
 const picker = $('#picker'), scrim = $('#scrim'), pq = $('#pq'), plist = $('#plist'), settings = $('#settings');
 const TYPE_ORDER = { '普悠瑪': 0, '太魯閣': 1, '自強': 2, '莒光': 3, '區間快': 4, '區間': 5 };
-function openPicker() { settings.hidden = true; picker.hidden = false; scrim.hidden = false; renderPicker(); setTimeout(() => pq.focus({ preventScroll: true }), 50); }
+function openPicker() { settings.hidden = true; sky.hidden = true; musicPanel.hidden = true; picker.hidden = false; scrim.hidden = false; renderPicker(); setTimeout(() => pq.focus({ preventScroll: true }), 50); }
 function closePicker() { picker.hidden = true; scrim.hidden = true; }
 function renderPicker() {
   const q = normName(pq.value.trim());
@@ -951,7 +951,6 @@ function showStation(n) {
 function renderClock() {
   const d = new Date(S.simMs + TW);
   $('#clock').textContent = [d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds()].map(x => String(x).padStart(2, '0')).join(':');
-  $('#mode').textContent = TDX.ok ? 'TDX 即時' : '班表推估';
 }
 
 /* ---------- 工具列 ---------- */
@@ -968,15 +967,51 @@ function toggleClean(on = !document.body.classList.contains('clean')) {
 $('#cleanbtn').addEventListener('click', () => toggleClean(true));
 $('#unclean').addEventListener('click', () => toggleClean(false));
 document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && document.body.classList.contains('clean')) toggleClean(false); });
-const musicBtn = $('#musicbtn');
+const musicBtn = $('#musicbtn'), musicPanel = $('#music');
 function setMusic(on) {
   if (on) Music.start().catch(() => {}); else Music.stop();
-  musicBtn.setAttribute('aria-pressed', String(on)); store.set('music', on);
+  store.set('music', on);
 }
-musicBtn.addEventListener('click', () => setMusic(!Music.playing));
+/* 音樂面板：曲目清單、播放／暫停、上下首、可拖曳的進度條 */
+const PLAY_SVG = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 5.5v13l11-6.5z"/></svg>';
+const PAUSE_SVG = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M8.5 5.5v13M15.5 5.5v13"/></svg>';
+const mmss = s => Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
+let seeking = false;
+function renderMusic() {
+  const T = Music.tracks[Music.index];
+  musicBtn.setAttribute('aria-pressed', String(Music.playing));
+  if (musicPanel.hidden) return;
+  $('#mtitle').textContent = T.title; $('#mmood').textContent = T.mood; $('#mdur').textContent = mmss(T.dur);
+  const pb = $('#mplay'); pb.innerHTML = Music.playing ? PAUSE_SVG : PLAY_SVG; pb.setAttribute('aria-label', Music.playing ? '暫停' : '播放');
+  $('#mlist').innerHTML = Music.tracks.map((t, i) => `<button data-i="${i}" aria-current="${i === Music.index}"><span class="n">${i === Music.index && Music.playing ? '♪' : i + 1}</span><span class="t">${esc(t.title)}</span><span class="m">${esc(t.mood)}</span><span class="d">${mmss(t.dur)}</span></button>`).join('');
+  renderMusicPos();
+}
+function renderMusicPos() {
+  if (musicPanel.hidden || seeking) return;
+  const T = Music.tracks[Music.index], pos = Music.position();
+  $('#mseek').value = String(Math.round(pos / T.dur * 1000)); $('#mcur').textContent = mmss(pos);
+}
+Music.onChange(renderMusic);
+setInterval(renderMusicPos, 500);
+musicBtn.addEventListener('click', () => {
+  musicPanel.hidden = !musicPanel.hidden;
+  if (!musicPanel.hidden) { settings.hidden = true; sky.hidden = true; closePicker(); renderMusic(); }
+});
+$('#mplay').addEventListener('click', () => setMusic(!Music.playing));
+$('#mprev').addEventListener('click', () => { Music.prev(); store.set('music', true); });
+$('#mnext').addEventListener('click', () => { Music.next(); store.set('music', true); });
+$('#mlist').addEventListener('click', e => {
+  const b = e.target.closest('button[data-i]'); if (!b) return;
+  const i = +b.dataset.i;
+  if (i === Music.index && Music.playing) return;
+  Music.play(i, i === Music.index ? Music.position() : 0); store.set('music', true);
+});
+const mseek = $('#mseek');
+mseek.addEventListener('input', () => { seeking = true; $('#mcur').textContent = mmss(mseek.value / 1000 * Music.tracks[Music.index].dur); });
+mseek.addEventListener('change', () => { seeking = false; Music.seek(mseek.value / 1000 * Music.tracks[Music.index].dur); });
 $('#setbtn').addEventListener('click', () => {
   settings.hidden = !settings.hidden;
-  if (!settings.hidden) { closePicker(); sky.hidden = true; const c = store.get('tdx', {}); $('#tdxid').value = c.id || ''; $('#tdxsecret').value = c.secret || ''; }
+  if (!settings.hidden) { closePicker(); sky.hidden = true; musicPanel.hidden = true; const c = store.get('tdx', {}); $('#tdxid').value = c.id || ''; $('#tdxsecret').value = c.secret || ''; }
 });
 function toggleBtn(id, key, apply) {
   const b = $(id); b.setAttribute('aria-pressed', String(S[key]));
@@ -990,7 +1025,7 @@ $('#viewbtn').addEventListener('click', cycleView);
 
 /* ---------- 光線與天氣面板 ---------- */
 const sky = $('#sky');
-$('#skybtn').addEventListener('click', () => { sky.hidden = !sky.hidden; if (!sky.hidden) { settings.hidden = true; closePicker(); renderSkyPanel(); } });
+$('#skybtn').addEventListener('click', () => { sky.hidden = !sky.hidden; if (!sky.hidden) { settings.hidden = true; musicPanel.hidden = true; closePicker(); renderSkyPanel(); } });
 $('#todrow').addEventListener('click', e => {
   const b = e.target.closest('button[data-v]'); if (!b) return;
   S.tod = b.dataset.v; store.set('tod', S.tod); applyLook(true);
@@ -1018,7 +1053,6 @@ function renderSkyPanel() {
   $('#skybtn').innerHTML = WX_ICON[lookWx()] || WX_ICON.clear;
   const r = S.realWx;
   $('#wxnote').textContent = r ? `所在位置即時天氣：${WEATHER[r.wx].name} ${r.temp}°C（Open-Meteo，每 10 分鐘更新）` : '即時天氣讀取中，或目前無法取得（先顯示晴天）。';
-  $('#wxbadge').textContent = r && S.wx === 'auto' ? ` · ${WEATHER[r.wx].name} ${r.temp}°` : S.wx !== 'auto' ? ' · ' + W.name : '';
 }
 
 /* ---------- TDX ---------- */
@@ -1090,7 +1124,7 @@ document.addEventListener('keydown', e => {
   else if ((e.key === 'v' || e.key === 'V') && S.follow) cycleView();
   else if (e.key === 'f' || e.key === 'F') toggleClean();
   else if (e.key === 'Escape' && document.body.classList.contains('clean')) toggleClean(false);
-  else if (e.key === 'Escape') { if (!picker.hidden) closePicker(); else if (!settings.hidden) settings.hidden = true; else if (!sky.hidden) sky.hidden = true; else { setRoam(false); unfollow(); } }
+  else if (e.key === 'Escape') { if (!picker.hidden) closePicker(); else if (!settings.hidden) settings.hidden = true; else if (!sky.hidden) sky.hidden = true; else if (!musicPanel.hidden) musicPanel.hidden = true; else { setRoam(false); unfollow(); } }
 });
 
 /* ---------- 主迴圈 ---------- */
