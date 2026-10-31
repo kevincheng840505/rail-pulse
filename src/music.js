@@ -83,8 +83,27 @@ const Music = (() => {
       nextNote += [0.6, 0.9, 1.2, 1.2, 1.8][Math.floor(Math.random() * 5)];
     }
   }
+  /* 雨聲：濾波過的白噪音，跟著天氣調整音量（只在音樂開著時出聲） */
+  let rainGain = null, rainLevel = 0;
+  function initRain() {
+    const len = ctx.sampleRate * 2, buf = ctx.createBuffer(1, len, ctx.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    const src = ctx.createBufferSource(); src.buffer = buf; src.loop = true;
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1400; bp.Q.value = 0.4;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 6000;
+    rainGain = ctx.createGain(); rainGain.gain.value = 0;
+    src.connect(bp); bp.connect(lp); lp.connect(rainGain); rainGain.connect(ctx.destination); src.start();
+  }
+  function applyRain() {
+    if (!ctx) return;
+    if (!rainGain) initRain();
+    rainGain.gain.cancelScheduledValues(ctx.currentTime);
+    rainGain.gain.setValueAtTime(rainGain.gain.value, ctx.currentTime);
+    rainGain.gain.linearRampToValueAtTime(playing ? rainLevel * 0.07 : 0, ctx.currentTime + 2);
+  }
   return {
     get playing() { return playing; },
+    setRain(level) { rainLevel = level; applyRain(); },
     async start() {
       if (!ctx) init();
       if (ctx.state === 'suspended') await ctx.resume();
@@ -94,6 +113,7 @@ const Music = (() => {
       master.gain.setValueAtTime(master.gain.value, ctx.currentTime);
       master.gain.linearRampToValueAtTime(0.75, ctx.currentTime + 3);
       clearInterval(timer); timer = setInterval(schedule, 120); schedule();
+      applyRain();
     },
     stop() {
       if (!ctx) return;
@@ -102,6 +122,7 @@ const Music = (() => {
       master.gain.setValueAtTime(master.gain.value, ctx.currentTime);
       master.gain.linearRampToValueAtTime(0, ctx.currentTime + 1.5);
       clearInterval(timer);
+      applyRain();
       setTimeout(() => { if (!playing) ctx.suspend(); }, 1700);
     },
   };
