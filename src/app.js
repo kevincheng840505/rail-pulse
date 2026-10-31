@@ -849,7 +849,7 @@ function renderCaption(force) {
   cap.classList.toggle('mini', !S.capOpen);
   cap.setAttribute('role', 'button'); cap.tabIndex = 0; cap.setAttribute('aria-expanded', String(!!S.capOpen)); cap.setAttribute('aria-label', '列車資訊，按下可' + (S.capOpen ? '收起' : '展開'));
   cap.innerHTML = `
-    <div class="strip"><span class="dot" style="background:${t.color};color:${t.color}"></span><b class="nm">${esc(trainTitle(t))}</b><span class="nx">${esc(next)}</span><span class="eta">${esc(eta.replace('分後到站', '分').replace('分後開車', '分開車'))}</span><button class="x" id="leave" aria-label="離開">×</button></div>
+    <div class="strip"><span class="dot" style="background:${t.color};color:${t.color}"></span><b class="nm">${esc(trainTitle(t))}</b><span class="nx">${esc(next)}</span><span class="eta">${esc(eta.replace('分後到站', '分').replace('分後開車', '分開車'))}</span><button class="x" id="leave" aria-label="離開"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
     <div class="kicker"><span class="dot" style="background:${t.color};color:${t.color}"></span>${esc(SYSTEMS[t.sys].name)}${t.car ? ' · ' + esc(t.car) : ''}${delay ? ' · ' + delay : ''}</div>
     <h2>${esc(trainTitle(t))}</h2>
     <div class="route">${esc(t.origin)} → ${esc(t.dest)}</div>
@@ -860,7 +860,7 @@ function renderCaption(force) {
 }
 // 字卡預設是一條細長的列，點一下展開完整資訊，再點一下收起
 cap.addEventListener('click', e => {
-  if (e.target.id === 'leave' || e.target.id === 'leave2') { setRoam(false); unfollow(); return; }
+  const lv = e.target.closest && e.target.closest('#leave, #leave2'); if (lv) { setRoam(false); unfollow(); return; }
   S.capOpen = !S.capOpen; store.set('capOpen', S.capOpen); renderCaption(true);
 });
 cap.addEventListener('keydown', e => {
