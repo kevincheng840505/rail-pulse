@@ -76,7 +76,18 @@ function trackPoint(trip, km) {
   // 投影座標 y 軸朝南，o 為正時偏向行進方向的右側
   return { x: p.x - Math.sin(h) * o, y: p.y + Math.cos(h) * o, heading: h };
 }
+/* 軌道資料是一站一站接起來的，車站接點常有幾公尺的側向錯位或轉折（彎道上看起來就是 Z 字破圖）。
+   在前後 25 公尺內做三角加權平均，把接點的錯位抹成平順的過渡 */
+const SMOOTH_W = [1, 2, 3, 4, 5, 6, 5, 4, 3, 2, 1], SMOOTH_SUM = 36, SMOOTH_STEP = 0.005;
 function centerPoint(trip, km) {
+  let x = 0, y = 0;
+  for (let i = 0; i < SMOOTH_W.length; i++) {
+    const q = rawCenter(trip, km + (i - 5) * SMOOTH_STEP);
+    x += q.x * SMOOTH_W[i]; y += q.y * SMOOTH_W[i];
+  }
+  return { x: x / SMOOTH_SUM, y: y / SMOOTH_SUM, heading: rawCenter(trip, km).heading };
+}
+function rawCenter(trip, km) {
   const c = trip.cum, n = c.length;
   if (km <= 0) { const p = segPoint(trip.nodes[0], trip.nodes[1], 0); return { x: p.x + Math.cos(p.heading) * km, y: p.y + Math.sin(p.heading) * km, heading: p.heading }; }
   if (km >= c[n - 1]) { const p = segPoint(trip.nodes[n - 2], trip.nodes[n - 1], 1), d = km - c[n - 1]; return { x: p.x + Math.cos(p.heading) * d, y: p.y + Math.sin(p.heading) * d, heading: p.heading }; }
@@ -111,9 +122,12 @@ function carFeatures(trip, pos, P, out, detail) {
     const lead = i === 0, tail = i === L.n - 1;
     const nose = L.nose / 1000;
     const f = trackPoint(trip, Math.min(front, total + 0.02)), bk = trackPoint(trip, back);
+    // 整節車廂的零件（車門、車窗、轉向架、車頭）都放在車頭到車尾這條直線上，
+    // 彎道上才不會有零件沿著弧線跑出車身之外
+    const span0 = front - back, cp = k => { const t = (k - back) / span0; return { x: bk.x + (f.x - bk.x) * t, y: bk.y + (f.y - bk.y) * t, heading: f.heading }; };
     // 車身主體（去掉車頭流線段）
-    const bodyF = lead && nose ? trackPoint(trip, front - nose) : f;
-    const bodyB = tail && nose ? trackPoint(trip, back + nose) : bk;
+    const bodyF = lead && nose ? cp(front - nose) : f;
+    const bodyB = tail && nose ? cp(back + nose) : bk;
     // 車身底下留一段深色車底，看起來才像架在轉向架上
     add(quad(bodyF, bodyB, w * 0.42, w * 0.42), 0, h * 0.12, under);
     add(quad(bodyF, bodyB, w / 2, w / 2), h * 0.1, h, L.body);
@@ -128,9 +142,9 @@ function carFeatures(trip, pos, P, out, detail) {
       const doors = [];
       for (let j = 0; j < nDoor; j++) doors.push(k0 + span * (nDoor === 1 ? 0.9 : nDoor === 2 ? (j ? 0.85 : 0.15) : (j + 0.5) / nDoor));
       for (const dc of doors) {
-        const a = trackPoint(trip, dc - doorW / 2), b = trackPoint(trip, dc + doorW / 2);
+        const a = cp(dc - doorW / 2), b = cp(dc + doorW / 2);
         add(quad(a, b, iw + 0.00004, iw + 0.00004), h * 0.12, h * 0.82, doorColor);
-        const a2 = trackPoint(trip, dc - doorW * 0.3), b2 = trackPoint(trip, dc + doorW * 0.3);
+        const a2 = cp(dc - doorW * 0.3), b2 = cp(dc + doorW * 0.3);
         add(quad(a2, b2, iw + 0.00006, iw + 0.00006), h * 0.56, h * 0.78, paneColor);
       }
       // 車窗：避開車門的位置
@@ -138,20 +152,20 @@ function carFeatures(trip, pos, P, out, detail) {
       for (let k = 0; k < nw; k++) {
         const ka = k0 + span * (k + 0.18) / nw, kb = k0 + span * (k + 0.82) / nw;
         if (doors.some(dc => kb > dc - doorW * 0.7 && ka < dc + doorW * 0.7)) continue;
-        add(quad(trackPoint(trip, kb), trackPoint(trip, ka), iw + 0.00003, iw + 0.00003), h * 0.6, h * 0.77, paneColor);
+        add(quad(cp(kb), cp(ka), iw + 0.00003, iw + 0.00003), h * 0.6, h * 0.77, paneColor);
       }
       // 轉向架與車頂冷氣機
       for (const u of [0.13, 0.87]) {
-        const c = back + (front - back) * u, a = trackPoint(trip, c - 0.0013), b = trackPoint(trip, c + 0.0013);
+        const c = back + (front - back) * u, a = cp(c - 0.0013), b = cp(c + 0.0013);
         add(quad(a, b, w * 0.47, w * 0.47), 0, h * 0.14, '#1A1D21');
       }
       for (const u of [0.28, 0.72]) {
-        const c = back + (front - back) * u, a = trackPoint(trip, c - 0.0014), b = trackPoint(trip, c + 0.0014);
+        const c = back + (front - back) * u, a = cp(c - 0.0014), b = cp(c + 0.0014);
         add(quad(a, b, w * 0.27, w * 0.27), h * 1.05, h * 1.12, ac);
       }
       // 車廂之間的貫通道
       if (!tail && L.gap > 0) {
-        const a = trackPoint(trip, back - L.gap / 1000 - 0.0002), b = trackPoint(trip, back + 0.0002);
+        const a = cp(back - L.gap / 1000 - 0.0002), b = cp(back + 0.0002);
         add(quad(a, b, w * 0.4, w * 0.4), h * 0.15, h * 0.9, under);
       }
     }
@@ -159,8 +173,8 @@ function carFeatures(trip, pos, P, out, detail) {
     if (L.stripe2) add(quad(bodyF, bodyB, iw + 0.00002, iw + 0.00002), h * 0.33, h * 0.37, L.stripe2);
     add(quad(bodyF, bodyB, w * 0.36, w * 0.36), h, h * 1.07, L.roof);
     if (!L.stripe && trip.color) add(quad(bodyF, bodyB, iw + 0.00002, iw + 0.00002), h * 0.42, h * 0.52, trip.color);
-    if (lead && nose) noseFeatures(trip, L, trackPoint(trip, front - nose), trackPoint(trip, front), nose, w, h, detail, add, winColor, trip.color);
-    if (tail && nose && L.n > 1) noseFeatures(trip, L, trackPoint(trip, back + nose), trackPoint(trip, back), nose, w, h, detail, add, winColor, trip.color);
+    if (lead && nose) noseFeatures(trip, L, cp(front - nose), cp(front), nose, w, h, detail, add, winColor, trip.color);
+    if (tail && nose && L.n > 1) noseFeatures(trip, L, cp(back + nose), cp(back), nose, w, h, detail, add, winColor, trip.color);
   }
 }
 
