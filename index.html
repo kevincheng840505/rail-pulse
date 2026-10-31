@@ -1262,7 +1262,7 @@ const TDX = {
    所以同一首每次聽都一樣，也可以拖進度條跳到任何位置。 */
 const Music = (() => {
   let ctx = null, master = null, verb = null, noise = null, crackleBuf = null, timer = null;
-  let playing = false, idx = 0, sess = null, pausedAt = 0;
+  let playing = false, idx = 0, sess = null, pausedAt = 0, cut = 0; // cut：從小節中間開始播時，比這個時間早的音符不排
   const listeners = new Set();
   const emit = () => listeners.forEach(f => { try { f(); } catch {} });
   const hz = m => 440 * Math.pow(2, (m - 69) / 12);
@@ -1309,6 +1309,7 @@ const Music = (() => {
   }
   // 電鋼琴：正弦基音＋輕微二倍音，慢慢衰減，帶一點顫音
   function rhodes(bus, m, t, len, vel) {
+    if (t < cut) return;
     const g = ctx.createGain(); env(g, t, 0.01, 0.11 * vel, 1.2, 0.035 * vel, 0.6, t + len);
     const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2200;
     g.connect(lp); lp.connect(bus);
@@ -1320,6 +1321,7 @@ const Music = (() => {
   }
   // 鋼琴：快起、指數衰減
   function piano(bus, m, t, len, vel) {
+    if (t < cut) return;
     const g = ctx.createGain(); env(g, t, 0.006, 0.13 * vel, 0.5, 0.03 * vel, 0.5, t + Math.min(len, 2.5));
     const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3200;
     g.connect(lp); lp.connect(bus);
@@ -1330,6 +1332,7 @@ const Music = (() => {
   }
   // 撥弦（像尼龍弦吉他）
   function pluck(bus, m, t, len, vel) {
+    if (t < cut) return;
     const g = ctx.createGain(); env(g, t, 0.004, 0.14 * vel, 0.35, 0.012 * vel, 0.3, t + Math.min(len, 1.2));
     const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.Q.value = 2;
     lp.frequency.setValueAtTime(3200, t); lp.frequency.exponentialRampToValueAtTime(700, t + 0.4);
@@ -1339,24 +1342,27 @@ const Music = (() => {
   }
   const KEYS = { rhodes, piano, pluck };
   function bass(bus, m, t, len, vel) {
+    if (t < cut) return;
     const g = ctx.createGain(); env(g, t, 0.012, 0.26 * vel, 0.4, 0.13 * vel, 0.12, t + len);
     const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 420;
     g.connect(lp); lp.connect(bus);
     osc('sine', hz(m), t, t + len + 0.2, g); osc('triangle', hz(m), t, t + len + 0.2, g);
   }
   function noiseHit(bus, t, type, f, q, peak, dec) {
+    if (t < cut) return;
     const s = ctx.createBufferSource(); s.buffer = noise; s.playbackRate.value = 0.9 + Math.random() * 0.2;
     const fl = ctx.createBiquadFilter(); fl.type = type; fl.frequency.value = f; fl.Q.value = q;
     const g = ctx.createGain(); g.gain.setValueAtTime(peak, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dec);
     s.connect(fl); fl.connect(g); g.connect(bus); s.start(t, Math.random() * 1.5); s.stop(t + dec + 0.05);
   }
   function kick(bus, t, vel) {
+    if (t < cut) return;
     const o = ctx.createOscillator(), g = ctx.createGain();
     o.frequency.setValueAtTime(110, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.13);
     g.gain.setValueAtTime(0.5 * vel, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.38);
     o.connect(g); g.connect(bus); o.start(t); o.stop(t + 0.4);
   }
-  const snare = (bus, t, vel) => { noiseHit(bus, t, 'bandpass', 1700, 0.8, 0.22 * vel, 0.2); const o = ctx.createOscillator(), g = ctx.createGain(); o.frequency.value = 185; g.gain.setValueAtTime(0.08 * vel, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.09); o.connect(g); g.connect(bus); o.start(t); o.stop(t + 0.1); };
+  const snare = (bus, t, vel) => { if (t < cut) return; noiseHit(bus, t, 'bandpass', 1700, 0.8, 0.22 * vel, 0.2); const o = ctx.createOscillator(), g = ctx.createGain(); o.frequency.value = 185; g.gain.setValueAtTime(0.08 * vel, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.09); o.connect(g); g.connect(bus); o.start(t); o.stop(t + 0.1); };
   const hat = (bus, t, vel) => noiseHit(bus, t, 'highpass', 7500, 0.5, 0.05 * vel, 0.045);
   const brush = (bus, t, vel, long) => noiseHit(bus, t, 'bandpass', 3800, 0.6, 0.05 * vel, long ? 0.32 : 0.12);
   const rim = (bus, t, vel) => noiseHit(bus, t, 'bandpass', 2600, 6, 0.12 * vel, 0.05);
@@ -1465,7 +1471,8 @@ const Music = (() => {
     const bus = ctx.createGain(); bus.gain.setValueAtTime(0, now); bus.gain.linearRampToValueAtTime(1, now + (at > 0 ? 0.3 : 0.05));
     const tone = ctx.createBiquadFilter(); tone.type = 'lowpass'; tone.frequency.value = T.style === 'lofi' ? 3400 : 9000;
     bus.connect(tone); tone.connect(master);
-    sess = { track: T, bus, startAt: now + 0.12 - k * T.bar, next: k, mel: null };
+    // 保留小節內的位置：時間軸對齊到 at，這一小節已經過去的音符不排
+    sess = { track: T, bus, startAt: now + 0.12 - Math.min(at, T.dur - 0.5), next: k, mel: null }; cut = now + 0.1;
     if (T.style === 'lofi') {
       const c = ctx.createBufferSource(); c.buffer = crackleBuf; c.loop = true;
       const cg = ctx.createGain(); cg.gain.value = 0.9; c.connect(cg); cg.connect(bus); c.start(now); sess.crackle = c;
