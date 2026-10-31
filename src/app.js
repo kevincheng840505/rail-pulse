@@ -313,17 +313,17 @@ const Facade = (() => {
       const lines = g.type === 'LineString' ? [g.coordinates] : g.type === 'MultiLineString' ? g.coordinates : [];
       for (const line of lines) {
         const pts = line.map(([lon, lat]) => proj(lat, lon));
-        let acc = 0;
+        let run = 0; // 沿整條路累計的距離，路燈間距才不受折線切段影響
         for (let i = 1; i < pts.length; i++) {
           const [x1, y1] = pts[i - 1], [x2, y2] = pts[i], L = Math.hypot(x2 - x1, y2 - y1);
           if (L < 1e-6) continue;
           const ux = (x2 - x1) / L, uy = (y2 - y1) / L, nx = -uy, ny = ux;
-          for (let d = (0.012 - acc) % 0.012; d < L; d += 0.012) {
+          for (let d = (0.012 - run % 0.012) % 0.012; d < L; d += 0.012) {
             const x = x1 + ux * d, y = y1 + uy * d;
             if (Math.hypot(x - cx, y - cy) > RR) continue;
             const key = Math.round(x * 2e3) + ',' + Math.round(y * 2e3);
             if (seen.has(key)) continue; seen.add(key);
-            const k = Math.round((acc + d) / 0.012), hs = hash(key);
+            const k = Math.round((run + d) / 0.012), hs = hash(key);
             for (const side of [-1, 1]) {
               const off = (w / 2 + 1.2) / 1000 * side, tx = x + nx * off, ty = y + ny * off;
               if (k % 3 === 1 && side > 0) {
@@ -341,7 +341,7 @@ const Facade = (() => {
               trees++;
             }
           }
-          acc = (acc + L) % 0.012;
+          run += L;
         }
       }
     }
