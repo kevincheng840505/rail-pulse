@@ -101,7 +101,8 @@ function rawCenter(trip, km) {
 function carFeatures(trip, pos, P, out, detail) {
   const L = liveryOf(trip), key = Object.keys(LIVERY).find(k => LIVERY[k] === L);
   const nDoor = DOORS[key] || 2, doorW = (L.len > 15 ? 1.4 : 1.1) / 1000;
-  const doorColor = mixHex(L.body, '#2A3038', 0.16), under = '#24282E', ac = mixHex(L.roof, '#5A6068', 0.3);
+  const doorOpen = pos.atStation && pos.dwell > 0.08 && pos.dwell < 0.92;
+  const doorColor = doorOpen ? '#0B0F14' : mixHex(L.body, '#2A3038', 0.16), under = '#24282E', ac = mixHex(L.roof, '#5A6068', 0.3);
   const w = L.w * EX / 1000, h = L.h * EX;
   const winColor = '#141C26', paneColor = P.lit ? P.winLit : '#3A5068';
   const quad = (a, b, wa, wb) => {
@@ -145,7 +146,7 @@ function carFeatures(trip, pos, P, out, detail) {
         const a = cp(dc - doorW / 2), b = cp(dc + doorW / 2);
         add(quad(a, b, iw + 0.00004, iw + 0.00004), h * 0.12, h * 0.82, doorColor);
         const a2 = cp(dc - doorW * 0.3), b2 = cp(dc + doorW * 0.3);
-        add(quad(a2, b2, iw + 0.00006, iw + 0.00006), h * 0.56, h * 0.78, paneColor);
+        if (!doorOpen) add(quad(a2, b2, iw + 0.00006, iw + 0.00006), h * 0.56, h * 0.78, paneColor);
       }
       // 車窗：避開車門的位置
       const nw = Math.max(2, Math.round(span * 1000 / 3.4));
@@ -176,6 +177,106 @@ function carFeatures(trip, pos, P, out, detail) {
     if (lead && nose) noseFeatures(trip, L, cp(front - nose), cp(front), nose, w, h, detail, add, winColor, trip.color);
     if (tail && nose && L.n > 1) noseFeatures(trip, L, cp(back + nose), cp(back), nose, w, h, detail, add, winColor, trip.color);
   }
+}
+
+/* 各節車廂車門中心所在的里程（與 carFeatures 的車門排法一致），給上下車的旅客找門 */
+function trainDoors(trip, headKm) {
+  const L = liveryOf(trip), key = Object.keys(LIVERY).find(k => LIVERY[k] === L), nDoor = DOORS[key] || 2, nose = L.nose / 1000, out = [];
+  let km = headKm;
+  for (let i = 0; i < L.n; i++) {
+    const front = km, back = km - L.len / 1000; km = back - L.gap / 1000;
+    const lead = i === 0, tail = i === L.n - 1;
+    const span = (front - back) - (lead && nose ? nose : 0) - (tail && nose ? nose : 0), k0 = back + (tail && nose ? nose : 0);
+    for (let j = 0; j < nDoor; j++) out.push(k0 + span * (nDoor === 1 ? 0.9 : nDoor === 2 ? (j ? 0.85 : 0.15) : (j + 0.5) / nDoor));
+  }
+  return out;
+}
+
+/* ---------- 車站：月台、雨棚、站名牌與候車旅客 ----------
+   列車停站時車頭對齊車站點，上行與下行的車身各在車站點的一側，所以兩邊的月台也前後錯開 */
+const PLATFORM = {
+  THSR: { h: 1.25, w: 6.5, roof: '#E8EBEE', accent: '#F07F1F' },
+  TRA:  { h: 1.0,  w: 5.5, roof: '#56636C', accent: '#2F6FB3' },
+  LRT:  { h: 0.35, w: 3.0, roof: '#DDE3E6', accent: null },
+  MRT:  { h: 1.0,  w: 4.5, roof: '#CBD2D8', accent: null },
+};
+const SHIRTS = ['#E05A4E', '#3D7DD8', '#F2C14E', '#FFFFFF', '#2E3440', '#6CBF84', '#E889B5', '#8C6BD1', '#F08A3C', '#9AA5B1'];
+const sfeat = (ring, b, t, c) => ({ type: 'Feature', properties: { b, t, c }, geometry: { type: 'Polygon', coordinates: [ring] } });
+const sngon = (x, y, r, n) => { const o = []; for (let i = 0; i <= n; i++) { const a = i / n * Math.PI * 2; o.push(unproj(x + Math.cos(a) * r / 1000, y + Math.sin(a) * r / 1000)); } return o; };
+// 中心線上 km 處的位置與方向
+function railFrame(trip, km) {
+  const p = centerPoint(trip, km), a = centerPoint(trip, km - 0.008), b = centerPoint(trip, km + 0.008);
+  const h = Math.atan2(b.y - a.y, b.x - a.x);
+  return { x: p.x, y: p.y, nx: -Math.sin(h), ny: Math.cos(h), ux: Math.cos(h), uy: Math.sin(h) };
+}
+// 沿著軌道、在中心線側向 o0~o1（公里）之間的一條帶狀多邊形
+function railBand(trip, k0, k1, o0, o1) {
+  const n = Math.max(2, Math.ceil((k1 - k0) / 0.01)), A = [], B = [];
+  for (let i = 0; i <= n; i++) {
+    const f = railFrame(trip, k0 + (k1 - k0) * i / n);
+    A.push(unproj(f.x + f.nx * o0, f.y + f.ny * o0)); B.push(unproj(f.x + f.nx * o1, f.y + f.ny * o1));
+  }
+  const ring = A.concat(B.reverse()); ring.push(ring[0]); return ring;
+}
+const person = (out, x, y, base, seed) => {
+  out.push(sfeat(sngon(x, y, 0.24 * EX, 6), base, base + 1.25 * EX, SHIRTS[Math.floor(seed * 997) % SHIRTS.length]));
+  out.push(sfeat(sngon(x, y, 0.15 * EX, 6), base + 1.25 * EX, base + 1.6 * EX, '#2B2420'));
+};
+function platformSpec(trip) { return trip.sys === 'THSR' ? PLATFORM.THSR : trip.sys === 'TRA' ? PLATFORM.TRA : trip.sys === 'LRT' || /輕軌/.test(trip.type) ? PLATFORM.LRT : PLATFORM.MRT; }
+function stationFeatures(node, trip, idx, P, out, crowd) {
+  const L = liveryOf(trip), spec = platformSpec(trip), len = trainLength(trip), kS = trip.cum[idx];
+  const o = Math.abs(sideOffset(trip)), sg = Math.sign(sideOffset(trip)) || 1, w = L.w * EX / 1000, H = spec.h;
+  const accent = spec.accent || trip.color || '#888888', concrete = mixHex('#B9B5AC', P.land, 0.3), roof = mixHex(spec.roof, P.bld, 0.15);
+  for (const s of [sg, -sg]) {
+    const [ka, kb] = s === sg ? [kS - len - 0.006, kS + 0.006] : [kS - 0.006, kS + len + 0.006];
+    const inner = o + w / 2 + 0.00025, outer = inner + spec.w / 1000;
+    out.push(sfeat(railBand(trip, ka, kb, s * inner, s * outer), 0, H, concrete));
+    out.push(sfeat(railBand(trip, ka, kb, s * (inner + 0.0002), s * (inner + 0.0006)), H, H + 0.03, '#E8C547'));
+    // 雨棚與柱子：蓋住月台中段
+    const ca = ka + (kb - ka) * 0.12, cb = kb - (kb - ka) * 0.12;
+    // 雨棚只蓋月台靠外側的一半，不遮住軌道，從上面看得到停靠的列車
+    const ci = inner + spec.w / 1000 * 0.4;
+    out.push(sfeat(railBand(trip, ca, cb, s * ci, s * (outer + 0.0004)), H + 3.4, H + 3.65, roof));
+    out.push(sfeat(railBand(trip, ca, cb, s * ci, s * (ci + 0.0003)), H + 3.1, H + 3.65, accent));
+    for (let k = ca; k <= cb; k += 0.016) { const f = railFrame(trip, k), lo = s * (outer - 0.0012); out.push(sfeat(sngon(f.x + f.nx * lo, f.y + f.ny * lo, 0.18, 6), H, H + 3.4, '#7A8288')); }
+    // 站名牌：月台中央，沿軌道方向的一塊線色看板
+    for (const u of [0.3, 0.7]) {
+      const f = railFrame(trip, ka + (kb - ka) * u), lo = s * (outer - 0.0012), cx = f.x + f.nx * lo, cy = f.y + f.ny * lo;
+      const r = [[1.8, 0.08], [-1.8, 0.08], [-1.8, -0.08], [1.8, -0.08], [1.8, 0.08]].map(([a, b]) => unproj(cx + (f.ux * a + f.nx * b) / 1000, cy + (f.uy * a + f.ny * b) / 1000));
+      out.push(sfeat(r, H + 2.0, H + 2.7, accent));
+    }
+    // 候車的人：散落在月台上，離黃線一點距離
+    const n = Math.floor(crowd * (2 + hash(node.id + s) * 10));
+    for (let q = 0; q < n; q++) {
+      const r1 = hash(node.id + s + 'k' + q), r2 = hash(node.id + s + 'l' + q), f = railFrame(trip, ka + 0.008 + (kb - ka - 0.016) * r1);
+      const lo = s * (inner + 0.0013 + r2 * (spec.w / 1000 - 0.0022));
+      person(out, f.x + f.nx * lo, f.y + f.ny * lo, H, hash(q + node.id));
+    }
+  }
+}
+/* 列車停靠時的上下車：先下後上，下車的人從車門走向月台，上車的人在門邊排隊後走進車廂 */
+function boardingFeatures(trip, pos, out) {
+  const d = pos.dwell; if (d == null || d < 0.1 || d > 0.92) return;
+  const L = liveryOf(trip), spec = platformSpec(trip), w = L.w * EX / 1000, s = Math.sign(sideOffset(trip)) || 1;
+  const doors = trainDoors(trip, pos.km), base = spec.h;
+  doors.forEach((dk, j) => {
+    const p = trackPoint(trip, dk), nx = -Math.sin(p.heading) * s, ny = Math.cos(p.heading) * s, ux = Math.cos(p.heading), uy = Math.sin(p.heading);
+    const at = (lat, along) => [p.x + nx * (w / 2 + lat / 1000) + ux * along / 1000, p.y + ny * (w / 2 + lat / 1000) + uy * along / 1000];
+    const key = trip.idx + ':' + pos.seg + ':' + j, na = Math.floor(hash(key + 'a') * 3), nb = Math.floor(hash(key + 'b') * 3);
+    for (let q = 0; q < na; q++) {
+      const t0 = 0.1 + q * 0.07 + hash(key + q) * 0.04, u = (d - t0) / 0.3;
+      if (u < 0 || u > 1) continue;
+      const [x, y] = at(0.3 + u * 4.2, (hash(key + 'd' + q) - 0.5) * 4 * u);
+      person(out, x, y, base, hash(key + 'c' + q));
+    }
+    for (let q = 0; q < nb; q++) {
+      const tb = 0.45 + q * 0.08, u = Math.min(1, Math.max(0, (d - tb) / 0.18));
+      if (u >= 1) continue;
+      const side = (q % 2 ? 1 : -1) * (0.7 + hash(key + 'e' + q) * 0.5);
+      const [x, y] = at(2.2 + q * 0.6 - u * (2.0 + q * 0.6), side * (1 - u));
+      person(out, x, y, base, hash(key + 'f' + q));
+    }
+  });
 }
 
 /* 車頭：以平滑的俯視輪廓一層層往上疊。每一層的頂面高度越高、往前伸得越短，
