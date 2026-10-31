@@ -98,7 +98,6 @@ body.clean #brand, body.clean #tools, body.clean #dock, body.clean #caption, bod
 #precip { position:fixed; inset:0; width:100%; height:100%; pointer-events:none; z-index:2; }
 #fogveil { position:fixed; inset:0; pointer-events:none; z-index:1; opacity:0; transition:opacity 2s ease; }
 #wxbadge { color:var(--muted); }
-#slider { width:100%; accent-color:var(--accent); margin-top:6px; }
 
 /* 開場 */
 #intro { position:fixed; inset:0; z-index:30; display:grid; place-items:center; background:radial-gradient(ellipse at 50% 60%, rgba(7,12,18,.35), rgba(7,12,18,.88)); transition:opacity 1.2s ease; padding:24px; box-sizing:border-box; }
@@ -176,7 +175,6 @@ body.clean #brand, body.clean #tools, body.clean #dock, body.clean #caption, bod
   <button class="pillbtn primary" id="pickbtn">選一列車</button>
   <button class="pillbtn" id="roambtn" aria-pressed="false" title="每隔一段時間自動換一列車">漫遊</button>
   <button class="pillbtn small" id="viewbtn" title="切換跟車視角（V）" disabled>視角・追車</button>
-  <button class="pillbtn small" id="speedbtn" title="播放速度（1–4）">1×</button>
 </div>
 
 <div id="scrim" hidden></div>
@@ -210,14 +208,6 @@ body.clean #brand, body.clean #tools, body.clean #dock, body.clean #caption, bod
 
 <section id="settings" class="panel" hidden aria-label="設定">
   <section>
-    <h4>時間</h4>
-    <input id="slider" type="range" min="0" max="1439" step="1" aria-label="時間">
-    <div class="row" style="margin-top:8px">
-      <button id="playbtn">暫停</button>
-      <button id="nowbtn" class="primary">回到現在</button>
-    </div>
-  </section>
-  <section>
     <h4>畫面</h4>
     <div class="row">
       <button id="terrainbtn" aria-pressed="true">3D 地形</button>
@@ -240,7 +230,7 @@ body.clean #brand, body.clean #tools, body.clean #dock, body.clean #caption, bod
   </section>
   <section>
     <h4>說明</h4>
-    <div class="note">空白鍵暫停、1–4 切換速度、←→ 移動 10 分鐘、R 漫遊、V 切換視角、M 音樂、F 隱藏介面、Esc 離開跟車。軌道與底圖 © OpenStreetMap 貢獻者，地形 © Mapzen／AWS Terrain Tiles，音樂由瀏覽器即時合成。</div>
+    <div class="note">R 漫遊、V 切換視角、M 音樂、F 隱藏介面、Esc 離開跟車。軌道與底圖 © OpenStreetMap 貢獻者，地形 © Mapzen／AWS Terrain Tiles，音樂由瀏覽器即時合成。</div>
   </section>
 </section>
 
