@@ -273,13 +273,14 @@ const Facade = (() => {
       let gx = 0, gy = 0; for (let i = 0; i < n; i++) { gx += pts[i][0]; gy += pts[i][1]; } gx /= n; gy /= n;
       const top = B.h;
       // 鐵皮加蓋：中低樓層的建築才有，把外框往中心縮成一圈較小的棚子
-      if (B.h < 40 && seed < 0.55) {
+      const shed = B.h < 40 && seed < 0.55;
+      if (shed) {
         const k = 0.55 + seed * 0.4, ring = pts.map(([x, y]) => unproj(gx + (x - gx) * k, gy + (y - gy) * k));
         out.push(poly(ring, top, top + 2.6, mixHex(SHEET[Math.floor(seed * 100) % SHEET.length], P.bld, P.lit ? 0.5 : 0.15)));
       }
       // 水塔：架高的圓桶，靠在屋頂的一角
       if (B.h < 70) {
-        const v = pts[Math.floor(seed * n)], tx = gx + (v[0] - gx) * 0.55, ty = gy + (v[1] - gy) * 0.55, h0 = top + (seed < 0.55 ? 2.6 : 0);
+        const v = pts[Math.floor(seed * n)], tx = gx + (v[0] - gx) * 0.55, ty = gy + (v[1] - gy) * 0.55, h0 = top + (shed ? 2.6 : 0);
         out.push(poly(ngon(tx, ty, 0.9, 4, Math.PI / 4), h0, h0 + 1.0, legs));
         out.push(poly(ngon(tx, ty, 1.0, 10), h0 + 1.0, h0 + 2.9, steel));
         if (seed > 0.7) out.push(poly(ngon(tx + 0.0024, ty, 0.8, 10), h0 + 1.0, h0 + 2.5, steel));
