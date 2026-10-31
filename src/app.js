@@ -373,18 +373,11 @@ const Facade = (() => {
   function platforms() {
     const src = map.getSource('platforms'); if (!src) return;
     const z = map.getZoom(), c = map.getCenter(), [cx, cy] = proj(c.lat, c.lng);
-    const hr = curMin() / 60, crowd = (hr >= 7 && hr < 9.5) || (hr >= 17 && hr < 19.5) ? 1.3 : hr >= 22 || hr < 6 ? 0.3 : 0.75;
     const near = z < FACADE_ZOOM ? [] : NODES.filter(n => Math.hypot(n.x - cx, n.y - cy) < 0.8);
-    const key = near.map(n => n.id).join() + '|' + crowd + '|' + S.P.lit + '|' + TRIPS.length;
+    const key = near.map(n => n.id).join() + '|' + S.P.lit + '|' + TRIPS.length;
     if (key === lastPf) return; lastPf = key;
-    const out = [];
-    for (const n of near) {
-      const seen = new Set();
-      for (const [trip, idx] of NODE_TRIPS.get(n.id) || []) {
-        if (seen.has(trip.line)) continue; seen.add(trip.line);
-        stationFeatures(n, trip, idx, S.P, out, crowd);
-      }
-    }
+    const out = [], seen = new Set();
+    for (const n of near) for (const [trip, idx] of stationReps(n)) stationFeatures(n, trip, idx, S.P, out, seen);
     src.setData({ type: 'FeatureCollection', features: out });
   }
   function build(force) {
@@ -534,8 +527,18 @@ function pushLights() {
   map.getSource('lights').setData({ type: 'FeatureCollection', features: out });
 }
 // 跟拍的列車每一格都更新，畫面上才不會抖
+// GeoJSON 是交給背景執行緒切圖磚的，畫面上真正出現會晚一兩格；鏡頭若直接跟現在的時間走，
+// 車子跟鏡頭就會忽前忽後地抖。所以上一份資料還沒畫上去時先不送新的，鏡頭則對準已經畫上去的那個時間。
+function focusReady() {
+  if (S.focusPend == null) return true;
+  if (!map.isSourceLoaded('focus') && performance.now() - S.focusPendAt < 300) return false;
+  S.focusT = S.focusPend; S.focusPend = null;
+  return true;
+}
+// 鏡頭用的時間：跟車畫面上車子實際所在的時間
+function camMin() { const m = curMin(); return S.focusT != null && Math.abs(S.focusT - m) < 0.02 ? S.focusT : m; }
 function pushFocus() {
-  if (!S.mapReady) return;
+  if (!S.mapReady || !focusReady()) return;
   const t = S.follow, m = curMin(), pos = t && tripPos(t, m);
   const out = [];
   if (pos) { carFeatures(t, pos, S.P, out, true); for (const f of out) f.properties.idx = t.idx; }
@@ -545,11 +548,14 @@ function pushFocus() {
     for (let i = start; i < out.length; i++) out[i].properties.idx = n.idx;
   }
   map.getSource('focus').setData({ type: 'FeatureCollection', features: out });
-  // 停靠中的列車：旅客上下車
+  S.focusPend = m; S.focusPendAt = performance.now();
+  // 畫面附近車站月台上的旅客：候車、上車、下車
   const ppl = [];
-  if (map.getZoom() >= 16) for (const n of [t, ...(S.nearby || [])]) {
-    const np = n && (n === t ? pos : tripPos(n, m));
-    if (np && np.atStation) boardingFeatures(n, np, ppl);
+  if (map.getZoom() >= 16) {
+    const now = performance.now();
+    if (!S.pplSt || now - S.pplSt.at > 1000) { const c = map.getCenter(), [cx, cy] = proj(c.lat, c.lng); S.pplSt = { at: now, list: NODES.filter(n => Math.hypot(n.x - cx, n.y - cy) < 0.5).sort((a, b) => Math.hypot(a.x - cx, a.y - cy) - Math.hypot(b.x - cx, b.y - cy)) }; }
+    const cap = (COARSE ? 140 : 260) * 6;
+    for (const n of S.pplSt.list) for (const [R, idx] of stationReps(n)) stationPeople(n, R, idx, m, ppl, cap);
   }
   if (ppl.length || S.hadPeople) { map.getSource('people').setData({ type: 'FeatureCollection', features: ppl }); S.hadPeople = ppl.length > 0; }
 }
@@ -610,7 +616,19 @@ function viewCamera(trip, pos, now, dt) {
     else { to = { x: from.x - S.rel.x, y: from.y - S.rel.y }; ta = fa - S.rel.z; }
   }
   const fl = unproj(from.x, from.y), tl = unproj(to.x, to.y);
-  return camFromTo(fl, fa + ground(fl), tl, ta + ground(tl));
+  // 地形圖磚換解析度時高度會跳一下，鏡頭的地面高度也做平滑
+  const gf = ground(fl), gt = ground(tl);
+  if (!S.gnd || dt > 900) S.gnd = { f: gf, t: gt };
+  else { const k = 1 - Math.exp(-dt / 350); S.gnd.f += (gf - S.gnd.f) * k; S.gnd.t += (gt - S.gnd.t) * k; }
+  // 高架段：MapLibre 的注視點只能在地面上，所以鏡頭升高後，把視線延長到碰到地面的那一點當作注視點，
+  // 視線仍然穿過高架上的列車
+  const el = elevAt(trip, pos.km);
+  if (el > 0.01) {
+    const dh = Math.hypot(to.x - from.x, to.y - from.y) * 1000, drop = Math.max(fa - ta, dh * 0.27, 1), k = (drop + el) / drop;
+    const tl2 = unproj(from.x + (to.x - from.x) * k, from.y + (to.y - from.y) * k);
+    return camFromTo(fl, drop + el + S.gnd.f, tl2, S.gnd.t);
+  }
+  return camFromTo(fl, fa + S.gnd.f, tl, ta + S.gnd.t);
 }
 /* 由攝影機位置與注視點（經緯度＋高度公尺）換算 MapLibre 的 center/zoom/pitch/bearing */
 function camFromTo(fl, fa, tl, ta, maxPitch) {
@@ -628,7 +646,7 @@ function camFromTo(fl, fa, tl, ta, maxPitch) {
 }
 function follow(trip, { fly = true } = {}) {
   const changed = trip !== S.follow;
-  S.follow = trip; S.followPaused = false; S.rel = null; S.ts = null;
+  S.follow = trip; S.followPaused = false; S.rel = null; S.ts = null; S.gnd = null;
   closePicker();
   if (changed && S.wx === 'auto') S.realWxAt = 0;
   startCamera(fly);
@@ -662,7 +680,7 @@ const ease = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 function unfollow() { S.follow = null; S.followPaused = false; S.flying = false; S.trans = null; pushTrains(true); renderCaption(); renderViewBtn(); }
 function stepCamera(now, dt) {
   if (!S.follow || S.flying || !map || !S.mapReady) return;
-  const pos = tripPos(S.follow, curMin());
+  const pos = tripPos(S.follow, camMin());
   if (!pos) return;
   if (S.followPaused) {
     // 自由視角：使用者自己控制角度與遠近，畫面只跟著列車平移，車子不會跑出畫面
@@ -858,21 +876,11 @@ function showStation(n) {
 }
 
 /* ---------- 時間 ---------- */
-const SPEEDS = [1, 10, 30, 60];
-function setSpeed(sp) { S.speed = sp; if (sp !== 1) S.live = false; S.playing = true; $('#speedbtn').textContent = sp + '×'; renderClock(); }
-$('#speedbtn').addEventListener('click', () => setSpeed(SPEEDS[(SPEEDS.indexOf(S.speed) + 1) % SPEEDS.length]));
-function setSimMinute(min) { S.simMs = dayStart(Date.now()) + ((min % 1440) + 1440) % 1440 * 60000; S.live = false; updatePositions(); pushTrains(); renderClock(); renderCaption(true); }
-function goNow() { S.simMs = Date.now(); S.live = true; setSpeed(1); updatePositions(); pushTrains(); }
-function togglePlay() { S.playing = !S.playing; if (!S.playing) S.live = false; renderClock(); }
-$('#slider').addEventListener('input', e => setSimMinute(+e.target.value));
-$('#playbtn').addEventListener('click', togglePlay);
-$('#nowbtn').addEventListener('click', goNow);
+// 只顯示現在的時間：不提供倒轉或加速
 function renderClock() {
   const d = new Date(S.simMs + TW);
-  $('#clock').textContent = [d.getUTCHours(), d.getUTCMinutes()].map(x => String(x).padStart(2, '0')).join(':') + (S.speed === 1 ? ':' + String(d.getUTCSeconds()).padStart(2, '0') : '');
-  $('#mode').textContent = (TDX.ok ? 'TDX 即時' : '班表推估') + (S.live && S.speed === 1 && S.playing ? '' : S.playing ? ` · ${S.speed}× 播放` : ' · 已暫停');
-  $('#playbtn').textContent = S.playing ? '暫停' : '播放';
-  if (document.activeElement !== $('#slider')) $('#slider').value = Math.floor(curMin());
+  $('#clock').textContent = [d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds()].map(x => String(x).padStart(2, '0')).join(':');
+  $('#mode').textContent = TDX.ok ? 'TDX 即時' : '班表推估';
 }
 
 /* ---------- 工具列 ---------- */
@@ -882,6 +890,8 @@ $('#overview').addEventListener('click', () => { setRoam(false); unfollow(); if 
 // 隱藏介面：手機瀏覽器多半不支援全螢幕 API，改成把畫面上的按鈕全部收起來；支援的瀏覽器順便進入全螢幕
 function toggleClean(on = !document.body.classList.contains('clean')) {
   document.body.classList.toggle('clean', on); $('#cleanbtn').setAttribute('aria-pressed', String(on));
+  // 地圖上的文字（站名、地名、路名、店家）也一起收起來
+  if (map && S.mapReady) for (const l of map.getStyle().layers) if (l.type === 'symbol') map.setLayoutProperty(l.id, 'visibility', on || (l.id === 'st-label' && !S.labels) ? 'none' : 'visible');
   try { if (on && document.documentElement.requestFullscreen && !document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {}); else if (!on && document.fullscreenElement) document.exitFullscreen(); } catch {}
 }
 $('#cleanbtn').addEventListener('click', () => toggleClean(true));
@@ -1004,11 +1014,7 @@ $('#startpick').addEventListener('click', () => closeIntro(openPicker));
 /* ---------- 鍵盤 ---------- */
 document.addEventListener('keydown', e => {
   if (e.target.matches('input, textarea') || !$('#intro').hidden && !$('#intro').classList.contains('out')) return;
-  if (e.key === ' ') { togglePlay(); e.preventDefault(); }
-  else if (['1', '2', '3', '4'].includes(e.key)) setSpeed(SPEEDS[+e.key - 1]);
-  else if (e.key === 'ArrowLeft') setSimMinute(curMin() - 10);
-  else if (e.key === 'ArrowRight') setSimMinute(curMin() + 10);
-  else if (e.key === 'r' || e.key === 'R') setRoam(!S.roam);
+  if (e.key === 'r' || e.key === 'R') setRoam(!S.roam);
   else if (e.key === 'm' || e.key === 'M') setMusic(!Music.playing);
   else if ((e.key === 'v' || e.key === 'V') && S.follow) cycleView();
   else if (e.key === 'f' || e.key === 'F') toggleClean();
