@@ -310,9 +310,9 @@ function viewCamera(trip, pos, now, dt) {
       from = offsetPt(to, -190 * M, 150 * M); fa = 190; break;
     }
     case 'cab': {
-      // 駕駛視角：眼睛在車鼻最前端、駕駛座高度，視線沿著軌道往前
-      from = trackPoint(trip, pos.km + 0.5 * M); fa = H * 0.72;
-      to = trackPoint(trip, pos.km + 40 * M); ta = 0; anchor = 'from'; break;
+      // 站在車頭後上方往前看，畫面下緣看得到車鼻
+      from = trackPoint(trip, pos.km - 9 * M); fa = H + 3.5;
+      to = trackPoint(trip, pos.km + 140 * M); ta = 0; anchor = 'from'; break;
     }
     case 'side': {
       // 以車頭為主：從斜前方側面看車頭與前兩三節
@@ -349,7 +349,7 @@ function viewCamera(trip, pos, now, dt) {
     else { to = { x: from.x - S.rel.x, y: from.y - S.rel.y }; ta = fa - S.rel.z; }
   }
   const fl = unproj(from.x, from.y), tl = unproj(to.x, to.y);
-  return camFromTo(fl, fa + ground(fl), tl, ta + ground(tl), S.view === 'cab' ? 85 : null);
+  return camFromTo(fl, fa + ground(fl), tl, ta + ground(tl));
 }
 /* 由攝影機位置與注視點（經緯度＋高度公尺）換算 MapLibre 的 center/zoom/pitch/bearing */
 function camFromTo(fl, fa, tl, ta, maxPitch) {
@@ -618,6 +618,14 @@ function renderClock() {
 // 漫遊中再按一下就直接換下一列車；按「離開」或自己選車才會停止漫遊
 $('#roambtn').addEventListener('click', () => { if (S.roam) { S.roamAt = performance.now() + ROAM_SEC * 1000; roamNext(); } else setRoam(true); });
 $('#overview').addEventListener('click', () => { setRoam(false); unfollow(); if (map) map.flyTo({ ...TAIWAN, duration: 2500 }); });
+// 隱藏介面：手機瀏覽器多半不支援全螢幕 API，改成把畫面上的按鈕全部收起來；支援的瀏覽器順便進入全螢幕
+function toggleClean(on = !document.body.classList.contains('clean')) {
+  document.body.classList.toggle('clean', on); $('#cleanbtn').setAttribute('aria-pressed', String(on));
+  try { if (on && document.documentElement.requestFullscreen && !document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {}); else if (!on && document.fullscreenElement) document.exitFullscreen(); } catch {}
+}
+$('#cleanbtn').addEventListener('click', () => toggleClean(true));
+$('#unclean').addEventListener('click', () => toggleClean(false));
+document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && document.body.classList.contains('clean')) toggleClean(false); });
 const musicBtn = $('#musicbtn');
 function setMusic(on) {
   if (on) Music.start().catch(() => {}); else Music.stop();
@@ -742,6 +750,8 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'r' || e.key === 'R') setRoam(!S.roam);
   else if (e.key === 'm' || e.key === 'M') setMusic(!Music.playing);
   else if ((e.key === 'v' || e.key === 'V') && S.follow) cycleView();
+  else if (e.key === 'f' || e.key === 'F') toggleClean();
+  else if (e.key === 'Escape' && document.body.classList.contains('clean')) toggleClean(false);
   else if (e.key === 'Escape') { if (!picker.hidden) closePicker(); else if (!settings.hidden) settings.hidden = true; else if (!sky.hidden) sky.hidden = true; else { setRoam(false); unfollow(); } }
 });
 
