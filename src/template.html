@@ -34,6 +34,10 @@ button { cursor:pointer; }
 .ib[aria-pressed="true"] { background:var(--accent); color:#1B1408; border-color:transparent; }
 
 /* 底部：選車與時間 */
+/* 沉浸模式：上下的按鈕、字卡、版權列都收起來，只留右上角一顆小鈕可以叫回來 */
+#unclean { display:none; position:fixed; top:calc(env(safe-area-inset-top,0px) + 16px); right:max(16px, env(safe-area-inset-right,0px)); z-index:6; opacity:.35; }
+body.clean #unclean { display:grid; }
+body.clean #brand, body.clean #tools, body.clean #dock, body.clean #caption, body.clean .maplibregl-ctrl-attrib, body.clean .panel { display:none !important; }
 #dock { position:fixed; left:50%; transform:translateX(-50%); bottom:calc(env(safe-area-inset-bottom,0px) + 18px); z-index:5; display:flex; gap:8px; align-items:center; }
 .pillbtn { height:46px; padding:0 20px; border-radius:999px; font-weight:700; font-size:15px; letter-spacing:.04em; border:1px solid var(--line); background:var(--glass); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px); display:flex; align-items:center; gap:8px; white-space:nowrap; }
 .pillbtn.primary { background:var(--ink); color:#0B1118; border-color:transparent; }
@@ -161,9 +165,11 @@ button { cursor:pointer; }
   <button class="ib" id="musicbtn" aria-pressed="false" title="背景音樂" aria-label="背景音樂">♪</button>
   <button class="ib" id="skybtn" title="光線與天氣" aria-label="光線與天氣">☀</button>
   <button class="ib" id="overview" title="回到全台" aria-label="回到全台">◎</button>
+  <button class="ib" id="cleanbtn" title="隱藏介面（F）" aria-label="隱藏介面" aria-pressed="false">⤢</button>
   <button class="ib" id="setbtn" title="設定" aria-label="設定">⚙</button>
 </div>
 
+<button class="ib" id="unclean" title="顯示介面（F）" aria-label="顯示介面">⤡</button>
 <section id="caption" class="glass fade" aria-live="polite" hidden></section>
 
 <div id="dock">
@@ -234,7 +240,7 @@ button { cursor:pointer; }
   </section>
   <section>
     <h4>說明</h4>
-    <div class="note">空白鍵暫停、1–4 切換速度、←→ 移動 10 分鐘、R 漫遊、V 切換視角、M 音樂、Esc 離開跟車。軌道與底圖 © OpenStreetMap 貢獻者，地形 © Mapzen／AWS Terrain Tiles，音樂由瀏覽器即時合成。</div>
+    <div class="note">空白鍵暫停、1–4 切換速度、←→ 移動 10 分鐘、R 漫遊、V 切換視角、M 音樂、F 隱藏介面、Esc 離開跟車。軌道與底圖 © OpenStreetMap 貢獻者，地形 © Mapzen／AWS Terrain Tiles，音樂由瀏覽器即時合成。</div>
   </section>
 </section>
 

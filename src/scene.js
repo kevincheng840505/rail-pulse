@@ -5,6 +5,24 @@
    body 車身、stripe/stripe2 腰帶、roof 車頂、nose 車頭流線段長度、cab 車頭色（無則同車身） */
 const EX = 1.3;
 const LIFT = 0; // 近看時地形已攤平，車廂直接貼地
+/* 車頭外形（依實車照片的大致比例）：
+   tipH 車鼻最前端的高度比例、hp 側面輪廓往下收的曲率（越大越像子彈頭，前段才開始下降）、
+   tipW 最前端寬度比例、wp 俯視輪廓的圓潤度（越大越方、越小越尖） */
+const NOSE_SHAPE = {
+  THSR:     { tipH: 0.22, hp: 1.35, tipW: 0.3,  wp: 2.2 }, // 700T 長鴨嘴
+  TEMU2000: { tipH: 0.3,  hp: 1.1,  tipW: 0.28, wp: 1.9 }, // 普悠瑪 尖流線
+  TEMU1000: { tipH: 0.34, hp: 1.1,  tipW: 0.32, wp: 2.0 }, // 太魯閣
+  EMU3000:  { tipH: 0.42, hp: 1.2,  tipW: 0.42, wp: 2.4 }, // 新自強 斜面流線
+  E1000:    { tipH: 0.5,  hp: 1.0,  tipW: 0.5,  wp: 2.6 },
+  EMU900:   { tipH: 0.62, hp: 1.0,  tipW: 0.62, wp: 3.0 }, // 區間車 微斜平頭
+  TRTC:     { tipH: 0.84, hp: 1.0,  tipW: 0.8,  wp: 4.0 }, // 捷運 圓角平頭
+  TRTC_BR:  { tipH: 0.7,  hp: 1.0,  tipW: 0.72, wp: 3.0 },
+  TRTC_Y:   { tipH: 0.72, hp: 1.1,  tipW: 0.66, wp: 2.6 },
+  TYMC:     { tipH: 0.6,  hp: 1.1,  tipW: 0.6,  wp: 2.6 },
+  TMRT:     { tipH: 0.62, hp: 1.1,  tipW: 0.6,  wp: 2.6 },
+  KRTC:     { tipH: 0.84, hp: 1.0,  tipW: 0.8,  wp: 4.0 },
+  LRT:      { tipH: 0.72, hp: 1.0,  tipW: 0.6,  wp: 2.4 },
+};
 // 每節車廂單側的車門數
 const DOORS = { THSR: 1, TEMU2000: 1, TEMU1000: 1, EMU3000: 2, E1000: 2, CHUKUANG: 2, EMU900: 3, TRTC: 4, TRTC_BR: 2, TRTC_Y: 3, TYMC: 3, TMRT: 4, KRTC: 4, LRT: 1 };
 const LIVERY = {
@@ -141,20 +159,48 @@ function carFeatures(trip, pos, P, out, detail) {
     if (L.stripe2) add(quad(bodyF, bodyB, iw + 0.00002, iw + 0.00002), h * 0.33, h * 0.37, L.stripe2);
     add(quad(bodyF, bodyB, w * 0.36, w * 0.36), h, h * 1.07, L.roof);
     if (!L.stripe && trip.color) add(quad(bodyF, bodyB, iw + 0.00002, iw + 0.00002), h * 0.42, h * 0.52, trip.color);
-    // 車頭流線：分兩段逐漸變矮變窄
-    const capColor = L.cab || L.body;
-    // 三段逐漸變矮變窄，模仿車鼻斜面；第一段上方是駕駛室窗
-    const NOSE = [[0, 1, 0.5, 0.88], [0.4, 0.88, 0.44, 0.62], [0.72, 0.62, 0.2, 0.36]]; // [起點比例, 起點寬, 終點寬, 高]
-    if (lead && nose) NOSE.forEach(([u, w0, w1, hh], j) => {
-      const a = trackPoint(trip, front - nose * (1 - u)), b = trackPoint(trip, front - nose * (1 - (NOSE[j + 1] ? NOSE[j + 1][0] : 1)));
-      add(quad(b, a, w * w1 / 2, w * w0 / 2), 0, h * hh, j ? capColor : L.body);
-      // 駕駛室窗往前多凸出 4 公分，避免和車鼻斜面同一平面而閃爍
-      if (!j) add(quad(trackPoint(trip, front - nose * (1 - NOSE[1][0]) + 0.00004), a, w * w1 / 2 + 0.00004, w * w0 / 2 + 0.00004), h * 0.6, h * 0.82, winColor);
-    });
-    if (tail && nose && L.n > 1) NOSE.forEach(([u, w0, w1, hh], j) => {
-      const a = trackPoint(trip, back + nose * (1 - u)), b = trackPoint(trip, back + nose * (1 - (NOSE[j + 1] ? NOSE[j + 1][0] : 1)));
-      add(quad(a, b, w * w0 / 2, w * w1 / 2), 0, h * hh, j ? capColor : L.body);
-    });
+    if (lead && nose) noseFeatures(trip, L, trackPoint(trip, front - nose), trackPoint(trip, front), nose, w, h, detail, add, winColor, trip.color);
+    if (tail && nose && L.n > 1) noseFeatures(trip, L, trackPoint(trip, back + nose), trackPoint(trip, back), nose, w, h, detail, add, winColor, trip.color);
+  }
+}
+
+/* 車頭：以平滑的俯視輪廓一層層往上疊。每一層的頂面高度越高、往前伸得越短，
+   疊起來就是一個往前下斜的圓弧車鼻；腰帶、窗帶的顏色也跟著繞過車頭 */
+function noseFeatures(trip, L, root, tip, nose, w, h, detail, add, winColor, lineColor) {
+  const key = Object.keys(LIVERY).find(k => LIVERY[k] === L);
+  const S = NOSE_SHAPE[key] || NOSE_SHAPE.EMU900;
+  const len = Math.hypot(tip.x - root.x, tip.y - root.y) || nose;
+  const ux = (tip.x - root.x) / len, uy = (tip.y - root.y) / len; // 往車頭方向
+  const nx = -uy, ny = ux;                                           // 側向
+  const pt = (s, y) => unproj(root.x + ux * s * len + nx * y, root.y + uy * s * len + ny * y);
+  const halfW = s => (w / 2) * (S.tipW + (1 - S.tipW) * Math.pow(Math.max(0, 1 - Math.pow(s, S.wp)), 1 / S.wp));
+  const reach = r => r <= S.tipH ? 1 : Math.pow((1 - r) / (1 - S.tipH), 1 / S.hp); // 高度比例 r 的那一層能伸到哪
+  // 分層：顏色交界一定要切，上半部再多切幾層讓斜面更平滑
+  const cuts = new Set([0, 0.1, 0.56, 0.8, 1]);
+  if (L.stripe) { cuts.add(0.4); cuts.add(0.5); }
+  if (L.stripe2) { cuts.add(0.33); cuts.add(0.37); }
+  if (!L.stripe && lineColor) { cuts.add(0.42); cuts.add(0.52); }
+  for (const r of detail ? [0.25, 0.66, 0.73, 0.87, 0.93, 0.97] : [0.68, 0.9]) cuts.add(r);
+  const H = [...cuts].sort((a, b) => a - b);
+  const nSide = detail ? 8 : 4, nFront = detail ? 7 : 3;
+  const colorAt = m => m < 0.1 ? '#24282E'
+    : L.stripe2 && m > 0.33 && m < 0.37 ? L.stripe2
+    : L.stripe && m > 0.4 && m < 0.5 ? L.stripe
+    : !L.stripe && lineColor && m > 0.42 && m < 0.52 ? lineColor
+    : m > 0.56 && m < 0.8 ? winColor
+    : m < 0.56 && L.cab ? L.cab : L.body;
+  for (let i = 0; i < H.length - 1; i++) {
+    const b0 = H[i], b1 = H[i + 1], m = (b0 + b1) / 2;
+    const sk = reach(b1), Wk = halfW(sk);
+    if (sk <= 0.001) continue;
+    // 俯視輪廓：左側弧線 → 前端圓角 → 右側弧線
+    const ring = [];
+    for (let j = 0; j <= nSide; j++) { const s = sk * j / nSide; ring.push(pt(s, halfW(s))); }
+    const bulge = Math.min(Wk * 0.45, (1 - sk) * len + Wk * 0.25);
+    for (let j = 1; j < nFront; j++) { const a = Math.PI / 2 - Math.PI * j / nFront; ring.push(pt(sk + bulge * Math.cos(a) / len, Wk * Math.sin(a))); }
+    for (let j = nSide; j >= 0; j--) { const s = sk * j / nSide; ring.push(pt(s, -halfW(s))); }
+    ring.push(ring[0]);
+    add([ring], h * b0, h * b1, colorAt(m));
   }
 }
 
@@ -162,7 +208,7 @@ function carFeatures(trip, pos, P, out, detail) {
 const VIEWS = [
   { id: 'persp', name: '透視' },
   { id: 'chase', name: '追車' },
-  { id: 'cab', name: '駕駛' },
+  { id: 'cab', name: '車頭' },
   { id: 'side', name: '側拍' },
   { id: 'orbit', name: '環繞' },
   { id: 'trackside', name: '路邊' },
