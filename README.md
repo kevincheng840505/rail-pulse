@@ -13,12 +13,14 @@
 - 車站有月台、樓梯與站名牌；捷運轉乘站與台鐵高鐵共構站把各線月台疊在不同樓層，列車沿高架坡道平順上下
 - 月台上的旅客在上一班車開走後陸續到來排隊，列車進站後先下後上，真的走進車門
 - 點車站看接下來的班次；畫面永遠是現在的時間
+- 沿線景點字幕：跟拍的列車經過約 55 處景點（龜山島、多良車站、伯朗大道、台北 101⋯）或跨越北回歸線時，畫面上方淡入一行介紹
+- 營運快訊跑馬燈：填入 TDX 金鑰後，每 5 分鐘讀取台鐵、高鐵與各捷運的營運通阻，有停駛、延誤等狀況時才在畫面上方出現；網址加 `?alertdemo` 可預覽樣式。兩者都能在 ⚙ 關閉，隱藏介面時仍會顯示
 - 快捷鍵：R 漫遊、V 視角、M 播放／暫停音樂、F 隱藏介面（連地圖文字一起收起來）、Esc 離開
 
 ## 資料
 
 - **預設**：依各營運單位班型推估時刻（班表推估），台鐵誤點為模擬值。
-- **TDX 即時**：在 ⚙ 設定填入 [TDX](https://tdx.transportdata.tw/) 的 Client ID / Secret，台鐵與高鐵改用當日官方時刻表（`v3/Rail/TRA/DailyTrainTimetable/Today`、`v2/Rail/THSR/DailyTimetable/Today`），台鐵每分鐘套用即時誤點（`v2/Rail/TRA/LiveTrainDelay`）。金鑰只存在瀏覽器的 localStorage。
+- **TDX 即時**：在 ⚙ 設定填入 [TDX](https://tdx.transportdata.tw/) 的 Client ID / Secret，台鐵與高鐵改用當日官方時刻表（`v3/Rail/TRA/DailyTrainTimetable/Today`、`v2/Rail/THSR/DailyTimetable/Today`），台鐵每分鐘套用即時誤點（`v2/Rail/TRA/LiveTrainDelay`），並每 5 分鐘讀取營運通阻（`v3/Rail/TRA/Alert`、`v2/Rail/THSR/AlertInfo`、`v2/Rail/Metro/Alert/{TRTC,TYMC,TMRT,KRTC,KLRT}`）。金鑰只存在瀏覽器的 localStorage。
 - 縣市底圖來自 [taiwan-atlas](https://www.npmjs.com/package/taiwan-atlas)（內政部資料）。
 - 軌道線形與車站位置來自 [OpenStreetMap](https://www.openstreetmap.org/copyright)（ODbL），由 GitHub Actions（`.github/workflows/rail-data.yml`）每月執行 `tools/fetch_rail.py` 下載並轉成 `data/rail.json`。找不到合理軌道的區間會改畫站間直線。
 - 地圖：[MapLibre GL JS](https://maplibre.org/)，向量圖磚 [OpenFreeMap](https://openfreemap.org/)，地形高程 [Mapzen Terrain Tiles](https://registry.opendata.aws/terrain-tiles/)（AWS Open Data）。
@@ -33,6 +35,7 @@
 | `src/engine.js` | 路網圖、班表推估、列車位置計算、TDX 介接 |
 | `src/app.js` | MapLibre 3D 地圖、跟車鏡頭、漫遊、選車 |
 | `src/music.js` | 音樂播放器的曲目，以及獨立的環境音（雨聲、雷聲）（Web Audio 即時合成） |
+| `src/extras.js` | 沿線景點清單與字幕、營運快訊跑馬燈 |
 | `src/scene.js` | 3D 車廂造型、跟車視角、光線與天氣 |
 | `data/rail.json` | 軌道線形（自動產生，勿手改） |
 | `src/template.html` | 版面與樣式 |
