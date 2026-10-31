@@ -51,7 +51,7 @@ const AIRLINES = { CI:'華航', BR:'長榮', JX:'星宇', AE:'華信', B7:'立�
 /* 尾翼顏色 */
 const TAIL = { CI:'#D9667E', AE:'#D9667E', BR:'#2F7D5A', B7:'#2F7D5A', JX:'#B89660', IT:'#F2B134', CX:'#1E6F6A', JL:'#C8102E', NH:'#1E3F8F', KE:'#5FA8D3', SQ:'#F1A51E', TG:'#5B2C83', VN:'#1C6E8C', MM:'#C9418F', UA:'#1D3E78' };
 
-const AIR = { flights: [], live: false, status: '', on: store.get('planes', true), loadAt: 0, layers: false, last: 0, seen: new Map() };
+const AIR = { gen: 0, flights: [], live: false, status: '', on: store.get('planes', true), loadAt: 0, layers: false, last: 0, seen: new Map() };
 
 /* ---------- 平面座標（公里，北為 +y） ---------- */
 const AKX = 111.32 * Math.cos(23.7 / DEG), AKY = 110.57;
@@ -207,12 +207,14 @@ async function loadFlights() {
   const cred = store.get('tdx', {});
   if (!cred.id || !cred.secret) { AIR.flights = estimateFlights(); AIR.live = false; AIR.status = '班表推估'; return; }
   AIR.loadAt = Date.now();
+  const gen = ++AIR.gen;
   const d0 = dayStart(Date.now());
   const toMin = s => { const t = Date.parse(String(s).length <= 16 ? s + ':00+08:00' : s); return isNaN(t) ? null : (t - d0) / 60000; };
   const res = [];
   for (const ap of ['TPE', 'TSA', 'KHH', 'RMQ']) for (const kind of ['Departure', 'Arrival']) {
     try { const j = await TDX.get(`v2/Air/FIDS/Airport/${kind}/${ap}`, cred); if (Array.isArray(j)) res.push([ap, kind, j]); } catch (e) { /* 單一機場失敗就略過 */ }
   }
+  if (gen !== AIR.gen) return; // 讀取途中金鑰被清除或又重新讀取
   if (!res.length) { AIR.flights = estimateFlights(); AIR.live = false; AIR.status = 'TDX 航班讀取失敗，改用推估'; return; }
   const out = [], seen = new Set();
   for (const [ap, kind, list] of res) for (const r of list) {
@@ -343,4 +345,4 @@ setTimeout(reloadFlights, 5000);
 // 航班時間會隨延誤更新：有金鑰時每 10 分鐘重新讀一次
 setInterval(() => { if (Date.now() - AIR.loadAt > 10 * 60e3 && store.get('tdx', {}).id) reloadFlights(); }, 60e3);
 $('#tdxgo').addEventListener('click', () => setTimeout(reloadFlights, 2500));
-$('#tdxclear').addEventListener('click', () => { AIR.flights = estimateFlights(); AIR.live = false; });
+$('#tdxclear').addEventListener('click', () => { AIR.gen++; AIR.flights = estimateFlights(); AIR.live = false; });
