@@ -190,13 +190,17 @@ function initMap() {
     map.addSource('facade', { type: 'geojson', data: EMPTY });
     map.addLayer({ id: 'facade', type: 'fill-extrusion', source: 'facade', minzoom: FACADE_ZOOM,
       paint: { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 't'], 'fill-extrusion-base': ['get', 'b'], 'fill-extrusion-opacity': 0.8, 'fill-extrusion-vertical-gradient': false } }, 'light-glow');
+    map.addSource('lamps', { type: 'geojson', data: EMPTY });
+    map.addLayer({ id: 'lamp-glow', type: 'circle', source: 'lamps', minzoom: FACADE_ZOOM,
+      paint: { 'circle-color': '#FFD48A', 'circle-blur': 1, 'circle-pitch-alignment': 'map', 'circle-opacity': 0,
+        'circle-radius': ['interpolate', ['exponential', 2], ['zoom'], 16, 6, 20, 90] } }, 'buildings');
     map.on('moveend', () => Facade.soon());
     map.on('sourcedata', e => { if (e.sourceId === 'omt' && e.isSourceLoaded) Facade.soon(true); });
     map.addLayer({ id: 'train', type: 'circle', source: 'trains', maxzoom: CAR_ZOOM + 0.5,
       paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, ['case', ['get', 'sel'], 6, ['==', ['get', 'g'], 'mrt'], 2.4 * DOT, 3 * DOT], 12, ['case', ['get', 'sel'], 9, 5.5]],
         'circle-color': ['get', 'color'], 'circle-stroke-color': '#FFFFFF', 'circle-stroke-width': ['case', ['get', 'sel'], 2, 0.6], 'circle-pitch-alignment': 'map' } });
     map.setLayoutProperty('buildings', 'visibility', S.buildings ? 'visible' : 'none');
-    map.setLayoutProperty('facade', 'visibility', S.buildings ? 'visible' : 'none');
+    for (const l of ['facade', 'lamp-glow']) map.setLayoutProperty(l, 'visibility', S.buildings ? 'visible' : 'none');
     S.mapReady = true;
     applyLook(true); pushTrains(true);
     map.on('click', onMapClick);
@@ -237,7 +241,7 @@ function syncTerrain(force) {
 const FACADE_ZOOM = 15.5;
 const Facade = (() => {
   let timer = 0, last = null;
-  const R = COARSE ? 0.3 : 0.45, FLOOR = 0.0034, MAX_FEAT = COARSE ? 2500 : 5000;
+  const R = COARSE ? 0.3 : 0.45, FLOOR = 0.0034, MAX_FEAT = COARSE ? 2500 : 5000, MAX_TREES = COARSE ? 400 : 900;
   // 把外框往外推 d 公里（每個頂點沿兩條邊的外法線平均方向）
   function outset(pts, d) {
     let a = 0;
@@ -253,6 +257,94 @@ const Facade = (() => {
     }
     out.push(out[0]);
     return out;
+  }
+  const poly = (ring, b, t, c) => ({ type: 'Feature', properties: { b, t, c }, geometry: { type: 'Polygon', coordinates: [ring] } });
+  // 以 (x, y) 為中心的正多邊形（公里座標，半徑 r 公尺），用來做水塔、樹冠、樹幹、燈桿
+  const ngon = (x, y, r, n, rot = 0) => { const out = []; for (let i = 0; i <= n; i++) { const a = rot + i / n * Math.PI * 2; out.push(unproj(x + Math.cos(a) * r / 1000, y + Math.sin(a) * r / 1000)); } return out; };
+  // 以 (x, y) 為中心、沿 (ux, uy) 方向的長方形（公尺）
+  const rect = (x, y, ux, uy, a, b) => { const vx = -uy, vy = ux, A = a / 2000, B = b / 2000; return [[1, 1], [-1, 1], [-1, -1], [1, -1], [1, 1]].map(([i, j]) => unproj(x + ux * A * i + vx * B * j, y + uy * A * i + vy * B * j)); };
+  const SHEET = ['#4F7FA8', '#5E8F86', '#A8674A', '#C5CBD0', '#6E8FB0'];
+  /* 台灣街景的屋頂：不鏽鋼水塔、頂樓鐵皮加蓋，外牆掛冷氣室外機 */
+  function roofs(cand, out, P) {
+    const steel = mixHex('#D9DEE3', P.bld, 0.25), legs = '#5A6068', acc = mixHex('#E4E6E8', P.bld, 0.2);
+    for (const B of cand) {
+      if (out.length > MAX_FEAT * 1.4) break;
+      const seed = hash(B.key + 'r'), pts = B.pts, n = pts.length - 1;
+      let gx = 0, gy = 0; for (let i = 0; i < n; i++) { gx += pts[i][0]; gy += pts[i][1]; } gx /= n; gy /= n;
+      const top = B.h;
+      // 鐵皮加蓋：中低樓層的建築才有，把外框往中心縮成一圈較小的棚子
+      if (B.h < 40 && seed < 0.55) {
+        const k = 0.55 + seed * 0.4, ring = pts.map(([x, y]) => unproj(gx + (x - gx) * k, gy + (y - gy) * k));
+        out.push(poly(ring, top, top + 2.6, mixHex(SHEET[Math.floor(seed * 100) % SHEET.length], P.bld, P.lit ? 0.5 : 0.15)));
+      }
+      // 水塔：架高的圓桶，靠在屋頂的一角
+      if (B.h < 70) {
+        const v = pts[Math.floor(seed * n)], tx = gx + (v[0] - gx) * 0.55, ty = gy + (v[1] - gy) * 0.55, h0 = top + (seed < 0.55 ? 2.6 : 0);
+        out.push(poly(ngon(tx, ty, 0.9, 4, Math.PI / 4), h0, h0 + 1.0, legs));
+        out.push(poly(ngon(tx, ty, 1.0, 10), h0 + 1.0, h0 + 2.9, steel));
+        if (seed > 0.7) out.push(poly(ngon(tx + 0.0024, ty, 0.8, 10), h0 + 1.0, h0 + 2.5, steel));
+      }
+      // 冷氣室外機：隨機掛在幾面外牆的幾層樓
+      const nF = Math.floor((B.h - B.b0) / 3.4);
+      for (let j = 0; j < Math.min(6, nF); j++) {
+        const r = hash(B.key + 'ac' + j), e = Math.floor(r * n), a = pts[e], b = pts[e + 1];
+        const L = Math.hypot(b[0] - a[0], b[1] - a[1]); if (L < 0.003) continue;
+        const ux = (b[0] - a[0]) / L, uy = (b[1] - a[1]) / L, t = 0.2 + hash(B.key + 'at' + j) * 0.6;
+        // 外法線方向：朝離開中心的那一側
+        let nx = -uy, ny = ux; const mx = a[0] + (b[0] - a[0]) * t, my = a[1] + (b[1] - a[1]) * t;
+        if ((mx - gx) * nx + (my - gy) * ny < 0) { nx = -nx; ny = -ny; }
+        const fl = 1 + Math.floor(hash(B.key + 'af' + j) * Math.max(1, nF - 1)), z = B.b0 + fl * 3.4 + 0.2;
+        out.push(poly(rect(mx + nx * 0.0006, my + ny * 0.0006, ux, uy, 0.9, 0.5), z, z + 0.65, acc));
+      }
+    }
+  }
+  /* 沿著街道種行道樹、立路燈；夜裡路燈在地面打出一圈暖光 */
+  const ROAD_W = { primary: 11, secondary: 9, tertiary: 7, minor: 5 };
+  function streets(cx, cy, out, P) {
+    let roads;
+    try { roads = map.querySourceFeatures('omt', { sourceLayer: 'transportation', filter: ['in', ['get', 'class'], ['literal', Object.keys(ROAD_W)]] }); } catch { return []; }
+    const lamps = [], seen = new Set(), RR = R * 0.8;
+    const trunk = mixHex('#5B4636', P.land, 0.2), pole = mixHex('#7B838C', P.bld, 0.3);
+    const leaf = ['#4E7D4A', '#5F8F4E', '#3F6E47', '#6E9A55'].map(c => mixHex(c, P.wood, P.lit ? 0.35 : 0.2));
+    let trees = 0;
+    for (const f of roads) {
+      const w = ROAD_W[f.properties.class], g = f.geometry;
+      const lines = g.type === 'LineString' ? [g.coordinates] : g.type === 'MultiLineString' ? g.coordinates : [];
+      for (const line of lines) {
+        const pts = line.map(([lon, lat]) => proj(lat, lon));
+        let acc = 0;
+        for (let i = 1; i < pts.length; i++) {
+          const [x1, y1] = pts[i - 1], [x2, y2] = pts[i], L = Math.hypot(x2 - x1, y2 - y1);
+          if (L < 1e-6) continue;
+          const ux = (x2 - x1) / L, uy = (y2 - y1) / L, nx = -uy, ny = ux;
+          for (let d = (0.012 - acc) % 0.012; d < L; d += 0.012) {
+            const x = x1 + ux * d, y = y1 + uy * d;
+            if (Math.hypot(x - cx, y - cy) > RR) continue;
+            const key = Math.round(x * 2e3) + ',' + Math.round(y * 2e3);
+            if (seen.has(key)) continue; seen.add(key);
+            const k = Math.round((acc + d) / 0.012), hs = hash(key);
+            for (const side of [-1, 1]) {
+              const off = (w / 2 + 1.2) / 1000 * side, tx = x + nx * off, ty = y + ny * off;
+              if (k % 3 === 1 && side > 0) {
+                // 路燈：燈桿＋燈頭，夜裡地上一圈光
+                out.push(poly(ngon(tx, ty, 0.12, 4), 0, 7, pole));
+                out.push(poly(rect(tx - nx * 0.0006 * side, ty - ny * 0.0006 * side, nx, ny, 1.4, 0.35), 6.8, 7.1, P.lit ? '#FFE3A0' : pole));
+                lamps.push({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: unproj(tx - nx * 0.0012 * side, ty - ny * 0.0012 * side) } });
+                continue;
+              }
+              if (trees > MAX_TREES || hash(key + side) < 0.25) continue;
+              const r = 1.5 + hash(key + 's' + side) * 1.0, h = 4 + hs * 2.5;
+              out.push(poly(ngon(tx, ty, 0.18, 4), 0, h * 0.45, trunk));
+              out.push(poly(ngon(tx, ty, r, 7, hs), h * 0.4, h, leaf[Math.floor(hs * 97) % leaf.length]));
+              out.push(poly(ngon(tx, ty, r * 0.6, 7, hs + 0.3), h, h + 0.8, leaf[Math.floor(hs * 53) % leaf.length]));
+              trees++;
+            }
+          }
+          acc = (acc + L) % 0.012;
+        }
+      }
+    }
+    return lamps;
   }
   function build(force) {
     timer = 0;
@@ -294,7 +386,10 @@ const Facade = (() => {
       }
       out.push({ type: 'Feature', properties: { b: B.h - 0.1, t: B.h + 0.7, c: rim }, geometry: { type: 'Polygon', coordinates: shell } });
     }
+    roofs(cand, out, P);
+    const lamps = streets(cx, cy, out, P);
     src.setData({ type: 'FeatureCollection', features: out });
+    const ls = map.getSource('lamps'); if (ls) ls.setData({ type: 'FeatureCollection', features: lamps });
     last = { x: cx, y: cy, lit: P.lit };
   }
   return { soon(force) { if (force) last = null; if (!timer) timer = setTimeout(() => build(), 350); } };
@@ -316,6 +411,7 @@ function applyLook(force) {
   set('park', 'fill-color', P.wood); set('grass', 'fill-color', P.wood);
   // 高樓顏色亮一點、矮房暗一點，整片街區才有層次
   set('buildings', 'fill-extrusion-color', ['interpolate', ['linear'], ['coalesce', ['get', 'render_height'], 8], 4, mixHex(P.bld, P.land, 0.25), 30, P.bld, 120, mixHex(P.bld, P.bldEdge, 0.35)]);
+  set('lamp-glow', 'circle-opacity', P.lit ? 0.55 : 0);
   Facade.soon(true);
   set('rail', 'line-color', railColor(P)); set('rail-glow', 'line-color', railColor(P));
   set('rail-glow', 'line-opacity', ['interpolate', ['linear'], ['zoom'], 13, P.glow * 0.5, 16, 0]);
@@ -757,7 +853,7 @@ function toggleBtn(id, key, apply) {
   b.addEventListener('click', () => { S[key] = !S[key]; store.set(key, S[key]); b.setAttribute('aria-pressed', String(S[key])); if (S.mapReady) apply(S[key]); });
 }
 toggleBtn('#terrainbtn', 'terrain', () => syncTerrain(true));
-toggleBtn('#buildbtn', 'buildings', on => { for (const l of ['buildings', 'facade']) map.setLayoutProperty(l, 'visibility', on ? 'visible' : 'none'); });
+toggleBtn('#buildbtn', 'buildings', on => { for (const l of ['buildings', 'facade', 'lamp-glow']) map.setLayoutProperty(l, 'visibility', on ? 'visible' : 'none'); });
 toggleBtn('#labelbtn', 'labels', on => map.setLayoutProperty('st-label', 'visibility', on ? 'visible' : 'none'));
 
 $('#viewbtn').addEventListener('click', cycleView);
