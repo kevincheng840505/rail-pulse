@@ -206,6 +206,10 @@ function initMap() {
       paint: { 'circle-color': '#FFD48A', 'circle-blur': 1, 'circle-pitch-alignment': 'map', 'circle-opacity': 0,
         'circle-radius': ['interpolate', ['exponential', 2], ['zoom'], 16, 6, 20, 90] } }, 'buildings');
     map.on('moveend', () => Facade.soon());
+    // 手機 GPU 撐不住時瀏覽器會收回 WebGL，畫面就停在最後一格；幾秒內沒恢復就重新載入頁面
+    let glLost = null;
+    map.on('webglcontextlost', () => { clearTimeout(glLost); glLost = setTimeout(() => location.reload(), 3000); });
+    map.on('webglcontextrestored', () => { clearTimeout(glLost); glLost = null; });
     map.on('sourcedata', e => { if (e.sourceId === 'omt' && e.isSourceLoaded) Facade.soon(true); });
     map.addLayer({ id: 'train', type: 'circle', source: 'trains', maxzoom: CAR_ZOOM + 0.5,
       paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, ['case', ['get', 'sel'], 6, ['==', ['get', 'g'], 'mrt'], 2.4 * DOT, 3 * DOT], 12, ['case', ['get', 'sel'], 9, 5.5]],
@@ -240,7 +244,8 @@ let terrainOn = false;
 function syncTerrain(force) {
   if (!map) return;
   const z = map.getZoom();
-  const want = S.terrain && !(S.follow && !S.followPaused) && (terrainOn ? z < 12.5 : z < 11.5);
+  // 手機上只要還在跟車（就算手動拉遠）就不開地形：地形加上斜角大範圍視野會把手機 GPU 拖垮
+  const want = S.terrain && !(S.follow && (COARSE || !S.followPaused)) && (terrainOn ? z < 12.5 : z < 11.5);
   if (want === terrainOn && !force) return;
   terrainOn = want;
   try { map.setTerrain(want ? { source: 'dem', exaggeration: 1.5 } : null); } catch {}
@@ -1111,7 +1116,7 @@ function frame(now) {
   }
   // 跟車時當格同步重繪：鏡頭、車身平移和背景執行緒剛送回的列車圖磚一起畫，
   // 不讓地圖自己排的重繪拿到「新車身＋舊平移」而前後跳一下
-  if (S.mapReady && S.follow && !S.flying) map.redraw();
+  if (S.mapReady && S.follow && !S.followPaused && !S.flying) map.redraw();
 }
 
 /* ---------- 啟動 ---------- */
