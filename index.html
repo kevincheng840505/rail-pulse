@@ -1332,7 +1332,7 @@ const Music = (() => {
    依實際車型的編組、車長、車寬與塗裝。單位公尺；寬高略為放大，遠看也認得出來。
    body 車身、stripe/stripe2 腰帶、roof 車頂、nose 車頭流線段長度、cab 車頭色（無則同車身） */
 const EX = 1.3;
-const LIFT = 0.6;
+const LIFT = 0; // 近看時地形已攤平，車廂直接貼地
 const LIVERY = {
   THSR:     { n:12, len:25,   w:3.38, h:3.65, gap:0.5, nose:10,  body:'#F3F4F1', stripe:'#F07F1F', stripe2:'#1E3A6E', roof:'#D9DCDF', name:'700T' },
   TEMU2000: { n:8,  len:20,   w:2.9,  h:3.6,  gap:0.6, nose:4.5, body:'#F4F4F2', stripe:'#E8452C', stripe2:'#E8452C', roof:'#C9CDD1', cab:'#E8452C', name:'普悠瑪' },
@@ -1367,7 +1367,22 @@ function liveryOf(trip) {
 const trainLength = trip => { const L = liveryOf(trip); return (L.n * L.len + (L.n - 1) * L.gap) / 1000; };
 
 /* 沿著列車行駛路徑取第 km 公里處的點（投影座標，單位公里） */
+/* 上下行各走一條軌道：資料只有一條中心線，依行進方向往旁邊偏移半個軌距，會車時才不會疊在一起。
+   台鐵、高鐵靠左行駛，捷運靠右 */
+const LEFT_HAND = { TRA: 1, THSR: 1 };
+function sideOffset(trip) {
+  if (trip._side == null) {
+    const L = liveryOf(trip);
+    trip._side = (LEFT_HAND[trip.sys] ? 1 : -1) * (L.w * EX / 2 + 0.5) / 1000;
+  }
+  return trip._side;
+}
 function trackPoint(trip, km) {
+  const p = centerPoint(trip, km), o = sideOffset(trip);
+  // 往行進方向的左側為正
+  return { x: p.x - Math.sin(p.heading) * o, y: p.y + Math.cos(p.heading) * o, heading: p.heading };
+}
+function centerPoint(trip, km) {
   const c = trip.cum, n = c.length;
   if (km <= 0) { const p = segPoint(trip.nodes[0], trip.nodes[1], 0); return { x: p.x + Math.cos(p.heading) * km, y: p.y + Math.sin(p.heading) * km, heading: p.heading }; }
   if (km >= c[n - 1]) { const p = segPoint(trip.nodes[n - 2], trip.nodes[n - 1], 1), d = km - c[n - 1]; return { x: p.x + Math.cos(p.heading) * d, y: p.y + Math.sin(p.heading) * d, heading: p.heading }; }
@@ -1408,7 +1423,7 @@ function carFeatures(trip, pos, P, out, detail) {
     // 近看時把窗帶切成一格格車窗，夜裡會亮
     if (detail) {
       const span = (front - back) - (lead && nose ? nose : 0) - (tail && nose ? nose : 0);
-      const k0 = back + (tail && nose ? nose : 0), nw = Math.max(2, Math.round(span * 1000 / 2.6));
+      const k0 = back + (tail && nose ? nose : 0), nw = Math.max(2, Math.round(span * 1000 / 3.4));
       for (let k = 0; k < nw; k++) {
         const a = trackPoint(trip, k0 + span * (k + 0.18) / nw), b = trackPoint(trip, k0 + span * (k + 0.82) / nw);
         add(quad(b, a, iw + 0.00003, iw + 0.00003), h * 0.6, h * 0.77, paneColor);
@@ -1523,20 +1538,22 @@ const RealWeather = {
 
 /* 雨滴與閃電：畫在地圖上方的透明畫布 */
 const Precip = (() => {
-  let cv = null, ctx = null, drops = [], level = 0, flash = 0, nextFlash = 0, night = false;
-  function resize() { if (!cv) return; const d = Math.min(2, devicePixelRatio || 1); cv.width = innerWidth * d; cv.height = innerHeight * d; ctx.setTransform(d, 0, 0, d, 0, 0); }
+  let cv = null, ctx = null, drops = [], level = 0, flash = 0, nextFlash = 0, night = false, dirty = true;
+  function resize() { if (!cv) return; const d = 1; /* 雨絲很細，用 1 倍解析度就夠 */ cv.width = innerWidth * d; cv.height = innerHeight * d; ctx.setTransform(d, 0, 0, d, 0, 0); }
   function init() {
     cv = document.getElementById('precip'); ctx = cv.getContext('2d');
     addEventListener('resize', resize); resize();
   }
   function set(l, isNight, storm) {
     level = l; night = isNight; Precip.storm = storm;
-    const want = Math.round(l * 420);
+    const want = Math.round(l * 420 * Math.min(1, innerWidth * innerHeight / 1.6e6)); // 小螢幕少一點雨滴
     while (drops.length < want) drops.push({ x: Math.random() * innerWidth, y: Math.random() * innerHeight, v: 900 + Math.random() * 700, l: 10 + Math.random() * 16 });
     drops.length = want;
   }
   function step(dt, now) {
     if (!ctx) return;
+    if (!drops.length && flash <= 0 && !Precip.storm) { if (dirty) { ctx.clearRect(0, 0, innerWidth, innerHeight); dirty = false; } return; }
+    dirty = true;
     ctx.clearRect(0, 0, innerWidth, innerHeight);
     if (Precip.storm && now > nextFlash) { flash = 1; nextFlash = now + 6000 + Math.random() * 14000; }
     if (flash > 0) { ctx.fillStyle = `rgba(220,228,255,${flash * 0.35})`; ctx.fillRect(0, 0, innerWidth, innerHeight); flash = Math.max(0, flash - dt / 260); }
@@ -1658,28 +1675,32 @@ function stationsGeoJSON() {
 let map = null;
 const TAIWAN = { center: [120.95, 23.65], zoom: 6.7, pitch: 35, bearing: -8 };
 const EMPTY = { type: 'FeatureCollection', features: [] };
-const CAR_ZOOM = 13.5;
-const DOT = matchMedia('(pointer: coarse)').matches ? 1.35 : 1; // 手機上列車圓點放大 // 這個縮放以上把列車畫成一節節車廂
+const CAR_ZOOM = 14.5;
+const COARSE = matchMedia('(pointer: coarse)').matches;
+const MAX_CAR_TRAINS = COARSE ? 8 : 18; // 同時畫成車廂的列車上限（跟拍的列車另計）
+const DOT = COARSE ? 1.35 : 1; // 手機上列車圓點放大 // 這個縮放以上把列車畫成一節節車廂
 function initMap() {
   if (!window.maplibregl) { $('#intro p').textContent = '地圖元件載入失敗，請確認網路連線後重新整理。'; return; }
   map = new maplibregl.Map({
     container: 'map', style: STYLE, ...TAIWAN, maxPitch: 85, attributionControl: false,
     localIdeographFontFamily: "'Noto Sans TC','PingFang TC','Microsoft JhengHei',sans-serif",
     fadeDuration: 0,
+    pixelRatio: Math.min(window.devicePixelRatio || 1, COARSE ? 1.5 : 2), // 手機 3 倍像素太耗效能
   });
   map.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: '© OpenStreetMap 貢獻者 · OpenFreeMap · 地形 Mapzen／AWS · 天氣 Open-Meteo' }), 'bottom-right');
   // 用 style.load 而非 load：外部圖磚失敗時 load 不會觸發，仍要畫出鐵道與列車
   map.once('style.load', () => {
     // 手機上版權列預設收起（點 ⓘ 可展開）
     if (matchMedia('(max-width: 640px)').matches) setTimeout(() => { const el = document.querySelector('.maplibregl-ctrl-attrib'); if (el) el.classList.remove('maplibregl-compact-show'); }, 300);
-    try { if (S.terrain) map.setTerrain({ source: 'dem', exaggeration: 1.5 }); } catch {}
+    syncTerrain(true);
     map.addSource('rails', { type: 'geojson', data: railsGeoJSON() });
     map.addLayer({ id: 'rail-glow', type: 'line', source: 'rails', layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: { 'line-color': railColor(P0), 'line-width': ['interpolate', ['linear'], ['zoom'], 6, 4, 12, 9, 16, 18], 'line-blur': ['interpolate', ['linear'], ['zoom'], 6, 3, 14, 8], 'line-opacity': ['interpolate', ['linear'], ['zoom'], 13, P0.glow * 0.5, 16, 0] } });
     map.addLayer({ id: 'rail', type: 'line', source: 'rails', layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: { 'line-color': railColor(P0),
-        'line-width': ['interpolate', ['exponential', 1.7], ['zoom'], 6, ['case', ['==', ['get', 'sys'], 'THSR'], 1.6, ['==', ['get', 'g'], 'mrt'], 1.1, 1], 12, 2.6, 16, 6, 19, 22],
-        'line-opacity': ['interpolate', ['linear'], ['zoom'], 15, 1, 17, 0.75] } });
+        // 近看時畫成約 10 公尺寬的雙線道床，上下行列車各走一側
+        'line-width': ['interpolate', ['exponential', 2], ['zoom'], 6, ['case', ['==', ['get', 'sys'], 'THSR'], 1.6, ['==', ['get', 'g'], 'mrt'], 1.1, 1], 12, 2.6, 15, 5, 16, 9, 22, 590],
+        'line-opacity': ['interpolate', ['linear'], ['zoom'], 15, 1, 17, 0.6, 19, 0.38] } });
     map.addSource('stations', { type: 'geojson', data: stationsGeoJSON() });
     map.addLayer({ id: 'st-dot', type: 'circle', source: 'stations',
       filter: ['any', ['<=', ['get', 'rank'], 1], ['all', ['<=', ['get', 'rank'], 2], ['>=', ['zoom'], 9]], ['>=', ['zoom'], 11.5]],
@@ -1695,10 +1716,6 @@ function initMap() {
     map.addLayer({ id: 'train-halo', type: 'circle', source: 'trains', maxzoom: 15,
       paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, ['case', ['get', 'sel'], 14, 6], 13, ['case', ['get', 'sel'], 26, 14]], 'circle-color': ['get', 'color'], 'circle-blur': 1, 'circle-opacity': P0.glow + 0.15, 'circle-pitch-alignment': 'map' } });
     const carPaint = { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 't'], 'fill-extrusion-base': ['get', 'b3'], 'fill-extrusion-opacity': 1, 'fill-extrusion-vertical-gradient': false };
-    // 車廂平面輪廓貼在地形上：手機 GPU 深度精度較低時，3D 車廂可能被地形蓋住，至少還看得到車子的形狀
-    const flat = { 'fill-color': ['get', 'c'], 'fill-opacity': 0.95 };
-    map.addLayer({ id: 'cars-flat', type: 'fill', source: 'cars', minzoom: CAR_ZOOM, filter: ['==', ['get', 'b'], 0], paint: flat });
-    map.addLayer({ id: 'focus-flat', type: 'fill', source: 'focus', minzoom: CAR_ZOOM, filter: ['==', ['get', 'b'], 0], paint: flat });
     map.addLayer({ id: 'cars', type: 'fill-extrusion', source: 'cars', minzoom: CAR_ZOOM, paint: carPaint });
     map.addLayer({ id: 'focus-cars', type: 'fill-extrusion', source: 'focus', minzoom: CAR_ZOOM, paint: carPaint });
     // 車頭燈（暖白）與尾燈（紅）
@@ -1716,7 +1733,7 @@ function initMap() {
     S.mapReady = true;
     applyLook(true); pushTrains(true);
     map.on('click', onMapClick);
-    for (const l of ['train', 'train-halo', 'cars', 'cars-flat', 'st-dot']) {
+    for (const l of ['train', 'train-halo', 'cars', 'st-dot']) {
       map.on('mouseenter', l, () => map.getCanvas().style.cursor = 'pointer');
       map.on('mouseleave', l, () => map.getCanvas().style.cursor = '');
     }
@@ -1725,7 +1742,19 @@ function initMap() {
   for (const ev of ['dragstart', 'rotatestart', 'pitchstart', 'zoomstart']) {
     map.on(ev, e => { if (e.originalEvent && S.follow) { S.followPaused = true; S.flying = false; S.trans = null; renderCaption(true); } });
   }
+  map.on('zoomend', () => syncTerrain());
   map.on('error', e => console.warn('地圖資源載入失敗', e && e.error && e.error.message));
+}
+
+/* 3D 地形只用在大範圍視野：近看與跟車時攤平，車廂才會整齊、鏡頭不會被地形推開，也省效能 */
+let terrainOn = false;
+function syncTerrain(force) {
+  if (!map) return;
+  const z = map.getZoom();
+  const want = S.terrain && !(S.follow && !S.followPaused) && (terrainOn ? z < 12.5 : z < 11.5);
+  if (want === terrainOn && !force) return;
+  terrainOn = want;
+  try { map.setTerrain(want ? { source: 'dem', exaggeration: 1.5 } : null); } catch {}
 }
 
 /* ---------- 光線與天氣 ---------- */
@@ -1771,33 +1800,48 @@ function updatePositions() {
   S.positions = [];
   for (const trip of TRIPS) { const pos = tripPos(trip, m); if (pos) S.positions.push({ trip, pos }); }
 }
-let lastCars = 0;
+let lastCars = 0, lastDots = 0, bgLights = [];
 function pushTrains(force) {
   if (!S.mapReady) return;
   const sel = S.follow, z = map.getZoom();
-  const pts = [], cars = [], lights = [];
+  const pts = [], cars = [];
   const doLights = z >= 10.5;
-  // 近看時只替畫面內的列車建車廂模型
-  let bounds = null;
-  const doCars = z >= CAR_ZOOM - 0.3 && (force || performance.now() - lastCars > 110);
-  if (doCars) { const b = map.getBounds(); bounds = [b.getWest() - 0.01, b.getSouth() - 0.01, b.getEast() + 0.01, b.getNorth() + 0.01]; lastCars = performance.now(); }
+  const doCars = z >= CAR_ZOOM - 0.3 && (force || performance.now() - lastCars > 90);
+  // 只處理畫面附近的列車；車廂模型再限制為離畫面中心最近的幾列，手機上特別省
+  const b = map.getBounds(), mx = (b.getEast() - b.getWest()) * 0.15, my = (b.getNorth() - b.getSouth()) * 0.15;
+  const W = b.getWest() - mx, E = b.getEast() + mx, Sb = b.getSouth() - my, N = b.getNorth() + my;
+  const c = map.getCenter(), near = [];
+  bgLights = [];
   for (const { trip, pos } of S.positions) {
     const isSel = trip === sel;
     const ll = unproj(pos.x, pos.y);
     pts.push({ type: 'Feature', properties: { idx: trip.idx, color: trip.color, sel: isSel, g: sysGroup(trip.sys) }, geometry: { type: 'Point', coordinates: ll } });
-    if (doLights) trainLights(trip, pos, lights);
-    if (doCars && !isSel && ll[0] > bounds[0] && ll[0] < bounds[2] && ll[1] > bounds[1] && ll[1] < bounds[3]) {
+    if (isSel || ll[0] < W || ll[0] > E || ll[1] < Sb || ll[1] > N) continue;
+    if (doLights) trainLights(trip, pos, bgLights);
+    if (doCars) near.push({ trip, pos, d: (ll[0] - c.lng) ** 2 + (ll[1] - c.lat) ** 2 });
+  }
+  if (doCars) {
+    lastCars = performance.now();
+    near.sort((p, q) => p.d - q.d);
+    for (const { trip, pos } of near.slice(0, MAX_CAR_TRAINS)) {
       const start = cars.length;
-      carFeatures(trip, pos, S.P, cars, z >= 16);
+      carFeatures(trip, pos, S.P, cars, false); // 窗格細節只畫在跟拍的列車上
       for (let i = start; i < cars.length; i++) cars[i].properties.idx = trip.idx;
     }
-  }
-  map.getSource('trains').setData({ type: 'FeatureCollection', features: pts });
-  if (doCars) map.getSource('cars').setData({ type: 'FeatureCollection', features: cars });
-  else if (z < CAR_ZOOM - 0.3 && lastCars) { map.getSource('cars').setData(EMPTY); lastCars = 0; }
-  if (doLights || S.hadLights) map.getSource('lights').setData(doLights ? { type: 'FeatureCollection', features: lights } : EMPTY);
+    map.getSource('cars').setData({ type: 'FeatureCollection', features: cars });
+  } else if (z < CAR_ZOOM - 0.3 && lastCars) { map.getSource('cars').setData(EMPTY); lastCars = 0; }
+  // 圓點圖層近看時不顯示，降低更新頻率
+  if (force || z < CAR_ZOOM + 0.6 || performance.now() - lastDots > 1000) { map.getSource('trains').setData({ type: 'FeatureCollection', features: pts }); lastDots = performance.now(); }
+  if (!doLights) bgLights = [];
+  if (doLights || S.hadLights) pushLights();
   S.hadLights = doLights;
   pushFocus();
+}
+function pushLights() {
+  const t = S.follow, pos = t && map.getZoom() >= 10.5 && tripPos(t, curMin());
+  const out = bgLights.slice();
+  if (pos) trainLights(t, pos, out);
+  map.getSource('lights').setData({ type: 'FeatureCollection', features: out });
 }
 // 跟拍的列車每一格都更新，畫面上才不會抖
 function pushFocus() {
@@ -1807,10 +1851,11 @@ function pushFocus() {
   if (pos) { carFeatures(t, pos, S.P, out, true); for (const f of out) f.properties.idx = t.idx; }
   map.getSource('focus').setData({ type: 'FeatureCollection', features: out });
 }
+function pushFocusFrame() { pushFocus(); if (S.hadLights) pushLights(); }
 
 /* ---------- 跟車鏡頭 ---------- */
 let flightId = 0;
-const ground = ll => { try { return map.queryTerrainElevation(ll) || 0; } catch { return 0; } };
+const ground = ll => { if (!terrainOn) return 0; try { return map.queryTerrainElevation(ll) || 0; } catch { return 0; } };
 const viewName = () => (VIEWS.find(v => v.id === S.view) || VIEWS[0]).name;
 // 依視角算出攝影機位置（from）與注視點（to），回傳 MapLibre 的鏡頭參數
 function viewCamera(trip, pos, now, dt) {
@@ -1873,7 +1918,7 @@ function camFromTo(fl, fa, tl, ta) {
   return {
     center: { lng: tl[0], lat: tl[1] },
     bearing: dh > 0.5 ? Math.atan2(dx, dy) * DEG : map.getBearing(),
-    pitch: Math.min(84, Math.atan2(dh, Math.max(0.5, dz)) * DEG),
+    pitch: Math.min(COARSE ? 76 : 80, Math.atan2(dh, Math.max(0.5, dz)) * DEG), // 壓低最大俯仰角，遠方少載入很多圖磚
     zoom: Math.min(21, Math.log2(40075016.686 * Math.cos(lat) * ctcd / (512 * D))),
   };
 }
@@ -1887,6 +1932,7 @@ function follow(trip, { fly = true } = {}) {
 }
 function startCamera(fly) {
   const trip = S.follow; if (!trip || !map) return;
+  syncTerrain();
   const pos = tripPos(trip, curMin()); if (!pos) return;
   const c = map.getCenter(), [lon, lat] = unproj(pos.x, pos.y);
   const far = map.getZoom() < 12 || Math.hypot((c.lng - lon) * 102, (c.lat - lat) * 111) > 4;
@@ -2056,7 +2102,7 @@ plist.addEventListener('click', e => {
 let popup = null;
 function onMapClick(e) {
   const box = [[e.point.x - 10, e.point.y - 10], [e.point.x + 10, e.point.y + 10]];
-  const hit = map.queryRenderedFeatures(box, { layers: ['train', 'train-halo', 'cars', 'focus-cars', 'cars-flat', 'focus-flat', 'st-dot'] });
+  const hit = map.queryRenderedFeatures(box, { layers: ['train', 'train-halo', 'cars', 'focus-cars', 'st-dot'] });
   const tr = hit.find(f => f.layer.id !== 'st-dot');
   if (tr) { const t = TRIPS[tr.properties.idx]; if (t !== S.follow || S.followPaused) { setRoam(false); follow(t); } return; }
   const st = hit.find(f => f.layer.id === 'st-dot');
@@ -2120,7 +2166,7 @@ function toggleBtn(id, key, apply) {
   const b = $(id); b.setAttribute('aria-pressed', String(S[key]));
   b.addEventListener('click', () => { S[key] = !S[key]; store.set(key, S[key]); b.setAttribute('aria-pressed', String(S[key])); if (S.mapReady) apply(S[key]); });
 }
-toggleBtn('#terrainbtn', 'terrain', on => { try { map.setTerrain(on ? { source: 'dem', exaggeration: 1.5 } : null); } catch {} });
+toggleBtn('#terrainbtn', 'terrain', () => syncTerrain(true));
 toggleBtn('#buildbtn', 'buildings', on => map.setLayoutProperty('buildings', 'visibility', on ? 'visible' : 'none'));
 toggleBtn('#labelbtn', 'labels', on => map.setLayoutProperty('st-label', 'visibility', on ? 'visible' : 'none'));
 
@@ -2229,11 +2275,11 @@ let last = performance.now(), lastPush = 0, lastUi = 0;
 function frame(now) {
   const dt = Math.min(1000, now - last); last = now;
   if (S.playing) { if (S.live && S.speed === 1) S.simMs = Date.now(); else S.simMs += dt * S.speed; }
-  if (now - lastPush > 50) {
+  if (now - lastPush > 100) {
     updatePositions(); pushTrains(); lastPush = now;
     // 列車抵達終點：漫遊時換下一列
     if (S.roam && S.follow && !S.flying && !tripPos(S.follow, curMin())) roamNext();
-  } else if (S.follow) pushFocus();
+  } else if (S.follow) pushFocusFrame();
   stepCamera(now, dt);
   Precip.step(dt, now);
   if (S.roam && now > S.roamAt && !S.flying) { S.roamAt = now + ROAM_SEC * 1000; roamNext(); }

@@ -4,7 +4,7 @@
    依實際車型的編組、車長、車寬與塗裝。單位公尺；寬高略為放大，遠看也認得出來。
    body 車身、stripe/stripe2 腰帶、roof 車頂、nose 車頭流線段長度、cab 車頭色（無則同車身） */
 const EX = 1.3;
-const LIFT = 0.6;
+const LIFT = 0; // 近看時地形已攤平，車廂直接貼地
 const LIVERY = {
   THSR:     { n:12, len:25,   w:3.38, h:3.65, gap:0.5, nose:10,  body:'#F3F4F1', stripe:'#F07F1F', stripe2:'#1E3A6E', roof:'#D9DCDF', name:'700T' },
   TEMU2000: { n:8,  len:20,   w:2.9,  h:3.6,  gap:0.6, nose:4.5, body:'#F4F4F2', stripe:'#E8452C', stripe2:'#E8452C', roof:'#C9CDD1', cab:'#E8452C', name:'普悠瑪' },
@@ -39,7 +39,22 @@ function liveryOf(trip) {
 const trainLength = trip => { const L = liveryOf(trip); return (L.n * L.len + (L.n - 1) * L.gap) / 1000; };
 
 /* 沿著列車行駛路徑取第 km 公里處的點（投影座標，單位公里） */
+/* 上下行各走一條軌道：資料只有一條中心線，依行進方向往旁邊偏移半個軌距，會車時才不會疊在一起。
+   台鐵、高鐵靠左行駛，捷運靠右 */
+const LEFT_HAND = { TRA: 1, THSR: 1 };
+function sideOffset(trip) {
+  if (trip._side == null) {
+    const L = liveryOf(trip);
+    trip._side = (LEFT_HAND[trip.sys] ? 1 : -1) * (L.w * EX / 2 + 0.5) / 1000;
+  }
+  return trip._side;
+}
 function trackPoint(trip, km) {
+  const p = centerPoint(trip, km), o = sideOffset(trip);
+  // 往行進方向的左側為正
+  return { x: p.x - Math.sin(p.heading) * o, y: p.y + Math.cos(p.heading) * o, heading: p.heading };
+}
+function centerPoint(trip, km) {
   const c = trip.cum, n = c.length;
   if (km <= 0) { const p = segPoint(trip.nodes[0], trip.nodes[1], 0); return { x: p.x + Math.cos(p.heading) * km, y: p.y + Math.sin(p.heading) * km, heading: p.heading }; }
   if (km >= c[n - 1]) { const p = segPoint(trip.nodes[n - 2], trip.nodes[n - 1], 1), d = km - c[n - 1]; return { x: p.x + Math.cos(p.heading) * d, y: p.y + Math.sin(p.heading) * d, heading: p.heading }; }
@@ -80,7 +95,7 @@ function carFeatures(trip, pos, P, out, detail) {
     // 近看時把窗帶切成一格格車窗，夜裡會亮
     if (detail) {
       const span = (front - back) - (lead && nose ? nose : 0) - (tail && nose ? nose : 0);
-      const k0 = back + (tail && nose ? nose : 0), nw = Math.max(2, Math.round(span * 1000 / 2.6));
+      const k0 = back + (tail && nose ? nose : 0), nw = Math.max(2, Math.round(span * 1000 / 3.4));
       for (let k = 0; k < nw; k++) {
         const a = trackPoint(trip, k0 + span * (k + 0.18) / nw), b = trackPoint(trip, k0 + span * (k + 0.82) / nw);
         add(quad(b, a, iw + 0.00003, iw + 0.00003), h * 0.6, h * 0.77, paneColor);
@@ -195,20 +210,22 @@ const RealWeather = {
 
 /* 雨滴與閃電：畫在地圖上方的透明畫布 */
 const Precip = (() => {
-  let cv = null, ctx = null, drops = [], level = 0, flash = 0, nextFlash = 0, night = false;
-  function resize() { if (!cv) return; const d = Math.min(2, devicePixelRatio || 1); cv.width = innerWidth * d; cv.height = innerHeight * d; ctx.setTransform(d, 0, 0, d, 0, 0); }
+  let cv = null, ctx = null, drops = [], level = 0, flash = 0, nextFlash = 0, night = false, dirty = true;
+  function resize() { if (!cv) return; const d = 1; /* 雨絲很細，用 1 倍解析度就夠 */ cv.width = innerWidth * d; cv.height = innerHeight * d; ctx.setTransform(d, 0, 0, d, 0, 0); }
   function init() {
     cv = document.getElementById('precip'); ctx = cv.getContext('2d');
     addEventListener('resize', resize); resize();
   }
   function set(l, isNight, storm) {
     level = l; night = isNight; Precip.storm = storm;
-    const want = Math.round(l * 420);
+    const want = Math.round(l * 420 * Math.min(1, innerWidth * innerHeight / 1.6e6)); // 小螢幕少一點雨滴
     while (drops.length < want) drops.push({ x: Math.random() * innerWidth, y: Math.random() * innerHeight, v: 900 + Math.random() * 700, l: 10 + Math.random() * 16 });
     drops.length = want;
   }
   function step(dt, now) {
     if (!ctx) return;
+    if (!drops.length && flash <= 0 && !Precip.storm) { if (dirty) { ctx.clearRect(0, 0, innerWidth, innerHeight); dirty = false; } return; }
+    dirty = true;
     ctx.clearRect(0, 0, innerWidth, innerHeight);
     if (Precip.storm && now > nextFlash) { flash = 1; nextFlash = now + 6000 + Math.random() * 14000; }
     if (flash > 0) { ctx.fillStyle = `rgba(220,228,255,${flash * 0.35})`; ctx.fillRect(0, 0, innerWidth, innerHeight); flash = Math.max(0, flash - dt / 260); }
