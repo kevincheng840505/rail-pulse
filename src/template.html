@@ -123,11 +123,19 @@ button { cursor:pointer; }
 
 @media (max-width: 640px) {
   #brand h1 { font-size:18px; }
-  #caption { bottom:calc(env(safe-area-inset-bottom,0px) + 78px); left:12px; width:calc(100% - 24px); padding:12px 14px; }
-  #caption h2 { font-size:22px; }
+  #caption { bottom:calc(env(safe-area-inset-bottom,0px) + 74px); left:12px; width:calc(100% - 24px); }
   .pillbtn { height:42px; padding:0 14px; font-size:14px; }
   .pillbtn.small { padding:0 10px; }
   #dock { width:calc(100% - 24px); justify-content:center; }
+  /* 手機：版權列移到右上，字卡縮小，讓出畫面給列車 */
+  .maplibregl-ctrl-bottom-right { bottom:auto; top:calc(env(safe-area-inset-top,0px) + 62px); }
+  #caption { padding:10px 12px; border-radius:14px; }
+  #caption h2 { font-size:19px; margin-top:4px; }
+  #caption .route { font-size:12.5px; }
+  #caption .next { margin-top:6px; }
+  #caption .next b { font-size:15px; }
+  #caption .next .eta { font-size:13px; }
+  #caption .bar { margin-top:8px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition:none !important; } }
 </style>

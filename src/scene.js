@@ -3,7 +3,8 @@
 /* ---------- 車廂造型 ----------
    依實際車型的編組、車長、車寬與塗裝。單位公尺；寬高略為放大，遠看也認得出來。
    body 車身、stripe/stripe2 腰帶、roof 車頂、nose 車頭流線段長度、cab 車頭色（無則同車身） */
-const EX = 1.6;
+const EX = 1.3;
+const LIFT = 0.6;
 const LIVERY = {
   THSR:     { n:12, len:25,   w:3.38, h:3.65, gap:0.5, nose:10,  body:'#F3F4F1', stripe:'#F07F1F', stripe2:'#1E3A6E', roof:'#D9DCDF', name:'700T' },
   TEMU2000: { n:8,  len:20,   w:2.9,  h:3.6,  gap:0.6, nose:4.5, body:'#F4F4F2', stripe:'#E8452C', stripe2:'#E8452C', roof:'#C9CDD1', cab:'#E8452C', name:'普悠瑪' },
@@ -49,17 +50,18 @@ function trackPoint(trip, km) {
 }
 
 /* 把一列車拆成多節車廂的 3D 方塊：車身、窗帶、腰帶、車頂，車頭做成流線收窄 */
-function carFeatures(trip, pos, P, out, selected) {
+function carFeatures(trip, pos, P, out, detail) {
   const L = liveryOf(trip);
   const w = L.w * EX / 1000, h = L.h * EX;
-  const winColor = P.lit ? P.winLit : '#1C2631';
+  const winColor = '#141C26', paneColor = P.lit ? P.winLit : '#3A5068';
   const quad = (a, b, wa, wb) => {
     const ca = Math.cos(a.heading), sa = Math.sin(a.heading), cb = Math.cos(b.heading), sb = Math.sin(b.heading);
     // 前後兩端各自用當地的軌道方向算出左右兩點，彎道上車廂也貼著軌道
     const r = [unproj(a.x - sa * wa, a.y + ca * wa), unproj(b.x - sb * wb, b.y + cb * wb), unproj(b.x + sb * wb, b.y - cb * wb), unproj(a.x + sa * wa, a.y - ca * wa)];
     r.push(r[0]); return [r];
   };
-  const add = (geom, base, top, color) => out.push({ type: 'Feature', properties: { b: base, t: top, c: color }, geometry: { type: 'Polygon', coordinates: geom } });
+  // 3D 方塊整體抬高 0.6 公尺，避免與地形表面深度衝突（手機上特別明顯）；b 仍記原始值，b=0 代表車身底面
+  const add = (geom, base, top, color) => out.push({ type: 'Feature', properties: { b: base, b3: base + LIFT, t: top + LIFT, c: color }, geometry: { type: 'Polygon', coordinates: geom } });
   let km = pos.km;
   const total = trip.cum[trip.cum.length - 1];
   for (let i = 0; i < L.n; i++) {
@@ -75,9 +77,18 @@ function carFeatures(trip, pos, P, out, selected) {
     // 窗帶與腰帶：比車身寬一點點，蓋在側面
     const iw = w / 2 + 0.00008;
     add(quad(bodyF, bodyB, iw, iw), h * 0.56, h * 0.8, winColor);
+    // 近看時把窗帶切成一格格車窗，夜裡會亮
+    if (detail) {
+      const span = (front - back) - (lead && nose ? nose : 0) - (tail && nose ? nose : 0);
+      const k0 = back + (tail && nose ? nose : 0), nw = Math.max(2, Math.round(span * 1000 / 2.6));
+      for (let k = 0; k < nw; k++) {
+        const a = trackPoint(trip, k0 + span * (k + 0.18) / nw), b = trackPoint(trip, k0 + span * (k + 0.82) / nw);
+        add(quad(b, a, iw + 0.00003, iw + 0.00003), h * 0.6, h * 0.77, paneColor);
+      }
+    }
     if (L.stripe) add(quad(bodyF, bodyB, iw + 0.00002, iw + 0.00002), h * 0.4, h * 0.5, L.stripe);
     if (L.stripe2) add(quad(bodyF, bodyB, iw + 0.00002, iw + 0.00002), h * 0.33, h * 0.37, L.stripe2);
-    add(quad(bodyF, bodyB, w * 0.36, w * 0.36), h, h * 1.07, selected ? '#FFFFFF' : L.roof);
+    add(quad(bodyF, bodyB, w * 0.36, w * 0.36), h, h * 1.07, L.roof);
     if (!L.stripe && trip.color) add(quad(bodyF, bodyB, iw + 0.00002, iw + 0.00002), h * 0.42, h * 0.52, trip.color);
     // 車頭流線：分兩段逐漸變矮變窄
     const capColor = L.cab || L.body;
@@ -97,6 +108,7 @@ function carFeatures(trip, pos, P, out, selected) {
 
 /* ---------- 跟車視角 ---------- */
 const VIEWS = [
+  { id: 'persp', name: '透視' },
   { id: 'chase', name: '追車' },
   { id: 'cab', name: '車頭' },
   { id: 'side', name: '側拍' },
@@ -112,16 +124,16 @@ const offsetPt = (p, along, side) => {
 
 /* ---------- 光線：依時間在幾個關鍵色票之間平滑內插 ---------- */
 const PALETTES = {
-  night: { sea:'#050A12', land:'#0F1822', edge:'#1C2733', water:'#06101B', wood:'#0F1D1A', road:'#1D2A37', bld:'#18222F',
+  night: { sea:'#050A12', land:'#0F1822', edge:'#1C2733', water:'#06101B', wood:'#0F1D1A', road:'#1D2A37', bld:'#1D3550', bldEdge:'#4A7FB5',
     hsShadow:'#000000', hsHigh:'#3A4C60', hsAccent:'#0A121B', label:'#8FA0AE', halo:'#050A12',
     sky:'#081222', horizon:'#1C2B40', fog:'#0B1320', tra:'#A9BCCD', light:'#7C8FB0', glow:0.6, lightI:0.25 },
-  dawn: { sea:'#2A3348', land:'#3A3540', edge:'#4A4452', water:'#2C3650', wood:'#2E3A35', road:'#4D4652', bld:'#4A4250',
+  dawn: { sea:'#2A3348', land:'#3A3540', edge:'#4A4452', water:'#2C3650', wood:'#2E3A35', road:'#4D4652', bld:'#5A5070', bldEdge:'#B39AC8',
     hsShadow:'#1A1424', hsHigh:'#E0A27E', hsAccent:'#382A3A', label:'#E6D2C6', halo:'#241E28',
     sky:'#5B5A86', horizon:'#F2A97A', fog:'#7A6070', tra:'#F0E2D4', light:'#FFB98A', glow:0.35, lightI:0.4 },
-  day: { sea:'#8EB2C7', land:'#DCDDD0', edge:'#C3C4B4', water:'#86AAC0', wood:'#BFCDB0', road:'#F4F2EA', bld:'#D8D6CC',
+  day: { sea:'#8EB2C7', land:'#DCDDD0', edge:'#C3C4B4', water:'#86AAC0', wood:'#BFCDB0', road:'#F4F2EA', bld:'#B9C7D6', bldEdge:'#6F8CA8',
     hsShadow:'#4E5C55', hsHigh:'#FFFFFF', hsAccent:'#7D8B80', label:'#3B4650', halo:'#F4F2EA',
     sky:'#6FA8D8', horizon:'#E2ECF0', fog:'#DCE6EA', tra:'#3F4E5E', light:'#FFFFFF', glow:0.15, lightI:0.3 },
-  dusk: { sea:'#1F2438', land:'#30293A', edge:'#433A4E', water:'#222A46', wood:'#283029', road:'#4A3F4E', bld:'#3F3448',
+  dusk: { sea:'#1F2438', land:'#30293A', edge:'#433A4E', water:'#222A46', wood:'#283029', road:'#4A3F4E', bld:'#4A3E5E', bldEdge:'#A389C2',
     hsShadow:'#140E1A', hsHigh:'#D98A62', hsAccent:'#2E2232', label:'#E2CFC6', halo:'#1C1820',
     sky:'#3E3560', horizon:'#F08A5A', fog:'#4E3A4A', tra:'#EADCCF', light:'#FF9E6A', glow:0.4, lightI:0.4 },
 };
@@ -213,3 +225,10 @@ const Precip = (() => {
   }
   return { init, set, step, storm: false };
 })();
+
+/* 車頭燈與尾燈的位置（貼地的光暈，遠看就是一列車的頭尾） */
+function trainLights(trip, pos, out) {
+  const len = trainLength(trip);
+  out.push({ type: 'Feature', properties: { c: '#FFF4D6', k: 1, idx: trip.idx }, geometry: { type: 'Point', coordinates: (p => unproj(p.x, p.y))(trackPoint(trip, pos.km + 0.004)) } });
+  out.push({ type: 'Feature', properties: { c: '#FF3B30', k: 0.55, idx: trip.idx }, geometry: { type: 'Point', coordinates: (p => unproj(p.x, p.y))(trackPoint(trip, pos.km - len - 0.002)) } });
+}
