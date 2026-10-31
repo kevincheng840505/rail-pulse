@@ -110,6 +110,17 @@ button { cursor:pointer; }
 .maplibregl-popup-tip { display:none; }
 .maplibregl-popup-close-button { color:var(--muted); font-size:18px; right:6px; top:4px; }
 #caption .caprow { margin-top:10px; display:flex; gap:8px; }
+/* 收合的字卡：一條細長列，不擋畫面 */
+#caption { cursor:pointer; }
+#caption .strip { display:none; }
+#caption.mini { width:auto; max-width:min(380px, calc(100% - 24px)); padding:8px 8px 8px 12px; border-radius:999px; }
+#caption.mini > :not(.strip):not(.bar) { display:none; }
+#caption.mini .strip { display:flex; align-items:center; gap:8px; white-space:nowrap; font-size:13px; }
+#caption.mini .strip .nm { font-family:var(--font-display); font-size:14px; overflow:hidden; text-overflow:ellipsis; }
+#caption.mini .strip .nx { color:var(--muted); overflow:hidden; text-overflow:ellipsis; }
+#caption.mini .strip .eta { font-family:var(--font-mono); color:var(--accent); font-size:12px; }
+#caption.mini .strip .x { flex:none; width:26px; height:26px; border-radius:50%; border:0; background:rgba(255,255,255,.08); color:var(--muted); font-size:16px; line-height:1; cursor:pointer; }
+#caption.mini .bar { position:absolute; left:16px; right:16px; bottom:3px; height:2px; margin:0; background:transparent; }
 .pop h5 { margin:0 0 2px; font-size:16px; font-family:var(--font-display); letter-spacing:.06em; }
 .pop .sys { font-size:11.5px; color:var(--muted); margin-bottom:8px; }
 .pop button { display:grid; grid-template-columns:auto auto 1fr auto; gap:8px; align-items:center; width:100%; border:0; background:transparent; padding:6px 2px; text-align:left; font-size:13px; border-top:1px solid var(--line); }
@@ -186,7 +197,7 @@ button { cursor:pointer; }
   <section>
     <h4>天氣</h4>
     <div class="row" id="wxrow">
-      <button data-v="auto">即時天氣</button><button data-v="clear">☀ 晴</button><button data-v="cloudy">☁ 多雲</button><button data-v="rain">☂ 雨</button><button data-v="storm">⛈ 雷雨</button><button data-v="fog">🌫 霧</button>
+      <button data-v="auto">即時天氣</button><button data-v="clear">晴</button><button data-v="cloudy">多雲</button><button data-v="rain">雨</button><button data-v="storm">雷雨</button><button data-v="fog">霧</button>
     </div>
     <div class="note" id="wxnote"></div>
   </section>

@@ -14,6 +14,7 @@ const DEG = 180 / Math.PI;
 
 /* ---------- 狀態 ---------- */
 const S = {
+  capOpen: store.get('capOpen', false),
   simMs: Date.now(), speed: 1, playing: true, live: true,
   positions: [], follow: null, followPaused: false, roam: false, roamAt: 0,
   view: store.get('view2', 'persp'), rel: null, trans: null, ts: null,
@@ -59,7 +60,7 @@ const STYLE = {
       filter: ['in', ['get', 'class'], ['literal', ['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'minor']]],
       paint: { 'line-color': P0.road, 'line-width': ['interpolate', ['exponential', 1.6], ['zoom'], 8, 0.4, 14, 2.2, 18, 16], 'line-opacity': 0.8 } },
     { id: 'buildings', type: 'fill-extrusion', source: 'omt', 'source-layer': 'building', minzoom: 13.5,
-      paint: { 'fill-extrusion-color': P0.bld, 'fill-extrusion-height': ['coalesce', ['get', 'render_height'], 8], 'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0], 'fill-extrusion-opacity': 0.32 } },
+      paint: { 'fill-extrusion-color': P0.bld, 'fill-extrusion-height': ['coalesce', ['get', 'render_height'], 8], 'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0], 'fill-extrusion-opacity': 0.32, 'fill-extrusion-vertical-gradient': false } },
     // 透視感：半透明建築加上貼地的輪廓線
     { id: 'bld-edge', type: 'line', source: 'omt', 'source-layer': 'building', minzoom: 14,
       paint: { 'line-color': P0.bldEdge, 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 0.5, 18, 1.4], 'line-opacity': 0.85 } },
@@ -499,17 +500,21 @@ function renderCaption(force) {
   const key = [t.idx, next, eta, Math.round(progress * 200), S.followPaused, speed, t.delay].join('|');
   if (key === capKey && !force) return;
   capKey = key;
+  cap.classList.toggle('mini', !S.capOpen);
   cap.innerHTML = `
+    <div class="strip"><span class="dot" style="background:${t.color};color:${t.color}"></span><b class="nm">${esc(trainTitle(t))}</b><span class="nx">${esc(next)}</span><span class="eta">${esc(eta.replace('分後到站', '分').replace('分後開車', '分開車'))}</span><button class="x" id="leave" aria-label="離開">×</button></div>
     <div class="kicker"><span class="dot" style="background:${t.color};color:${t.color}"></span>${esc(SYSTEMS[t.sys].name)}${t.car ? ' · ' + esc(t.car) : ''}${delay ? ' · ' + delay : ''}</div>
     <h2>${esc(trainTitle(t))}</h2>
     <div class="route">${esc(t.origin)} → ${esc(t.dest)}</div>
     <div class="next"><div><div class="lab">${pos && pos.atStation ? '此刻' : '下一站'}</div><b>${esc(next)}</b></div><span class="eta">${esc(eta)}</span></div>
     <div class="bar"><i style="width:${(progress * 100).toFixed(1)}%"></i></div>
     <div class="meta"><span>已過 ${done} / ${stops} 站</span><span>${speed ? '約 ' + speed + ' km/h' : ''}</span></div>
-    <div class="caprow"><button class="pillbtn small" id="leave">離開</button></div>`;
+    <div class="caprow"><button class="pillbtn small" id="leave2">離開</button></div>`;
 }
+// 字卡預設是一條細長的列，點一下展開完整資訊，再點一下收起
 cap.addEventListener('click', e => {
-  if (e.target.id === 'leave') { setRoam(false); unfollow(); }
+  if (e.target.id === 'leave' || e.target.id === 'leave2') { setRoam(false); unfollow(); return; }
+  S.capOpen = !S.capOpen; store.set('capOpen', S.capOpen); renderCaption(true);
 });
 
 /* ---------- 選車 ---------- */
@@ -640,11 +645,21 @@ $('#wxrow').addEventListener('click', e => {
   if (S.wx === 'auto') updateRealWeather(true);
   applyLook(true);
 });
+// 天氣圖示用內嵌 SVG：手機上部分天氣 emoji（如霧）會顯示成方塊
+const WX_SVG = d => `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+const CLOUD = '<path d="M7 17h10a4 4 0 0 0 .6-7.95A5.5 5.5 0 0 0 7.1 10 3.5 3.5 0 0 0 7 17z"/>';
+const WX_ICON = {
+  clear: WX_SVG('<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/>'),
+  cloudy: WX_SVG(CLOUD.replace('17h', '18h').replace('0 0 7 17z', '0 0 7 18z')),
+  rain: WX_SVG('<path d="M7 14h10a4 4 0 0 0 .6-7.95A5.5 5.5 0 0 0 7.1 7 3.5 3.5 0 0 0 7 14z"/><path d="M8 17l-1 3M12 17l-1 3M16 17l-1 3"/>'),
+  storm: WX_SVG('<path d="M7 14h10a4 4 0 0 0 .6-7.95A5.5 5.5 0 0 0 7.1 7 3.5 3.5 0 0 0 7 14z"/><path d="M12.5 15l-2 3.5h3l-2 3.5"/>'),
+  fog: WX_SVG('<path d="M4 8h16M3 12h18M5 16h14M8 20h8"/>'),
+};
 function renderSkyPanel() {
   document.querySelectorAll('#todrow button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === S.tod)));
   document.querySelectorAll('#wxrow button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === S.wx)));
   const W = WEATHER[lookWx()];
-  $('#skybtn').textContent = W.icon;
+  $('#skybtn').innerHTML = WX_ICON[lookWx()] || WX_ICON.clear;
   const r = S.realWx;
   $('#wxnote').textContent = r ? `所在位置即時天氣：${WEATHER[r.wx].name} ${r.temp}°C（Open-Meteo，每 10 分鐘更新）` : '即時天氣讀取中，或目前無法取得（先顯示晴天）。';
   $('#wxbadge').textContent = r && S.wx === 'auto' ? ` · ${WEATHER[r.wx].name} ${r.temp}°` : S.wx !== 'auto' ? ' · ' + W.name : '';
