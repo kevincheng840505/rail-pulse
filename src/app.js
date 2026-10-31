@@ -1105,7 +1105,7 @@ async function connectTDX(cred, quiet) {
     if (!isCurrent()) return;
     if (metro && metro.trips.length) TDX.applyMetro(metro);
     const ml = metro ? metro.covered.size : 0;
-    tdxStatus(`已載入 ${trips.length} 班台鐵與高鐵當日時刻，${d} 列台鐵即時誤點` + (ml ? `；${ml} 條捷運／輕軌改用官方行駛時間與班距（${metro.trips.length} 班）。` : '；捷運與輕軌沿用班表推估。'));
+    tdxStatus(`已載入 ${trips.length} 班台鐵與高鐵當日時刻，${d} 列台鐵即時誤點` + (ml ? `；${ml} 條捷運／輕軌改用官方行駛時間與班距（${metro.trips.length} 班）。` : metro && metro.trips.length ? `；捷運依官方資料加開 ${metro.trips.length} 班區間車，全線仍用班表推估。` : '；捷運與輕軌沿用班表推估。'));
     delayTimer = setInterval(() => {
       const now = Date.now();
       if (twDate(now) !== TDX.date && minOfDay(now) >= 240) { connectTDX(cred, true); return; }
