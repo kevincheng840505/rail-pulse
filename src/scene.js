@@ -148,7 +148,8 @@ function carFeatures(trip, pos, P, out, detail) {
     if (lead && nose) NOSE.forEach(([u, w0, w1, hh], j) => {
       const a = trackPoint(trip, front - nose * (1 - u)), b = trackPoint(trip, front - nose * (1 - (NOSE[j + 1] ? NOSE[j + 1][0] : 1)));
       add(quad(b, a, w * w1 / 2, w * w0 / 2), 0, h * hh, j ? capColor : L.body);
-      if (!j) add(quad(b, a, w * w1 / 2 + 0.00004, w * w0 / 2 + 0.00004), h * 0.6, h * 0.82, winColor);
+      // 駕駛室窗往前多凸出 4 公分，避免和車鼻斜面同一平面而閃爍
+      if (!j) add(quad(trackPoint(trip, front - nose * (1 - NOSE[1][0]) + 0.00004), a, w * w1 / 2 + 0.00004, w * w0 / 2 + 0.00004), h * 0.6, h * 0.82, winColor);
     });
     if (tail && nose && L.n > 1) NOSE.forEach(([u, w0, w1, hh], j) => {
       const a = trackPoint(trip, back + nose * (1 - u)), b = trackPoint(trip, back + nose * (1 - (NOSE[j + 1] ? NOSE[j + 1][0] : 1)));
@@ -161,7 +162,7 @@ function carFeatures(trip, pos, P, out, detail) {
 const VIEWS = [
   { id: 'persp', name: '透視' },
   { id: 'chase', name: '追車' },
-  { id: 'cab', name: '車頭' },
+  { id: 'cab', name: '駕駛' },
   { id: 'side', name: '側拍' },
   { id: 'orbit', name: '環繞' },
   { id: 'trackside', name: '路邊' },

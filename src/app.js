@@ -310,9 +310,9 @@ function viewCamera(trip, pos, now, dt) {
       from = offsetPt(to, -190 * M, 150 * M); fa = 190; break;
     }
     case 'cab': {
-      // 站在車頭後上方往前看，畫面下緣看得到車鼻
-      from = trackPoint(trip, pos.km - 9 * M); fa = H + 3.5;
-      to = trackPoint(trip, pos.km + 140 * M); ta = 0; anchor = 'from'; break;
+      // 駕駛視角：眼睛在車鼻最前端、駕駛座高度，視線沿著軌道往前
+      from = trackPoint(trip, pos.km + 0.5 * M); fa = H * 0.72;
+      to = trackPoint(trip, pos.km + 40 * M); ta = 0; anchor = 'from'; break;
     }
     case 'side': {
       // 以車頭為主：從斜前方側面看車頭與前兩三節
@@ -349,10 +349,10 @@ function viewCamera(trip, pos, now, dt) {
     else { to = { x: from.x - S.rel.x, y: from.y - S.rel.y }; ta = fa - S.rel.z; }
   }
   const fl = unproj(from.x, from.y), tl = unproj(to.x, to.y);
-  return camFromTo(fl, fa + ground(fl), tl, ta + ground(tl));
+  return camFromTo(fl, fa + ground(fl), tl, ta + ground(tl), S.view === 'cab' ? 85 : null);
 }
 /* 由攝影機位置與注視點（經緯度＋高度公尺）換算 MapLibre 的 center/zoom/pitch/bearing */
-function camFromTo(fl, fa, tl, ta) {
+function camFromTo(fl, fa, tl, ta, maxPitch) {
   const lat = tl[1] * Math.PI / 180, mx = 111320 * Math.cos(lat), my = 110570;
   const dx = (tl[0] - fl[0]) * mx, dy = (tl[1] - fl[1]) * my, dz = fa - ta;
   const dh = Math.hypot(dx, dy), D = Math.max(8, Math.hypot(dh, dz));
@@ -361,7 +361,7 @@ function camFromTo(fl, fa, tl, ta) {
   return {
     center: { lng: tl[0], lat: tl[1] },
     bearing: dh > 0.5 ? Math.atan2(dx, dy) * DEG : map.getBearing(),
-    pitch: Math.min(COARSE ? 76 : 80, Math.atan2(dh, Math.max(0.5, dz)) * DEG), // 壓低最大俯仰角，遠方少載入很多圖磚
+    pitch: Math.min(maxPitch || (COARSE ? 76 : 80), Math.atan2(dh, Math.max(0.5, dz)) * DEG), // 壓低最大俯仰角，遠方少載入很多圖磚
     zoom: Math.min(21, Math.log2(40075016.686 * Math.cos(lat) * ctcd / (512 * D))),
   };
 }
@@ -455,7 +455,8 @@ function roamNext() {
   follow(t);
 }
 function setRoam(on) {
-  S.roam = on; $('#roambtn').setAttribute('aria-pressed', String(on));
+  S.roam = on; const rb = $('#roambtn'); rb.setAttribute('aria-pressed', String(on)); rb.textContent = on ? '換一列 ›' : '漫遊';
+  rb.title = on ? '漫遊中：按一下換下一列車' : '每隔一段時間自動換一列車';
   if (on) { S.roamAt = performance.now() + ROAM_SEC * 1000; if (!S.follow || S.followPaused) roamNext(); }
 }
 
@@ -608,10 +609,9 @@ function renderClock() {
 }
 
 /* ---------- 工具列 ---------- */
-$('#roambtn').addEventListener('click', () => setRoam(!S.roam));
+// 漫遊中再按一下就直接換下一列車；按「離開」或自己選車才會停止漫遊
+$('#roambtn').addEventListener('click', () => { if (S.roam) { S.roamAt = performance.now() + ROAM_SEC * 1000; roamNext(); } else setRoam(true); });
 $('#overview').addEventListener('click', () => { setRoam(false); unfollow(); if (map) map.flyTo({ ...TAIWAN, duration: 2500 }); });
-function toggleFull() { try { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen().catch(() => {}); } catch {} }
-$('#fullbtn').addEventListener('click', toggleFull);
 const musicBtn = $('#musicbtn');
 function setMusic(on) {
   if (on) Music.start().catch(() => {}); else Music.stop();
@@ -733,7 +733,6 @@ document.addEventListener('keydown', e => {
   else if (['1', '2', '3', '4'].includes(e.key)) setSpeed(SPEEDS[+e.key - 1]);
   else if (e.key === 'ArrowLeft') setSimMinute(curMin() - 10);
   else if (e.key === 'ArrowRight') setSimMinute(curMin() + 10);
-  else if (e.key === 'f' || e.key === 'F') toggleFull();
   else if (e.key === 'r' || e.key === 'R') setRoam(!S.roam);
   else if (e.key === 'm' || e.key === 'M') setMusic(!Music.playing);
   else if ((e.key === 'v' || e.key === 'V') && S.follow) cycleView();
