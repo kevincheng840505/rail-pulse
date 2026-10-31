@@ -191,7 +191,7 @@ function initMap() {
     map.addLayer({ id: 'facade', type: 'fill-extrusion', source: 'facade', minzoom: FACADE_ZOOM,
       paint: { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 't'], 'fill-extrusion-base': ['get', 'b'], 'fill-extrusion-opacity': 0.8, 'fill-extrusion-vertical-gradient': false } }, 'light-glow');
     map.on('moveend', () => Facade.soon());
-    map.on('sourcedata', e => { if (e.sourceId === 'omt' && e.isSourceLoaded) Facade.soon(); });
+    map.on('sourcedata', e => { if (e.sourceId === 'omt' && e.isSourceLoaded) Facade.soon(true); });
     map.addLayer({ id: 'train', type: 'circle', source: 'trains', maxzoom: CAR_ZOOM + 0.5,
       paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, ['case', ['get', 'sel'], 6, ['==', ['get', 'g'], 'mrt'], 2.4 * DOT, 3 * DOT], 12, ['case', ['get', 'sel'], 9, 5.5]],
         'circle-color': ['get', 'color'], 'circle-stroke-color': '#FFFFFF', 'circle-stroke-width': ['case', ['get', 'sel'], 2, 0.6], 'circle-pitch-alignment': 'map' } });
