@@ -2330,11 +2330,32 @@ const Facade = (() => {
       }
     }
   }
+  /* 只取畫面中心附近已載入的圖磚裡的要素。querySourceFeatures 會把所有載入的圖磚都轉成 GeoJSON，
+     鏡頭壓低、轉向時遠方圖磚一多，手機上會整個卡住好幾秒 */
+  function nearTiles(c, r) {
+    const sc = map.style && map.style.sourceCaches && map.style.sourceCaches.omt;
+    if (!sc || !sc.getRenderableIds) return null;
+    const dLat = r / 110.57, dLon = r / (111.32 * Math.cos(c.lat * Math.PI / 180));
+    const W = c.lng - dLon, E = c.lng + dLon, Sb = c.lat - dLat, N = c.lat + dLat, seen = new Set(), out = [];
+    for (const id of sc.getRenderableIds()) {
+      const tile = sc.getTileByID(id); if (!tile || !tile.querySourceFeatures) continue;
+      const { x, y, z, key } = tile.tileID.canonical, n = 2 ** z;
+      if (seen.has(key)) continue;
+      const lon0 = x / n * 360 - 180, lon1 = (x + 1) / n * 360 - 180, lat = v => Math.atan(Math.sinh(Math.PI * (1 - 2 * v / n))) * 180 / Math.PI;
+      if (lon1 < W || lon0 > E || lat(y) < Sb || lat(y + 1) > N) continue;
+      seen.add(key); out.push(tile);
+    }
+    return out;
+  }
+  function nearFeatures(tiles, sourceLayer, filter) {
+    if (!tiles) return map.querySourceFeatures('omt', { sourceLayer, filter });
+    const out = []; for (const t of tiles) t.querySourceFeatures(out, filter ? { sourceLayer, filter } : { sourceLayer }); return out;
+  }
   /* 沿著街道種行道樹、立路燈；夜裡路燈在地面打出一圈暖光 */
   const ROAD_W = { primary: 11, secondary: 9, tertiary: 7, minor: 5 };
-  function streets(cx, cy, out, P) {
+  function streets(cx, cy, out, P, tiles) {
     let roads;
-    try { roads = map.querySourceFeatures('omt', { sourceLayer: 'transportation', filter: ['in', ['get', 'class'], ['literal', Object.keys(ROAD_W)]] }); } catch { return []; }
+    try { roads = nearFeatures(tiles, 'transportation', ['in', ['get', 'class'], ['literal', Object.keys(ROAD_W)]]); } catch { return []; }
     const lamps = [], seen = new Set(), RR = R * 0.8;
     // 軌道（含月台）兩側 14 公尺內不種樹、不立路燈
     const rails = [];
@@ -2416,9 +2437,12 @@ const Facade = (() => {
     platforms();
     if (!S.buildings || map.getZoom() < FACADE_ZOOM) { if (last) { src.setData(EMPTY); last = null; } return; }
     const c = map.getCenter(), [cx, cy] = proj(c.lat, c.lng);
-    if (!force && last && Math.hypot(cx - last.x, cy - last.y) < R * 0.3 && last.lit === S.P.lit) return;
+    let tiles = null; try { tiles = nearTiles(c, R); } catch {}
+    // 只有附近的圖磚有變（新載入）或移動夠遠才重建；遠方圖磚載入不用重算
+    const tkey = tiles ? tiles.map(t => t.tileID.canonical.key).sort().join() : '';
+    if (last && Math.hypot(cx - last.x, cy - last.y) < R * 0.3 && last.lit === S.P.lit && (tiles ? tkey === last.tkey : !force)) return;
     let feats;
-    try { feats = map.querySourceFeatures('omt', { sourceLayer: 'building' }); } catch { return; }
+    try { feats = nearFeatures(tiles, 'building'); } catch { return; }
     const P = S.P, seen = new Set(), cand = [];
     for (const f of feats) {
       const h = +f.properties.render_height || 0, b0 = +f.properties.render_min_height || 0;
@@ -2451,12 +2475,12 @@ const Facade = (() => {
       out.push({ type: 'Feature', properties: { b: B.h - 0.1, t: B.h + 0.7, c: rim }, geometry: { type: 'Polygon', coordinates: shell } });
     }
     roofs(cand, out, P);
-    const lamps = streets(cx, cy, out, P);
+    const lamps = streets(cx, cy, out, P, tiles);
     src.setData({ type: 'FeatureCollection', features: out });
     const ls = map.getSource('lamps'); if (ls) ls.setData({ type: 'FeatureCollection', features: lamps });
-    last = { x: cx, y: cy, lit: P.lit };
+    last = { x: cx, y: cy, lit: P.lit, tkey };
   }
-  return { soon(force) { if (force) last = null; if (!timer) timer = setTimeout(() => build(), 350); } };
+  return { soon(force) { if (!timer) timer = setTimeout(() => build(force), 350); } };
 })();
 
 /* ---------- 光線與天氣 ---------- */
