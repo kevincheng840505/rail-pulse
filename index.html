@@ -2143,6 +2143,7 @@ function renderCaption(force) {
   if (key === capKey && !force) return;
   capKey = key;
   cap.classList.toggle('mini', !S.capOpen);
+  cap.setAttribute('role', 'button'); cap.tabIndex = 0; cap.setAttribute('aria-expanded', String(!!S.capOpen)); cap.setAttribute('aria-label', '列車資訊，按下可' + (S.capOpen ? '收起' : '展開'));
   cap.innerHTML = `
     <div class="strip"><span class="dot" style="background:${t.color};color:${t.color}"></span><b class="nm">${esc(trainTitle(t))}</b><span class="nx">${esc(next)}</span><span class="eta">${esc(eta.replace('分後到站', '分').replace('分後開車', '分開車'))}</span><button class="x" id="leave" aria-label="離開">×</button></div>
     <div class="kicker"><span class="dot" style="background:${t.color};color:${t.color}"></span>${esc(SYSTEMS[t.sys].name)}${t.car ? ' · ' + esc(t.car) : ''}${delay ? ' · ' + delay : ''}</div>
@@ -2156,6 +2157,11 @@ function renderCaption(force) {
 // 字卡預設是一條細長的列，點一下展開完整資訊，再點一下收起
 cap.addEventListener('click', e => {
   if (e.target.id === 'leave' || e.target.id === 'leave2') { setRoam(false); unfollow(); return; }
+  S.capOpen = !S.capOpen; store.set('capOpen', S.capOpen); renderCaption(true);
+});
+cap.addEventListener('keydown', e => {
+  if (e.target !== cap || (e.key !== 'Enter' && e.key !== ' ')) return;
+  e.preventDefault(); e.stopPropagation(); // 空白鍵不要再觸發全域的播放／暫停
   S.capOpen = !S.capOpen; store.set('capOpen', S.capOpen); renderCaption(true);
 });
 
