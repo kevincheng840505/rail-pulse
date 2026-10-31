@@ -176,7 +176,7 @@ function initMap() {
       paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, ['case', ['get', 'sel'], 14, 6], 13, ['case', ['get', 'sel'], 26, 14]], 'circle-color': ['get', 'color'], 'circle-blur': 1, 'circle-opacity': P0.glow + 0.15, 'circle-pitch-alignment': 'map' } });
     const carPaint = { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 't'], 'fill-extrusion-base': ['get', 'b3'], 'fill-extrusion-opacity': 1, 'fill-extrusion-vertical-gradient': false };
     map.addLayer({ id: 'cars', type: 'fill-extrusion', source: 'cars', minzoom: CAR_ZOOM, paint: carPaint });
-    map.addLayer({ id: 'focus-cars', type: 'fill-extrusion', source: 'focus', minzoom: CAR_ZOOM, paint: { ...carPaint, 'fill-extrusion-translate-anchor': 'map' } });
+    map.addLayer({ id: 'focus-cars', type: 'fill-extrusion', source: 'focus', minzoom: CAR_ZOOM, paint: { ...carPaint, 'fill-extrusion-translate-anchor': 'map', 'fill-extrusion-translate-transition': { duration: 0, delay: 0 } } });
     map.addSource('near', { type: 'geojson', data: EMPTY });
     map.addLayer({ id: 'near-cars', type: 'fill-extrusion', source: 'near', minzoom: CAR_ZOOM, paint: carPaint });
     // 車頭燈（暖白）與尾燈（紅）
