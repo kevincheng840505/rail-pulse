@@ -374,10 +374,13 @@ const Facade = (() => {
     const src = map.getSource('platforms'); if (!src) return;
     const z = map.getZoom(), c = map.getCenter(), [cx, cy] = proj(c.lat, c.lng);
     const near = z < FACADE_ZOOM ? [] : NODES.filter(n => Math.hypot(n.x - cx, n.y - cy) < 0.8);
-    const key = near.map(n => n.id).join() + '|' + S.P.lit + '|' + TRIPS.length;
+    // 跟拍的列車在高架上時，車子前後也要有橋（站與站中間的高架段不在任何車站附近）
+    const f = z < FACADE_ZOOM ? null : S.follow, fp = f && elevProfile(f) && tripPos(f, curMin());
+    const key = near.map(n => n.id).join() + '|' + S.P.lit + '|' + TRIPS.length + '|' + (fp ? f.idx + ':' + Math.round(fp.km * 4) : '');
     if (key === lastPf) return; lastPf = key;
     const out = [], seen = new Set();
     for (const n of near) for (const [trip, idx] of stationReps(n)) stationFeatures(n, trip, idx, S.P, out, seen);
+    if (fp) viaductFeatures(f, fp.km - 1, fp.km + 1, S.P, out, seen);
     src.setData({ type: 'FeatureCollection', features: out });
   }
   function build(force) {

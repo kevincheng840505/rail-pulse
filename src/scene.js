@@ -311,11 +311,12 @@ function elevAt(trip, km) {
   if (km <= b[lo]) return h[lo];
   if (km >= a[hi]) return h[hi];
   const g0 = b[lo], g1 = a[hi], h0 = h[lo], h1 = h[hi];
-  if (h0 === h1) return h0;
-  const r = Math.min(g1 - g0, Math.abs(h1 - h0) * RAMP);
-  // 坡道貼著比較高的那一站，其餘路段維持在低處
-  const u = h1 > h0 ? (km - (g1 - r)) / r : 1 - (km - g0) / r, v = Math.min(1, Math.max(0, u));
-  return Math.min(h0, h1) + Math.abs(h1 - h0) * v * v * (3 - 2 * v);
+  // 站距短就維持在兩站中較低的高度，站距長就回到地面；坡道各自貼著兩端的車站
+  const base = g1 - g0 < (h0 + h1) * RAMP + 0.3 ? Math.min(h0, h1) : 0;
+  const ss = v => { v = Math.min(1, Math.max(0, v)); return v * v * (3 - 2 * v); };
+  const r0 = (h0 - base) * RAMP, r1 = (h1 - base) * RAMP;
+  const e0 = r0 > 0 ? (h0 - base) * ss(1 - (km - g0) / r0) : 0, e1 = r1 > 0 ? (h1 - base) * ss((km - (g1 - r1)) / r1) : 0;
+  return base + Math.max(e0, e1);
 }
 // 高架橋：在軌道下面畫橋面（每 4 公尺一段，跟著坡度一段段升高）和橋墩
 function viaductFeatures(trip, k0, k1, P, out, seen) {
@@ -423,10 +424,12 @@ function stationPeople(node, R, idx, m, out, cap) {
     let cur = null, lastDep = -Infinity; const recent = [];
     for (const [t, i] of sideTrips(node, R, idx, same)) for (const off of [0, 1440]) {
       const arr = effTime(t, i, 'arr') - off, dep = effTime(t, i, 'dep') - off, last = i === t.nodes.length - 1;
-      if (arr > m + 0.01 || dep < m - 4) continue;
+      if (arr > m + 0.01) continue;
+      // 上一班開走的時間不受下面 4 分鐘視窗限制，班距長的路線候車人潮才不會重來
+      if (!last && dep <= m && dep > lastDep) lastDep = dep;
+      if (dep < m - 4) continue;
       const ev = { t, i, arr, dep, off, last };
       if (arr <= m && m < dep && !last) cur = ev;
-      else if (!last && dep <= m && dep > lastDep) lastDep = dep;
       if (i > 0 && arr <= m && arr > m - 3 && dep > arr) recent.push(ev);
     }
     // 車門的位置（月台邊緣），由實際停靠的列車算出來
