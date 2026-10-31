@@ -204,6 +204,7 @@ const ZOOM = { TRA: 14.2, THSR: 13.4, TRTC: 15, TYMC: 14.6, TMRT: 15, KRTC: 15 }
 const angDiff = (a, b) => ((b - a + 540) % 360) - 180;
 // 投影座標的 y 軸朝南，heading 為數學角度；換成地圖方位角（北為 0、順時針）
 const bearingOf = h => 90 + h * DEG;
+let flightId = 0;
 function follow(trip, { fly = true } = {}) {
   S.follow = trip; S.followPaused = false;
   closePicker();
@@ -212,9 +213,12 @@ function follow(trip, { fly = true } = {}) {
     const bearing = bearingOf(pos.heading);
     S.cam = { bearing, zoom: ZOOM[trip.sys] || 14 };
     if (fly) {
+      // 先停掉上一段飛行（會同步觸發它的 moveend），再用編號辨認這一段的結束
+      map.stop();
+      const id = ++flightId;
       S.flying = true;
+      map.once('moveend', () => { if (id === flightId) S.flying = false; });
       map.flyTo({ center: unproj(pos.x, pos.y), zoom: S.cam.zoom, pitch: 64, bearing, duration: 3200, essential: true, curve: 1.6 });
-      map.once('moveend', () => { S.flying = false; });
     }
   }
   pushTrains(); renderCaption(true);
@@ -470,6 +474,9 @@ function closeIntro(then) {
   if (store.get('music', true)) setMusic(true);
   then();
 }
+// 班次與軌道載入完成前先停用開場按鈕，避免漫遊或選車時還沒有列車
+const startBtns = [$('#startroam'), $('#startpick')];
+startBtns.forEach(b => { b.disabled = true; });
 $('#startroam').addEventListener('click', () => closeIntro(() => setRoam(true)));
 $('#startpick').addEventListener('click', () => closeIntro(openPicker));
 
@@ -513,6 +520,7 @@ async function boot() {
   generateAll();
   initMap();
   updatePositions(); renderClock();
+  startBtns.forEach(b => { b.disabled = false; });
   requestAnimationFrame(t => { last = t; frame(t); });
   const cred = store.get('tdx', {});
   if (cred.id && cred.secret) connectTDX(cred, true);
