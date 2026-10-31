@@ -62,7 +62,7 @@ const STYLE = {
       paint: { 'fill-extrusion-color': P0.bld, 'fill-extrusion-height': ['coalesce', ['get', 'render_height'], 8], 'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0], 'fill-extrusion-opacity': 0.32 } },
     // 透視感：半透明建築加上貼地的輪廓線
     { id: 'bld-edge', type: 'line', source: 'omt', 'source-layer': 'building', minzoom: 14,
-      paint: { 'line-color': P0.bldEdge, 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 0.4, 18, 1.2], 'line-opacity': 0.7 } },
+      paint: { 'line-color': P0.bldEdge, 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 0.5, 18, 1.4], 'line-opacity': 0.85 } },
     { id: 'places', type: 'symbol', source: 'omt', 'source-layer': 'place', filter: ['in', ['get', 'class'], ['literal', ['city', 'town']]],
       layout: { 'text-field': NAME, 'text-font': ['Noto Sans Regular'], 'text-size': ['interpolate', ['linear'], ['zoom'], 6, 11, 12, 15], 'text-letter-spacing': 0.15 },
       paint: { 'text-color': P0.label, 'text-halo-color': P0.halo, 'text-halo-width': 1.4, 'text-opacity': 0.75 } },
@@ -97,7 +97,8 @@ const TAIWAN = { center: [120.95, 23.65], zoom: 6.7, pitch: 35, bearing: -8 };
 const EMPTY = { type: 'FeatureCollection', features: [] };
 const CAR_ZOOM = 14.5;
 const COARSE = matchMedia('(pointer: coarse)').matches;
-const MAX_CAR_TRAINS = COARSE ? 8 : 18; // 同時畫成車廂的列車上限（跟拍的列車另計）
+const MAX_CAR_TRAINS = COARSE ? 8 : 18;
+const LIVE_TRAINS = COARSE ? 5 : 8; // 其中每一格都更新的列數 // 同時畫成車廂的列車上限（跟拍的列車另計）
 const DOT = COARSE ? 1.35 : 1; // 手機上列車圓點放大 // 這個縮放以上把列車畫成一節節車廂
 function initMap() {
   if (!window.maplibregl) { $('#intro p').textContent = '地圖元件載入失敗，請確認網路連線後重新整理。'; return; }
@@ -165,6 +166,13 @@ function initMap() {
     map.on(ev, e => { if (e.originalEvent && S.follow && !S.followPaused) unlockView(); });
   }
   map.on('zoomend', () => syncTerrain());
+  // 手指一碰地圖就切到自由視角：跟拍時每一格的 jumpTo 會中斷 MapLibre 的手勢，必須在手勢開始前就停下鏡頭
+  const box = map.getCanvasContainer();
+  const down = e => { if (e.type === 'pointerdown' && e.button > 0 && e.pointerType === 'mouse') return; S.touching = true; if (S.follow && !S.followPaused) unlockView(); };
+  const up = () => { S.touching = false; };
+  box.addEventListener('pointerdown', down, true);
+  box.addEventListener('wheel', e => { if (S.follow && !S.followPaused) unlockView(); }, { capture: true, passive: true });
+  addEventListener('pointerup', up); addEventListener('pointercancel', up);
   map.on('error', e => console.warn('地圖資源載入失敗', e && e.error && e.error.message));
 }
 
@@ -189,7 +197,7 @@ function applyLook(force) {
   const P = S.P = paletteAt(hour, wx), W = WEATHER[wx];
   const set = (l, k, v) => { try { map.setPaintProperty(l, k, v); } catch {} };
   set('bg', 'background-color', P.sea); set('land', 'fill-color', P.land); set('wood', 'fill-color', P.wood);
-  set('water', 'fill-color', P.water); set('bld-edge', 'line-color', P.bldEdge); set('county', 'line-color', P.edge); set('roads', 'line-color', P.road); set('buildings', 'fill-extrusion-color', P.bld);
+  set('water', 'fill-color', P.water); set('bld-edge', 'line-color', P.bldEdge); set('county', 'line-color', P.edge); set('roads', 'line-color', P.road); set('buildings', 'fill-extrusion-color', P.bld); set('buildings', 'fill-extrusion-opacity', P.bldOp);
   set('hills', 'hillshade-shadow-color', P.hsShadow); set('hills', 'hillshade-highlight-color', P.hsHigh); set('hills', 'hillshade-accent-color', P.hsAccent);
   set('places', 'text-color', P.label); set('places', 'text-halo-color', P.halo);
   set('rail', 'line-color', railColor(P)); set('rail-glow', 'line-color', railColor(P));
@@ -243,12 +251,14 @@ function pushTrains(force) {
     pts.push({ type: 'Feature', properties: { idx: trip.idx, color: trip.color, sel: isSel, g: sysGroup(trip.sys) }, geometry: { type: 'Point', coordinates: ll } });
     if (isSel || ll[0] < W || ll[0] > E || ll[1] < Sb || ll[1] > N) continue;
     if (fll && S.nearby.length < 6 && Math.abs(ll[0] - fll[0]) < 0.008 && Math.abs(ll[1] - fll[1]) < 0.007) { S.nearby.push(trip); continue; }
-    if (doLights) trainLights(trip, pos, bgLights);
-    if (doCars) near.push({ trip, pos, d: (ll[0] - c.lng) ** 2 + (ll[1] - c.lat) ** 2 });
+    near.push({ trip, pos, d: (ll[0] - c.lng) ** 2 + (ll[1] - c.lat) ** 2 });
   }
+  near.sort((p, q) => p.d - q.d);
+  // 沒在跟車時，近看畫面中央最近的幾列每一格更新（自由瀏覽時才不會一頓一頓）
+  if (!sel && z >= CAR_ZOOM - 0.3) S.nearby = near.splice(0, LIVE_TRAINS).map(n => n.trip);
+  if (doLights) for (const { trip, pos } of near) trainLights(trip, pos, bgLights);
   if (doCars) {
     lastCars = performance.now();
-    near.sort((p, q) => p.d - q.d);
     for (const { trip, pos } of near.slice(0, MAX_CAR_TRAINS)) {
       const start = cars.length;
       carFeatures(trip, pos, S.P, cars, false); // 窗格細節只畫在跟拍的列車上
@@ -274,7 +284,7 @@ function pushFocus() {
   const t = S.follow, m = curMin(), pos = t && tripPos(t, m);
   const out = [];
   if (pos) { carFeatures(t, pos, S.P, out, true); for (const f of out) f.properties.idx = t.idx; }
-  if (pos) for (const n of S.nearby || []) {
+  for (const n of S.nearby || []) {
     const np = tripPos(n, m); if (!np) continue;
     const start = out.length; carFeatures(n, np, S.P, out, false);
     for (let i = start; i < out.length; i++) out[i].properties.idx = n.idx;
@@ -395,7 +405,7 @@ function stepCamera(now, dt) {
   if (S.followPaused) {
     // 自由視角：使用者自己控制角度與遠近，畫面只跟著列車平移，車子不會跑出畫面
     const ll = unproj(pos.x, pos.y), prev = S.freeLast; S.freeLast = ll;
-    if (prev && !map.isMoving()) { const c = map.getCenter(); map.jumpTo({ center: [c.lng + ll[0] - prev[0], c.lat + ll[1] - prev[1]] }); }
+    if (prev && !S.touching && !map.isMoving()) { const c = map.getCenter(); map.jumpTo({ center: [c.lng + ll[0] - prev[0], c.lat + ll[1] - prev[1]] }); }
     return;
   }
   const cam = viewCamera(S.follow, pos, now, dt);
@@ -415,18 +425,14 @@ function unlockView() {
   S.followPaused = true; S.trans = null; S.freeLast = null;
   renderCaption(true); renderViewBtn();
 }
-function toggleLock() { if (!S.follow) return; if (S.followPaused) { S.followPaused = false; startCamera(false); renderCaption(true); renderViewBtn(); } else unlockView(); }
 function setView(id) {
   S.view = id; store.set('view2', id); S.rel = null; S.ts = null;
   if (S.follow) { S.followPaused = false; startCamera(false); }
   renderViewBtn(); renderCaption(true);
 }
-function cycleView() { const i = VIEWS.findIndex(v => v.id === S.view); setView(VIEWS[(i + 1) % VIEWS.length].id); }
+function cycleView() { if (S.follow && S.followPaused) return setView(S.view); /* 自由視角時先鎖回原視角 */ const i = VIEWS.findIndex(v => v.id === S.view); setView(VIEWS[(i + 1) % VIEWS.length].id); }
 function renderViewBtn() {
-  const b = $('#viewbtn'); b.textContent = '視角・' + viewName(); b.disabled = !S.follow;
-  const l = $('#lockbtn'); l.disabled = !S.follow; l.classList.toggle('on', !!S.follow && !S.followPaused);
-  l.textContent = S.follow && S.followPaused ? '🔓' : '🔒';
-  l.title = S.follow && S.followPaused ? '自由視角：可自己拖曳縮放，畫面仍跟著列車。點一下鎖回視角' : '鎖定視角中，點一下改成自由拖曳';
+  const b = $('#viewbtn'); b.textContent = S.follow && S.followPaused ? '◉ 回到' + viewName() : '視角・' + viewName(); b.disabled = !S.follow;
 }
 
 /* 漫遊：每隔一段時間換一列車，偏好行駛中、不同系統的列車，並換個視角 */
@@ -500,10 +506,9 @@ function renderCaption(force) {
     <div class="next"><div><div class="lab">${pos && pos.atStation ? '此刻' : '下一站'}</div><b>${esc(next)}</b></div><span class="eta">${esc(eta)}</span></div>
     <div class="bar"><i style="width:${(progress * 100).toFixed(1)}%"></i></div>
     <div class="meta"><span>已過 ${done} / ${stops} 站</span><span>${speed ? '約 ' + speed + ' km/h' : ''}</span></div>
-    ${S.followPaused ? '<div class="caprow"><button class="pillbtn small" id="refollow">🔒 鎖回視角</button><button class="pillbtn small" id="leave">離開</button></div>' : ''}`;
+    <div class="caprow"><button class="pillbtn small" id="leave">離開</button></div>`;
 }
 cap.addEventListener('click', e => {
-  if (e.target.id === 'refollow' && S.follow) toggleLock();
   if (e.target.id === 'leave') { setRoam(false); unfollow(); }
 });
 
@@ -621,7 +626,6 @@ toggleBtn('#buildbtn', 'buildings', on => map.setLayoutProperty('buildings', 'vi
 toggleBtn('#labelbtn', 'labels', on => map.setLayoutProperty('st-label', 'visibility', on ? 'visible' : 'none'));
 
 $('#viewbtn').addEventListener('click', cycleView);
-$('#lockbtn').addEventListener('click', toggleLock);
 
 /* ---------- 光線與天氣面板 ---------- */
 const sky = $('#sky');
@@ -730,7 +734,7 @@ function frame(now) {
     updatePositions(); pushTrains(); lastPush = now;
     // 列車抵達終點：漫遊時換下一列
     if (S.roam && S.follow && !S.flying && !tripPos(S.follow, curMin())) roamNext();
-  } else if (S.follow) pushFocusFrame();
+  } else if (S.follow || (S.nearby && S.nearby.length)) pushFocusFrame();
   stepCamera(now, dt);
   Precip.step(dt, now);
   if (S.roam && now > S.roamAt && !S.flying) { S.roamAt = now + ROAM_SEC * 1000; roamNext(); }

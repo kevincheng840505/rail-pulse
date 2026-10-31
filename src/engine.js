@@ -59,8 +59,19 @@ function applyRailData(data) {
     n.lon = lon; n.lat = lat; [n.x, n.y] = proj(lat, lon);
   }
   SEG.clear();
-  for (const [key, coords] of Object.entries(data.segments || {})) {
-    const pts = coords.map(([lon, lat]) => proj(lat, lon));
+  for (let [key, coords] of Object.entries(data.segments || {})) {
+    // 資料裡的線形已被簡化成稀疏折線，轉角很尖：用 Chaikin 切角法修圓滑兩次，車廂過彎才不會折成 Z 字
+    let pts = coords.map(([lon, lat]) => proj(lat, lon));
+    for (let k = 0; k < 2 && pts.length > 2; k++) {
+      const sm = [pts[0]];
+      for (let i = 0; i < pts.length - 1; i++) {
+        const [x1, y1] = pts[i], [x2, y2] = pts[i + 1];
+        if (i > 0) sm.push([x1 * 0.75 + x2 * 0.25, y1 * 0.75 + y2 * 0.25]);
+        if (i < pts.length - 2) sm.push([x1 * 0.25 + x2 * 0.75, y1 * 0.25 + y2 * 0.75]);
+      }
+      sm.push(pts[pts.length - 1]); pts = sm;
+    }
+    coords = pts.map(([x, y]) => unproj(x, y));
     const cum = [0];
     for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
     SEG.set(key, { pts, cum, len: cum[cum.length - 1] || 0.001, coords });

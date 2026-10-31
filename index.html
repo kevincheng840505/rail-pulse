@@ -163,7 +163,6 @@ button { cursor:pointer; }
   <button class="pillbtn primary" id="pickbtn">選一列車</button>
   <button class="pillbtn" id="roambtn" aria-pressed="false" title="每隔一段時間自動換一列車">漫遊</button>
   <button class="pillbtn small" id="viewbtn" title="切換跟車視角（V）" disabled>視角・追車</button>
-  <button class="pillbtn small" id="lockbtn" title="鎖定／解開視角" disabled>🔒</button>
   <button class="pillbtn small" id="speedbtn" title="播放速度（1–4）">1×</button>
 </div>
 
@@ -838,8 +837,19 @@ function applyRailData(data) {
     n.lon = lon; n.lat = lat; [n.x, n.y] = proj(lat, lon);
   }
   SEG.clear();
-  for (const [key, coords] of Object.entries(data.segments || {})) {
-    const pts = coords.map(([lon, lat]) => proj(lat, lon));
+  for (let [key, coords] of Object.entries(data.segments || {})) {
+    // 資料裡的線形已被簡化成稀疏折線，轉角很尖：用 Chaikin 切角法修圓滑兩次，車廂過彎才不會折成 Z 字
+    let pts = coords.map(([lon, lat]) => proj(lat, lon));
+    for (let k = 0; k < 2 && pts.length > 2; k++) {
+      const sm = [pts[0]];
+      for (let i = 0; i < pts.length - 1; i++) {
+        const [x1, y1] = pts[i], [x2, y2] = pts[i + 1];
+        if (i > 0) sm.push([x1 * 0.75 + x2 * 0.25, y1 * 0.75 + y2 * 0.25]);
+        if (i < pts.length - 2) sm.push([x1 * 0.25 + x2 * 0.75, y1 * 0.25 + y2 * 0.75]);
+      }
+      sm.push(pts[pts.length - 1]); pts = sm;
+    }
+    coords = pts.map(([x, y]) => unproj(x, y));
     const cum = [0];
     for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
     SEG.set(key, { pts, cum, len: cum[cum.length - 1] || 0.001, coords });
@@ -1334,6 +1344,8 @@ const Music = (() => {
    body 車身、stripe/stripe2 腰帶、roof 車頂、nose 車頭流線段長度、cab 車頭色（無則同車身） */
 const EX = 1.3;
 const LIFT = 0; // 近看時地形已攤平，車廂直接貼地
+// 每節車廂單側的車門數
+const DOORS = { THSR: 1, TEMU2000: 1, TEMU1000: 1, EMU3000: 2, E1000: 2, CHUKUANG: 2, EMU900: 3, TRTC: 4, TRTC_BR: 2, TRTC_Y: 3, TYMC: 3, TMRT: 4, KRTC: 4, LRT: 1 };
 const LIVERY = {
   THSR:     { n:12, len:25,   w:3.38, h:3.65, gap:0.5, nose:10,  body:'#F3F4F1', stripe:'#F07F1F', stripe2:'#1E3A6E', roof:'#D9DCDF', name:'700T' },
   TEMU2000: { n:8,  len:20,   w:2.9,  h:3.6,  gap:0.6, nose:4.5, body:'#F4F4F2', stripe:'#E8452C', stripe2:'#E8452C', roof:'#C9CDD1', cab:'#E8452C', name:'普悠瑪' },
@@ -1374,14 +1386,16 @@ const LEFT_HAND = { TRA: 1, THSR: 1 };
 function sideOffset(trip) {
   if (trip._side == null) {
     const L = liveryOf(trip);
-    trip._side = (LEFT_HAND[trip.sys] ? 1 : -1) * (L.w * EX / 2 + 0.5) / 1000;
+    trip._side = (LEFT_HAND[trip.sys] ? -1 : 1) * (L.w * EX / 2 + 0.5) / 1000;
   }
   return trip._side;
 }
 function trackPoint(trip, km) {
-  const p = centerPoint(trip, km), o = sideOffset(trip);
-  // 往行進方向的左側為正
-  return { x: p.x - Math.sin(p.heading) * o, y: p.y + Math.cos(p.heading) * o, heading: p.heading };
+  // 方向取前後各 12 公尺的連線，經過車站接點或轉角時不會突然轉向
+  const p = centerPoint(trip, km), a = centerPoint(trip, km - 0.012), b = centerPoint(trip, km + 0.012), o = sideOffset(trip);
+  const h = Math.hypot(b.x - a.x, b.y - a.y) > 1e-6 ? Math.atan2(b.y - a.y, b.x - a.x) : p.heading;
+  // 投影座標 y 軸朝南，o 為正時偏向行進方向的右側
+  return { x: p.x - Math.sin(h) * o, y: p.y + Math.cos(h) * o, heading: h };
 }
 function centerPoint(trip, km) {
   const c = trip.cum, n = c.length;
@@ -1395,11 +1409,15 @@ function centerPoint(trip, km) {
 
 /* 把一列車拆成多節車廂的 3D 方塊：車身、窗帶、腰帶、車頂，車頭做成流線收窄 */
 function carFeatures(trip, pos, P, out, detail) {
-  const L = liveryOf(trip);
+  const L = liveryOf(trip), key = Object.keys(LIVERY).find(k => LIVERY[k] === L);
+  const nDoor = DOORS[key] || 2, doorW = (L.len > 15 ? 1.4 : 1.1) / 1000;
+  const doorColor = mixHex(L.body, '#2A3038', 0.16), under = '#24282E', ac = mixHex(L.roof, '#5A6068', 0.3);
   const w = L.w * EX / 1000, h = L.h * EX;
   const winColor = '#141C26', paneColor = P.lit ? P.winLit : '#3A5068';
   const quad = (a, b, wa, wb) => {
-    const ca = Math.cos(a.heading), sa = Math.sin(a.heading), cb = Math.cos(b.heading), sb = Math.sin(b.heading);
+    // 一節車廂是剛體：兩端都用車頭到車尾連線的方向，跨過彎道時不會扭成交叉的形狀
+    const d = Math.hypot(b.x - a.x, b.y - a.y), h = d > 1e-6 ? Math.atan2(b.y - a.y, b.x - a.x) : a.heading;
+    const ca = Math.cos(h), sa = Math.sin(h), cb = ca, sb = sa;
     // 前後兩端各自用當地的軌道方向算出左右兩點，彎道上車廂也貼著軌道
     const r = [unproj(a.x - sa * wa, a.y + ca * wa), unproj(b.x - sb * wb, b.y + cb * wb), unproj(b.x + sb * wb, b.y - cb * wb), unproj(a.x + sa * wa, a.y - ca * wa)];
     r.push(r[0]); return [r];
@@ -1417,17 +1435,45 @@ function carFeatures(trip, pos, P, out, detail) {
     // 車身主體（去掉車頭流線段）
     const bodyF = lead && nose ? trackPoint(trip, front - nose) : f;
     const bodyB = tail && nose ? trackPoint(trip, back + nose) : bk;
-    add(quad(bodyF, bodyB, w / 2, w / 2), 0, h, L.body);
+    // 車身底下留一段深色車底，看起來才像架在轉向架上
+    add(quad(bodyF, bodyB, w * 0.42, w * 0.42), 0, h * 0.12, under);
+    add(quad(bodyF, bodyB, w / 2, w / 2), h * 0.1, h, L.body);
     // 窗帶與腰帶：比車身寬一點點，蓋在側面
     const iw = w / 2 + 0.00008;
     add(quad(bodyF, bodyB, iw, iw), h * 0.56, h * 0.8, winColor);
     // 近看時把窗帶切成一格格車窗，夜裡會亮
     if (detail) {
       const span = (front - back) - (lead && nose ? nose : 0) - (tail && nose ? nose : 0);
-      const k0 = back + (tail && nose ? nose : 0), nw = Math.max(2, Math.round(span * 1000 / 3.4));
+      const k0 = back + (tail && nose ? nose : 0);
+      // 車門：一節平均分布（單門、雙門的車型放在兩端），門上有小窗
+      const doors = [];
+      for (let j = 0; j < nDoor; j++) doors.push(k0 + span * (nDoor === 1 ? 0.9 : nDoor === 2 ? (j ? 0.85 : 0.15) : (j + 0.5) / nDoor));
+      for (const dc of doors) {
+        const a = trackPoint(trip, dc - doorW / 2), b = trackPoint(trip, dc + doorW / 2);
+        add(quad(a, b, iw + 0.00004, iw + 0.00004), h * 0.12, h * 0.82, doorColor);
+        const a2 = trackPoint(trip, dc - doorW * 0.3), b2 = trackPoint(trip, dc + doorW * 0.3);
+        add(quad(a2, b2, iw + 0.00006, iw + 0.00006), h * 0.56, h * 0.78, paneColor);
+      }
+      // 車窗：避開車門的位置
+      const nw = Math.max(2, Math.round(span * 1000 / 3.4));
       for (let k = 0; k < nw; k++) {
-        const a = trackPoint(trip, k0 + span * (k + 0.18) / nw), b = trackPoint(trip, k0 + span * (k + 0.82) / nw);
-        add(quad(b, a, iw + 0.00003, iw + 0.00003), h * 0.6, h * 0.77, paneColor);
+        const ka = k0 + span * (k + 0.18) / nw, kb = k0 + span * (k + 0.82) / nw;
+        if (doors.some(dc => kb > dc - doorW * 0.7 && ka < dc + doorW * 0.7)) continue;
+        add(quad(trackPoint(trip, kb), trackPoint(trip, ka), iw + 0.00003, iw + 0.00003), h * 0.6, h * 0.77, paneColor);
+      }
+      // 轉向架與車頂冷氣機
+      for (const u of [0.13, 0.87]) {
+        const c = back + (front - back) * u, a = trackPoint(trip, c - 0.0013), b = trackPoint(trip, c + 0.0013);
+        add(quad(a, b, w * 0.47, w * 0.47), 0, h * 0.14, '#1A1D21');
+      }
+      for (const u of [0.28, 0.72]) {
+        const c = back + (front - back) * u, a = trackPoint(trip, c - 0.0014), b = trackPoint(trip, c + 0.0014);
+        add(quad(a, b, w * 0.27, w * 0.27), h * 1.05, h * 1.12, ac);
+      }
+      // 車廂之間的貫通道
+      if (!tail && L.gap > 0) {
+        const a = trackPoint(trip, back - L.gap / 1000 - 0.0002), b = trackPoint(trip, back + 0.0002);
+        add(quad(a, b, w * 0.4, w * 0.4), h * 0.15, h * 0.9, under);
       }
     }
     if (L.stripe) add(quad(bodyF, bodyB, iw + 0.00002, iw + 0.00002), h * 0.4, h * 0.5, L.stripe);
@@ -1468,16 +1514,16 @@ const offsetPt = (p, along, side) => {
 
 /* ---------- 光線：依時間在幾個關鍵色票之間平滑內插 ---------- */
 const PALETTES = {
-  night: { sea:'#050A12', land:'#0F1822', edge:'#1C2733', water:'#06101B', wood:'#0F1D1A', road:'#1D2A37', bld:'#1D3550', bldEdge:'#4A7FB5',
+  night: { sea:'#050A12', land:'#0F1822', edge:'#1C2733', water:'#06101B', wood:'#0F1D1A', road:'#1D2A37', bld:'#4A7BAE', bldEdge:'#7FB8EE', bldOp:0.5,
     hsShadow:'#000000', hsHigh:'#3A4C60', hsAccent:'#0A121B', label:'#8FA0AE', halo:'#050A12',
     sky:'#081222', horizon:'#1C2B40', fog:'#0B1320', tra:'#A9BCCD', light:'#7C8FB0', glow:0.6, lightI:0.25 },
-  dawn: { sea:'#2A3348', land:'#3A3540', edge:'#4A4452', water:'#2C3650', wood:'#2E3A35', road:'#4D4652', bld:'#5A5070', bldEdge:'#B39AC8',
+  dawn: { sea:'#2A3348', land:'#3A3540', edge:'#4A4452', water:'#2C3650', wood:'#2E3A35', road:'#4D4652', bld:'#8478A0', bldEdge:'#C9B2DE', bldOp:0.42,
     hsShadow:'#1A1424', hsHigh:'#E0A27E', hsAccent:'#382A3A', label:'#E6D2C6', halo:'#241E28',
     sky:'#5B5A86', horizon:'#F2A97A', fog:'#7A6070', tra:'#F0E2D4', light:'#FFB98A', glow:0.35, lightI:0.4 },
-  day: { sea:'#8EB2C7', land:'#DCDDD0', edge:'#C3C4B4', water:'#86AAC0', wood:'#BFCDB0', road:'#F4F2EA', bld:'#B9C7D6', bldEdge:'#6F8CA8',
+  day: { sea:'#8EB2C7', land:'#DCDDD0', edge:'#C3C4B4', water:'#86AAC0', wood:'#BFCDB0', road:'#F4F2EA', bld:'#B9C7D6', bldEdge:'#6F8CA8', bldOp:0.32,
     hsShadow:'#4E5C55', hsHigh:'#FFFFFF', hsAccent:'#7D8B80', label:'#3B4650', halo:'#F4F2EA',
     sky:'#6FA8D8', horizon:'#E2ECF0', fog:'#DCE6EA', tra:'#3F4E5E', light:'#FFFFFF', glow:0.15, lightI:0.3 },
-  dusk: { sea:'#1F2438', land:'#30293A', edge:'#433A4E', water:'#222A46', wood:'#283029', road:'#4A3F4E', bld:'#4A3E5E', bldEdge:'#A389C2',
+  dusk: { sea:'#1F2438', land:'#30293A', edge:'#433A4E', water:'#222A46', wood:'#283029', road:'#4A3F4E', bld:'#76689A', bldEdge:'#BFA4DC', bldOp:0.44,
     hsShadow:'#140E1A', hsHigh:'#D98A62', hsAccent:'#2E2232', label:'#E2CFC6', halo:'#1C1820',
     sky:'#3E3560', horizon:'#F08A5A', fog:'#4E3A4A', tra:'#EADCCF', light:'#FF9E6A', glow:0.4, lightI:0.4 },
 };
@@ -1643,7 +1689,7 @@ const STYLE = {
       paint: { 'fill-extrusion-color': P0.bld, 'fill-extrusion-height': ['coalesce', ['get', 'render_height'], 8], 'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0], 'fill-extrusion-opacity': 0.32 } },
     // 透視感：半透明建築加上貼地的輪廓線
     { id: 'bld-edge', type: 'line', source: 'omt', 'source-layer': 'building', minzoom: 14,
-      paint: { 'line-color': P0.bldEdge, 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 0.4, 18, 1.2], 'line-opacity': 0.7 } },
+      paint: { 'line-color': P0.bldEdge, 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 0.5, 18, 1.4], 'line-opacity': 0.85 } },
     { id: 'places', type: 'symbol', source: 'omt', 'source-layer': 'place', filter: ['in', ['get', 'class'], ['literal', ['city', 'town']]],
       layout: { 'text-field': NAME, 'text-font': ['Noto Sans Regular'], 'text-size': ['interpolate', ['linear'], ['zoom'], 6, 11, 12, 15], 'text-letter-spacing': 0.15 },
       paint: { 'text-color': P0.label, 'text-halo-color': P0.halo, 'text-halo-width': 1.4, 'text-opacity': 0.75 } },
@@ -1678,7 +1724,8 @@ const TAIWAN = { center: [120.95, 23.65], zoom: 6.7, pitch: 35, bearing: -8 };
 const EMPTY = { type: 'FeatureCollection', features: [] };
 const CAR_ZOOM = 14.5;
 const COARSE = matchMedia('(pointer: coarse)').matches;
-const MAX_CAR_TRAINS = COARSE ? 8 : 18; // 同時畫成車廂的列車上限（跟拍的列車另計）
+const MAX_CAR_TRAINS = COARSE ? 8 : 18;
+const LIVE_TRAINS = COARSE ? 5 : 8; // 其中每一格都更新的列數 // 同時畫成車廂的列車上限（跟拍的列車另計）
 const DOT = COARSE ? 1.35 : 1; // 手機上列車圓點放大 // 這個縮放以上把列車畫成一節節車廂
 function initMap() {
   if (!window.maplibregl) { $('#intro p').textContent = '地圖元件載入失敗，請確認網路連線後重新整理。'; return; }
@@ -1746,6 +1793,13 @@ function initMap() {
     map.on(ev, e => { if (e.originalEvent && S.follow && !S.followPaused) unlockView(); });
   }
   map.on('zoomend', () => syncTerrain());
+  // 手指一碰地圖就切到自由視角：跟拍時每一格的 jumpTo 會中斷 MapLibre 的手勢，必須在手勢開始前就停下鏡頭
+  const box = map.getCanvasContainer();
+  const down = e => { if (e.type === 'pointerdown' && e.button > 0 && e.pointerType === 'mouse') return; S.touching = true; if (S.follow && !S.followPaused) unlockView(); };
+  const up = () => { S.touching = false; };
+  box.addEventListener('pointerdown', down, true);
+  box.addEventListener('wheel', e => { if (S.follow && !S.followPaused) unlockView(); }, { capture: true, passive: true });
+  addEventListener('pointerup', up); addEventListener('pointercancel', up);
   map.on('error', e => console.warn('地圖資源載入失敗', e && e.error && e.error.message));
 }
 
@@ -1770,7 +1824,7 @@ function applyLook(force) {
   const P = S.P = paletteAt(hour, wx), W = WEATHER[wx];
   const set = (l, k, v) => { try { map.setPaintProperty(l, k, v); } catch {} };
   set('bg', 'background-color', P.sea); set('land', 'fill-color', P.land); set('wood', 'fill-color', P.wood);
-  set('water', 'fill-color', P.water); set('bld-edge', 'line-color', P.bldEdge); set('county', 'line-color', P.edge); set('roads', 'line-color', P.road); set('buildings', 'fill-extrusion-color', P.bld);
+  set('water', 'fill-color', P.water); set('bld-edge', 'line-color', P.bldEdge); set('county', 'line-color', P.edge); set('roads', 'line-color', P.road); set('buildings', 'fill-extrusion-color', P.bld); set('buildings', 'fill-extrusion-opacity', P.bldOp);
   set('hills', 'hillshade-shadow-color', P.hsShadow); set('hills', 'hillshade-highlight-color', P.hsHigh); set('hills', 'hillshade-accent-color', P.hsAccent);
   set('places', 'text-color', P.label); set('places', 'text-halo-color', P.halo);
   set('rail', 'line-color', railColor(P)); set('rail-glow', 'line-color', railColor(P));
@@ -1824,12 +1878,14 @@ function pushTrains(force) {
     pts.push({ type: 'Feature', properties: { idx: trip.idx, color: trip.color, sel: isSel, g: sysGroup(trip.sys) }, geometry: { type: 'Point', coordinates: ll } });
     if (isSel || ll[0] < W || ll[0] > E || ll[1] < Sb || ll[1] > N) continue;
     if (fll && S.nearby.length < 6 && Math.abs(ll[0] - fll[0]) < 0.008 && Math.abs(ll[1] - fll[1]) < 0.007) { S.nearby.push(trip); continue; }
-    if (doLights) trainLights(trip, pos, bgLights);
-    if (doCars) near.push({ trip, pos, d: (ll[0] - c.lng) ** 2 + (ll[1] - c.lat) ** 2 });
+    near.push({ trip, pos, d: (ll[0] - c.lng) ** 2 + (ll[1] - c.lat) ** 2 });
   }
+  near.sort((p, q) => p.d - q.d);
+  // 沒在跟車時，近看畫面中央最近的幾列每一格更新（自由瀏覽時才不會一頓一頓）
+  if (!sel && z >= CAR_ZOOM - 0.3) S.nearby = near.splice(0, LIVE_TRAINS).map(n => n.trip);
+  if (doLights) for (const { trip, pos } of near) trainLights(trip, pos, bgLights);
   if (doCars) {
     lastCars = performance.now();
-    near.sort((p, q) => p.d - q.d);
     for (const { trip, pos } of near.slice(0, MAX_CAR_TRAINS)) {
       const start = cars.length;
       carFeatures(trip, pos, S.P, cars, false); // 窗格細節只畫在跟拍的列車上
@@ -1855,7 +1911,7 @@ function pushFocus() {
   const t = S.follow, m = curMin(), pos = t && tripPos(t, m);
   const out = [];
   if (pos) { carFeatures(t, pos, S.P, out, true); for (const f of out) f.properties.idx = t.idx; }
-  if (pos) for (const n of S.nearby || []) {
+  for (const n of S.nearby || []) {
     const np = tripPos(n, m); if (!np) continue;
     const start = out.length; carFeatures(n, np, S.P, out, false);
     for (let i = start; i < out.length; i++) out[i].properties.idx = n.idx;
@@ -1976,7 +2032,7 @@ function stepCamera(now, dt) {
   if (S.followPaused) {
     // 自由視角：使用者自己控制角度與遠近，畫面只跟著列車平移，車子不會跑出畫面
     const ll = unproj(pos.x, pos.y), prev = S.freeLast; S.freeLast = ll;
-    if (prev && !map.isMoving()) { const c = map.getCenter(); map.jumpTo({ center: [c.lng + ll[0] - prev[0], c.lat + ll[1] - prev[1]] }); }
+    if (prev && !S.touching && !map.isMoving()) { const c = map.getCenter(); map.jumpTo({ center: [c.lng + ll[0] - prev[0], c.lat + ll[1] - prev[1]] }); }
     return;
   }
   const cam = viewCamera(S.follow, pos, now, dt);
@@ -1996,18 +2052,14 @@ function unlockView() {
   S.followPaused = true; S.trans = null; S.freeLast = null;
   renderCaption(true); renderViewBtn();
 }
-function toggleLock() { if (!S.follow) return; if (S.followPaused) { S.followPaused = false; startCamera(false); renderCaption(true); renderViewBtn(); } else unlockView(); }
 function setView(id) {
   S.view = id; store.set('view2', id); S.rel = null; S.ts = null;
   if (S.follow) { S.followPaused = false; startCamera(false); }
   renderViewBtn(); renderCaption(true);
 }
-function cycleView() { const i = VIEWS.findIndex(v => v.id === S.view); setView(VIEWS[(i + 1) % VIEWS.length].id); }
+function cycleView() { if (S.follow && S.followPaused) return setView(S.view); /* 自由視角時先鎖回原視角 */ const i = VIEWS.findIndex(v => v.id === S.view); setView(VIEWS[(i + 1) % VIEWS.length].id); }
 function renderViewBtn() {
-  const b = $('#viewbtn'); b.textContent = '視角・' + viewName(); b.disabled = !S.follow;
-  const l = $('#lockbtn'); l.disabled = !S.follow; l.classList.toggle('on', !!S.follow && !S.followPaused);
-  l.textContent = S.follow && S.followPaused ? '🔓' : '🔒';
-  l.title = S.follow && S.followPaused ? '自由視角：可自己拖曳縮放，畫面仍跟著列車。點一下鎖回視角' : '鎖定視角中，點一下改成自由拖曳';
+  const b = $('#viewbtn'); b.textContent = S.follow && S.followPaused ? '◉ 回到' + viewName() : '視角・' + viewName(); b.disabled = !S.follow;
 }
 
 /* 漫遊：每隔一段時間換一列車，偏好行駛中、不同系統的列車，並換個視角 */
@@ -2081,10 +2133,9 @@ function renderCaption(force) {
     <div class="next"><div><div class="lab">${pos && pos.atStation ? '此刻' : '下一站'}</div><b>${esc(next)}</b></div><span class="eta">${esc(eta)}</span></div>
     <div class="bar"><i style="width:${(progress * 100).toFixed(1)}%"></i></div>
     <div class="meta"><span>已過 ${done} / ${stops} 站</span><span>${speed ? '約 ' + speed + ' km/h' : ''}</span></div>
-    ${S.followPaused ? '<div class="caprow"><button class="pillbtn small" id="refollow">🔒 鎖回視角</button><button class="pillbtn small" id="leave">離開</button></div>' : ''}`;
+    <div class="caprow"><button class="pillbtn small" id="leave">離開</button></div>`;
 }
 cap.addEventListener('click', e => {
-  if (e.target.id === 'refollow' && S.follow) toggleLock();
   if (e.target.id === 'leave') { setRoam(false); unfollow(); }
 });
 
@@ -2202,7 +2253,6 @@ toggleBtn('#buildbtn', 'buildings', on => map.setLayoutProperty('buildings', 'vi
 toggleBtn('#labelbtn', 'labels', on => map.setLayoutProperty('st-label', 'visibility', on ? 'visible' : 'none'));
 
 $('#viewbtn').addEventListener('click', cycleView);
-$('#lockbtn').addEventListener('click', toggleLock);
 
 /* ---------- 光線與天氣面板 ---------- */
 const sky = $('#sky');
@@ -2311,7 +2361,7 @@ function frame(now) {
     updatePositions(); pushTrains(); lastPush = now;
     // 列車抵達終點：漫遊時換下一列
     if (S.roam && S.follow && !S.flying && !tripPos(S.follow, curMin())) roamNext();
-  } else if (S.follow) pushFocusFrame();
+  } else if (S.follow || (S.nearby && S.nearby.length)) pushFocusFrame();
   stepCamera(now, dt);
   Precip.step(dt, now);
   if (S.roam && now > S.roamAt && !S.flying) { S.roamAt = now + ROAM_SEC * 1000; roamNext(); }

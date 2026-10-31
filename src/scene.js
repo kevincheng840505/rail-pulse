@@ -5,6 +5,8 @@
    body 車身、stripe/stripe2 腰帶、roof 車頂、nose 車頭流線段長度、cab 車頭色（無則同車身） */
 const EX = 1.3;
 const LIFT = 0; // 近看時地形已攤平，車廂直接貼地
+// 每節車廂單側的車門數
+const DOORS = { THSR: 1, TEMU2000: 1, TEMU1000: 1, EMU3000: 2, E1000: 2, CHUKUANG: 2, EMU900: 3, TRTC: 4, TRTC_BR: 2, TRTC_Y: 3, TYMC: 3, TMRT: 4, KRTC: 4, LRT: 1 };
 const LIVERY = {
   THSR:     { n:12, len:25,   w:3.38, h:3.65, gap:0.5, nose:10,  body:'#F3F4F1', stripe:'#F07F1F', stripe2:'#1E3A6E', roof:'#D9DCDF', name:'700T' },
   TEMU2000: { n:8,  len:20,   w:2.9,  h:3.6,  gap:0.6, nose:4.5, body:'#F4F4F2', stripe:'#E8452C', stripe2:'#E8452C', roof:'#C9CDD1', cab:'#E8452C', name:'普悠瑪' },
@@ -45,14 +47,16 @@ const LEFT_HAND = { TRA: 1, THSR: 1 };
 function sideOffset(trip) {
   if (trip._side == null) {
     const L = liveryOf(trip);
-    trip._side = (LEFT_HAND[trip.sys] ? 1 : -1) * (L.w * EX / 2 + 0.5) / 1000;
+    trip._side = (LEFT_HAND[trip.sys] ? -1 : 1) * (L.w * EX / 2 + 0.5) / 1000;
   }
   return trip._side;
 }
 function trackPoint(trip, km) {
-  const p = centerPoint(trip, km), o = sideOffset(trip);
-  // 往行進方向的左側為正
-  return { x: p.x - Math.sin(p.heading) * o, y: p.y + Math.cos(p.heading) * o, heading: p.heading };
+  // 方向取前後各 12 公尺的連線，經過車站接點或轉角時不會突然轉向
+  const p = centerPoint(trip, km), a = centerPoint(trip, km - 0.012), b = centerPoint(trip, km + 0.012), o = sideOffset(trip);
+  const h = Math.hypot(b.x - a.x, b.y - a.y) > 1e-6 ? Math.atan2(b.y - a.y, b.x - a.x) : p.heading;
+  // 投影座標 y 軸朝南，o 為正時偏向行進方向的右側
+  return { x: p.x - Math.sin(h) * o, y: p.y + Math.cos(h) * o, heading: h };
 }
 function centerPoint(trip, km) {
   const c = trip.cum, n = c.length;
@@ -66,11 +70,15 @@ function centerPoint(trip, km) {
 
 /* 把一列車拆成多節車廂的 3D 方塊：車身、窗帶、腰帶、車頂，車頭做成流線收窄 */
 function carFeatures(trip, pos, P, out, detail) {
-  const L = liveryOf(trip);
+  const L = liveryOf(trip), key = Object.keys(LIVERY).find(k => LIVERY[k] === L);
+  const nDoor = DOORS[key] || 2, doorW = (L.len > 15 ? 1.4 : 1.1) / 1000;
+  const doorColor = mixHex(L.body, '#2A3038', 0.16), under = '#24282E', ac = mixHex(L.roof, '#5A6068', 0.3);
   const w = L.w * EX / 1000, h = L.h * EX;
   const winColor = '#141C26', paneColor = P.lit ? P.winLit : '#3A5068';
   const quad = (a, b, wa, wb) => {
-    const ca = Math.cos(a.heading), sa = Math.sin(a.heading), cb = Math.cos(b.heading), sb = Math.sin(b.heading);
+    // 一節車廂是剛體：兩端都用車頭到車尾連線的方向，跨過彎道時不會扭成交叉的形狀
+    const d = Math.hypot(b.x - a.x, b.y - a.y), h = d > 1e-6 ? Math.atan2(b.y - a.y, b.x - a.x) : a.heading;
+    const ca = Math.cos(h), sa = Math.sin(h), cb = ca, sb = sa;
     // 前後兩端各自用當地的軌道方向算出左右兩點，彎道上車廂也貼著軌道
     const r = [unproj(a.x - sa * wa, a.y + ca * wa), unproj(b.x - sb * wb, b.y + cb * wb), unproj(b.x + sb * wb, b.y - cb * wb), unproj(a.x + sa * wa, a.y - ca * wa)];
     r.push(r[0]); return [r];
@@ -88,17 +96,45 @@ function carFeatures(trip, pos, P, out, detail) {
     // 車身主體（去掉車頭流線段）
     const bodyF = lead && nose ? trackPoint(trip, front - nose) : f;
     const bodyB = tail && nose ? trackPoint(trip, back + nose) : bk;
-    add(quad(bodyF, bodyB, w / 2, w / 2), 0, h, L.body);
+    // 車身底下留一段深色車底，看起來才像架在轉向架上
+    add(quad(bodyF, bodyB, w * 0.42, w * 0.42), 0, h * 0.12, under);
+    add(quad(bodyF, bodyB, w / 2, w / 2), h * 0.1, h, L.body);
     // 窗帶與腰帶：比車身寬一點點，蓋在側面
     const iw = w / 2 + 0.00008;
     add(quad(bodyF, bodyB, iw, iw), h * 0.56, h * 0.8, winColor);
     // 近看時把窗帶切成一格格車窗，夜裡會亮
     if (detail) {
       const span = (front - back) - (lead && nose ? nose : 0) - (tail && nose ? nose : 0);
-      const k0 = back + (tail && nose ? nose : 0), nw = Math.max(2, Math.round(span * 1000 / 3.4));
+      const k0 = back + (tail && nose ? nose : 0);
+      // 車門：一節平均分布（單門、雙門的車型放在兩端），門上有小窗
+      const doors = [];
+      for (let j = 0; j < nDoor; j++) doors.push(k0 + span * (nDoor === 1 ? 0.9 : nDoor === 2 ? (j ? 0.85 : 0.15) : (j + 0.5) / nDoor));
+      for (const dc of doors) {
+        const a = trackPoint(trip, dc - doorW / 2), b = trackPoint(trip, dc + doorW / 2);
+        add(quad(a, b, iw + 0.00004, iw + 0.00004), h * 0.12, h * 0.82, doorColor);
+        const a2 = trackPoint(trip, dc - doorW * 0.3), b2 = trackPoint(trip, dc + doorW * 0.3);
+        add(quad(a2, b2, iw + 0.00006, iw + 0.00006), h * 0.56, h * 0.78, paneColor);
+      }
+      // 車窗：避開車門的位置
+      const nw = Math.max(2, Math.round(span * 1000 / 3.4));
       for (let k = 0; k < nw; k++) {
-        const a = trackPoint(trip, k0 + span * (k + 0.18) / nw), b = trackPoint(trip, k0 + span * (k + 0.82) / nw);
-        add(quad(b, a, iw + 0.00003, iw + 0.00003), h * 0.6, h * 0.77, paneColor);
+        const ka = k0 + span * (k + 0.18) / nw, kb = k0 + span * (k + 0.82) / nw;
+        if (doors.some(dc => kb > dc - doorW * 0.7 && ka < dc + doorW * 0.7)) continue;
+        add(quad(trackPoint(trip, kb), trackPoint(trip, ka), iw + 0.00003, iw + 0.00003), h * 0.6, h * 0.77, paneColor);
+      }
+      // 轉向架與車頂冷氣機
+      for (const u of [0.13, 0.87]) {
+        const c = back + (front - back) * u, a = trackPoint(trip, c - 0.0013), b = trackPoint(trip, c + 0.0013);
+        add(quad(a, b, w * 0.47, w * 0.47), 0, h * 0.14, '#1A1D21');
+      }
+      for (const u of [0.28, 0.72]) {
+        const c = back + (front - back) * u, a = trackPoint(trip, c - 0.0014), b = trackPoint(trip, c + 0.0014);
+        add(quad(a, b, w * 0.27, w * 0.27), h * 1.05, h * 1.12, ac);
+      }
+      // 車廂之間的貫通道
+      if (!tail && L.gap > 0) {
+        const a = trackPoint(trip, back - L.gap / 1000 - 0.0002), b = trackPoint(trip, back + 0.0002);
+        add(quad(a, b, w * 0.4, w * 0.4), h * 0.15, h * 0.9, under);
       }
     }
     if (L.stripe) add(quad(bodyF, bodyB, iw + 0.00002, iw + 0.00002), h * 0.4, h * 0.5, L.stripe);
@@ -139,16 +175,16 @@ const offsetPt = (p, along, side) => {
 
 /* ---------- 光線：依時間在幾個關鍵色票之間平滑內插 ---------- */
 const PALETTES = {
-  night: { sea:'#050A12', land:'#0F1822', edge:'#1C2733', water:'#06101B', wood:'#0F1D1A', road:'#1D2A37', bld:'#1D3550', bldEdge:'#4A7FB5',
+  night: { sea:'#050A12', land:'#0F1822', edge:'#1C2733', water:'#06101B', wood:'#0F1D1A', road:'#1D2A37', bld:'#4A7BAE', bldEdge:'#7FB8EE', bldOp:0.5,
     hsShadow:'#000000', hsHigh:'#3A4C60', hsAccent:'#0A121B', label:'#8FA0AE', halo:'#050A12',
     sky:'#081222', horizon:'#1C2B40', fog:'#0B1320', tra:'#A9BCCD', light:'#7C8FB0', glow:0.6, lightI:0.25 },
-  dawn: { sea:'#2A3348', land:'#3A3540', edge:'#4A4452', water:'#2C3650', wood:'#2E3A35', road:'#4D4652', bld:'#5A5070', bldEdge:'#B39AC8',
+  dawn: { sea:'#2A3348', land:'#3A3540', edge:'#4A4452', water:'#2C3650', wood:'#2E3A35', road:'#4D4652', bld:'#8478A0', bldEdge:'#C9B2DE', bldOp:0.42,
     hsShadow:'#1A1424', hsHigh:'#E0A27E', hsAccent:'#382A3A', label:'#E6D2C6', halo:'#241E28',
     sky:'#5B5A86', horizon:'#F2A97A', fog:'#7A6070', tra:'#F0E2D4', light:'#FFB98A', glow:0.35, lightI:0.4 },
-  day: { sea:'#8EB2C7', land:'#DCDDD0', edge:'#C3C4B4', water:'#86AAC0', wood:'#BFCDB0', road:'#F4F2EA', bld:'#B9C7D6', bldEdge:'#6F8CA8',
+  day: { sea:'#8EB2C7', land:'#DCDDD0', edge:'#C3C4B4', water:'#86AAC0', wood:'#BFCDB0', road:'#F4F2EA', bld:'#B9C7D6', bldEdge:'#6F8CA8', bldOp:0.32,
     hsShadow:'#4E5C55', hsHigh:'#FFFFFF', hsAccent:'#7D8B80', label:'#3B4650', halo:'#F4F2EA',
     sky:'#6FA8D8', horizon:'#E2ECF0', fog:'#DCE6EA', tra:'#3F4E5E', light:'#FFFFFF', glow:0.15, lightI:0.3 },
-  dusk: { sea:'#1F2438', land:'#30293A', edge:'#433A4E', water:'#222A46', wood:'#283029', road:'#4A3F4E', bld:'#4A3E5E', bldEdge:'#A389C2',
+  dusk: { sea:'#1F2438', land:'#30293A', edge:'#433A4E', water:'#222A46', wood:'#283029', road:'#4A3F4E', bld:'#76689A', bldEdge:'#BFA4DC', bldOp:0.44,
     hsShadow:'#140E1A', hsHigh:'#D98A62', hsAccent:'#2E2232', label:'#E2CFC6', halo:'#1C1820',
     sky:'#3E3560', horizon:'#F08A5A', fog:'#4E3A4A', tra:'#EADCCF', light:'#FF9E6A', glow:0.4, lightI:0.4 },
 };
