@@ -1634,7 +1634,7 @@ function carFeatures(trip, pos, P, out, detail) {
   const L = liveryOf(trip), key = Object.keys(LIVERY).find(k => LIVERY[k] === L);
   const nDoor = DOORS[key] || 2, doorW = (L.len > 15 ? 1.4 : 1.1) / 1000;
   const doorOpen = pos.atStation && pos.dwell > 0.08 && pos.dwell < 0.92;
-  const doorColor = doorOpen ? '#0B0F14' : mixHex(L.body, '#2A3038', 0.16), under = '#24282E', ac = mixHex(L.roof, '#5A6068', 0.3);
+  const doorColor = doorOpen ? '#0B0F14' : mixHex(L.body, '#2A3038', 0.16), under = '#24282E';
   const w = L.w * EX / 1000, h = L.h * EX;
   const winColor = '#141C26', paneColor = P.lit ? P.winLit : '#3A5068';
   const quad = (a, b, wa, wb) => {
@@ -1693,14 +1693,10 @@ function carFeatures(trip, pos, P, out, detail) {
         if (doors.some(dc => kb > dc - doorW * 0.7 && ka < dc + doorW * 0.7)) continue;
         add(quad(cp(kb), cp(ka), iw + 0.00003, iw + 0.00003), h * 0.6, h * 0.77, paneColor, E((ka + kb) / 2));
       }
-      // 轉向架與車頂冷氣機
+      // 轉向架（車頂不放冷氣機方塊：從上面跟拍時看起來像一塊塊灰色色塊）
       for (const u of [0.13, 0.87]) {
         const c = back + (front - back) * u, a = cp(c - 0.0013), b = cp(c + 0.0013);
         add(quad(a, b, w * 0.47, w * 0.47), 0, h * 0.14, '#1A1D21', E(c));
-      }
-      for (const u of [0.28, 0.72]) {
-        const c = back + (front - back) * u, a = cp(c - 0.0014), b = cp(c + 0.0014);
-        add(quad(a, b, w * 0.27, w * 0.27), h * 1.05, h * 1.12, ac, E(c));
       }
       // 車廂之間的貫通道
       if (!tail && L.gap > 0) {
