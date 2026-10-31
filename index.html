@@ -222,6 +222,11 @@ body.clean #brand, body.clean #tools, body.clean #dock, body.clean #caption, bod
     </div>
   </section>
   <section>
+    <h4>環境音</h4>
+    <div class="row"><button id="ambbtn" aria-pressed="true">雨聲與雷聲</button></div>
+    <div class="note">跟著天氣出聲（下雨、雷雨時），和音樂分開：音樂暫停時雨聲照樣會下。</div>
+  </section>
+  <section>
     <h4>曲目</h4>
     <div id="mlist"></div>
     <div class="note">全部由瀏覽器即時合成，沒有音檔，也沒有版權問題。</div>
@@ -1593,18 +1598,38 @@ const Music = (() => {
   try { const v = JSON.parse(localStorage.getItem('rp.music.track')); if (Number.isInteger(v) && v >= 0 && v < TRACKS.length) idx = v; } catch {}
 
   /* 雨聲：濾波過的白噪音，跟著天氣調整音量（只在音樂開著時出聲） */
-  let rainGain = null, rainLevel = 0;
+  /* 環境音：雨聲與雷聲。跟著天氣出聲，和音樂播放分開，有自己的開關 */
+  let rainGain = null, rainLevel = 0, storm = false, ambOn = true;
+  try { const v = JSON.parse(localStorage.getItem('rp.music.amb')); if (typeof v === 'boolean') ambOn = v; } catch {}
+  const ambWanted = () => ambOn && rainLevel > 0;
   function applyRain() {
     if (!ctx) return;
     if (!rainGain) {
       const s = ctx.createBufferSource(); s.buffer = noise; s.loop = true;
       const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1400; bp.Q.value = 0.4;
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 5000;
       rainGain = ctx.createGain(); rainGain.gain.value = 0;
-      s.connect(bp); bp.connect(rainGain); rainGain.connect(ctx.destination); s.start();
+      s.connect(bp); bp.connect(lp); lp.connect(rainGain); rainGain.connect(ctx.destination); s.start();
     }
+    if (ambWanted() && ctx.state === 'suspended') ctx.resume().catch(() => {});
     const now = ctx.currentTime;
     rainGain.gain.cancelScheduledValues(now); rainGain.gain.setValueAtTime(rainGain.gain.value, now);
-    rainGain.gain.linearRampToValueAtTime(playing ? rainLevel * 0.07 : 0, now + 2);
+    rainGain.gain.linearRampToValueAtTime(ambWanted() ? rainLevel * 0.08 : 0, now + 2);
+    if (!ambWanted() && !playing) setTimeout(() => { if (!playing && !ambWanted() && ctx.state === 'running') ctx.suspend(); }, 2200);
+  }
+  // 雷聲：低頻的濾波噪音，先一聲裂響再拖長隆隆聲；閃電之後隔一下才傳到（光比聲音快）
+  function thunder() {
+    if (!ctx || !ambOn || !storm || ctx.state !== 'running') return;
+    const t = ctx.currentTime + 0.4 + Math.random() * 1.6, len = 3 + Math.random() * 3, near = Math.random();
+    const s = ctx.createBufferSource(); s.buffer = noise; s.loop = true; s.playbackRate.value = 0.5;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.Q.value = 0.8;
+    lp.frequency.setValueAtTime(400 + near * 900, t); lp.frequency.exponentialRampToValueAtTime(90, t + len);
+    const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.3 + near * 0.35, t + 0.06 + (1 - near) * 0.4);
+    // 隆隆聲中間幾次起伏
+    for (let k = 1; k <= 3; k++) { const tk = t + len * k / 4.5; g.gain.linearRampToValueAtTime((0.15 + Math.random() * 0.25) * (1 - k / 5), tk); }
+    g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+    s.connect(lp); lp.connect(g); g.connect(ctx.destination); s.start(t); s.stop(t + len + 0.1);
   }
 
   const api = {
@@ -1613,7 +1638,12 @@ const Music = (() => {
     get index() { return idx; },
     position() { return sess && ctx ? Math.max(0, Math.min(sess.track.dur, ctx.currentTime - sess.startAt)) : pausedAt; },
     onChange(f) { listeners.add(f); },
-    setRain(level) { rainLevel = level; applyRain(); },
+    setRain(level, isStorm) { rainLevel = level; storm = !!isStorm; applyRain(); },
+    get ambient() { return ambOn; },
+    setAmbient(on) { ambOn = !!on; try { localStorage.setItem('rp.music.amb', JSON.stringify(ambOn)); } catch {} if (ambOn && !ctx) init(); applyRain(); emit(); },
+    // 瀏覽器要在使用者點過畫面之後才能出聲：第一次點擊時建立音訊環境，雨聲才能單獨播放
+    unlock() { if (!ambOn) return; if (!ctx) init(); if (ctx.state === 'suspended' && (playing || ambWanted())) ctx.resume().catch(() => {}); applyRain(); },
+    thunder,
     async play(i, at = 0) {
       if (!ctx) init();
       if (ctx.state === 'suspended') await ctx.resume();
@@ -1624,7 +1654,7 @@ const Music = (() => {
     stop() {
       if (!ctx || !playing) return;
       pausedAt = api.position(); playing = false; endSession(); clearInterval(timer); applyRain(); emit();
-      setTimeout(() => { if (!playing) ctx.suspend(); }, 600);
+      setTimeout(() => { if (!playing && !ambWanted()) ctx.suspend(); }, 600);
     },
     toggle() { return playing ? api.stop() : api.start(); },
     next() { return api.play(idx + 1); },
@@ -2292,7 +2322,7 @@ const Precip = (() => {
     if (!drops.length && flash <= 0 && !Precip.storm) { if (dirty) { ctx.clearRect(0, 0, innerWidth, innerHeight); dirty = false; } return; }
     dirty = true;
     ctx.clearRect(0, 0, innerWidth, innerHeight);
-    if (Precip.storm && now > nextFlash) { flash = 1; nextFlash = now + 6000 + Math.random() * 14000; }
+    if (Precip.storm && now > nextFlash) { flash = 1; nextFlash = now + 6000 + Math.random() * 14000; if (Precip.onFlash) Precip.onFlash(); }
     if (flash > 0) { ctx.fillStyle = `rgba(220,228,255,${flash * 0.35})`; ctx.fillRect(0, 0, innerWidth, innerHeight); flash = Math.max(0, flash - dt / 260); }
     if (!drops.length) return;
     ctx.strokeStyle = night ? 'rgba(170,190,215,.32)' : 'rgba(225,235,245,.45)';
@@ -2811,7 +2841,7 @@ function applyLook(force) {
   try { map.setLight({ anchor: 'map', color: P.light, intensity: P.lightI, position: [1.2, hour * 15 + 90, 50] }); } catch {}
   Precip.set(W.rain, P.lit, !!W.flash);
   const fog = $('#fogveil'); fog.style.background = `radial-gradient(ellipse at 50% 70%, transparent 10%, ${P.fog} 95%)`; fog.style.opacity = W.fog;
-  Music.setRain(W.rain);
+  Music.setRain(W.rain, !!W.flash);
   renderSkyPanel();
   pushTrains(true);
 }
@@ -3298,6 +3328,7 @@ let seeking = false;
 function renderMusic() {
   const T = Music.tracks[Music.index];
   musicBtn.setAttribute('aria-pressed', String(Music.playing));
+  $('#ambbtn').setAttribute('aria-pressed', String(Music.ambient));
   if (musicPanel.hidden) return;
   $('#mtitle').textContent = T.title; $('#mmood').textContent = T.mood; $('#mdur').textContent = mmss(T.dur);
   const pb = $('#mplay'); pb.innerHTML = Music.playing ? PAUSE_SVG : PLAY_SVG; pb.setAttribute('aria-label', Music.playing ? '暫停' : '播放');
@@ -3310,6 +3341,9 @@ function renderMusicPos() {
   $('#mseek').value = String(Math.round(pos / T.dur * 1000)); $('#mcur').textContent = mmss(pos);
 }
 Music.onChange(renderMusic);
+Precip.onFlash = () => Music.thunder();
+$('#ambbtn').addEventListener('click', () => Music.setAmbient(!Music.ambient));
+document.addEventListener('pointerdown', () => Music.unlock(), { once: true, capture: true });
 setInterval(renderMusicPos, 500);
 musicBtn.addEventListener('click', () => {
   musicPanel.hidden = !musicPanel.hidden;

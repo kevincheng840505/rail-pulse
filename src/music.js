@@ -334,18 +334,38 @@ const Music = (() => {
   try { const v = JSON.parse(localStorage.getItem('rp.music.track')); if (Number.isInteger(v) && v >= 0 && v < TRACKS.length) idx = v; } catch {}
 
   /* 雨聲：濾波過的白噪音，跟著天氣調整音量（只在音樂開著時出聲） */
-  let rainGain = null, rainLevel = 0;
+  /* 環境音：雨聲與雷聲。跟著天氣出聲，和音樂播放分開，有自己的開關 */
+  let rainGain = null, rainLevel = 0, storm = false, ambOn = true;
+  try { const v = JSON.parse(localStorage.getItem('rp.music.amb')); if (typeof v === 'boolean') ambOn = v; } catch {}
+  const ambWanted = () => ambOn && rainLevel > 0;
   function applyRain() {
     if (!ctx) return;
     if (!rainGain) {
       const s = ctx.createBufferSource(); s.buffer = noise; s.loop = true;
       const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1400; bp.Q.value = 0.4;
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 5000;
       rainGain = ctx.createGain(); rainGain.gain.value = 0;
-      s.connect(bp); bp.connect(rainGain); rainGain.connect(ctx.destination); s.start();
+      s.connect(bp); bp.connect(lp); lp.connect(rainGain); rainGain.connect(ctx.destination); s.start();
     }
+    if (ambWanted() && ctx.state === 'suspended') ctx.resume().catch(() => {});
     const now = ctx.currentTime;
     rainGain.gain.cancelScheduledValues(now); rainGain.gain.setValueAtTime(rainGain.gain.value, now);
-    rainGain.gain.linearRampToValueAtTime(playing ? rainLevel * 0.07 : 0, now + 2);
+    rainGain.gain.linearRampToValueAtTime(ambWanted() ? rainLevel * 0.08 : 0, now + 2);
+    if (!ambWanted() && !playing) setTimeout(() => { if (!playing && !ambWanted() && ctx.state === 'running') ctx.suspend(); }, 2200);
+  }
+  // 雷聲：低頻的濾波噪音，先一聲裂響再拖長隆隆聲；閃電之後隔一下才傳到（光比聲音快）
+  function thunder() {
+    if (!ctx || !ambOn || !storm || ctx.state !== 'running') return;
+    const t = ctx.currentTime + 0.4 + Math.random() * 1.6, len = 3 + Math.random() * 3, near = Math.random();
+    const s = ctx.createBufferSource(); s.buffer = noise; s.loop = true; s.playbackRate.value = 0.5;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.Q.value = 0.8;
+    lp.frequency.setValueAtTime(400 + near * 900, t); lp.frequency.exponentialRampToValueAtTime(90, t + len);
+    const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.3 + near * 0.35, t + 0.06 + (1 - near) * 0.4);
+    // 隆隆聲中間幾次起伏
+    for (let k = 1; k <= 3; k++) { const tk = t + len * k / 4.5; g.gain.linearRampToValueAtTime((0.15 + Math.random() * 0.25) * (1 - k / 5), tk); }
+    g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+    s.connect(lp); lp.connect(g); g.connect(ctx.destination); s.start(t); s.stop(t + len + 0.1);
   }
 
   const api = {
@@ -354,7 +374,12 @@ const Music = (() => {
     get index() { return idx; },
     position() { return sess && ctx ? Math.max(0, Math.min(sess.track.dur, ctx.currentTime - sess.startAt)) : pausedAt; },
     onChange(f) { listeners.add(f); },
-    setRain(level) { rainLevel = level; applyRain(); },
+    setRain(level, isStorm) { rainLevel = level; storm = !!isStorm; applyRain(); },
+    get ambient() { return ambOn; },
+    setAmbient(on) { ambOn = !!on; try { localStorage.setItem('rp.music.amb', JSON.stringify(ambOn)); } catch {} if (ambOn && !ctx) init(); applyRain(); emit(); },
+    // 瀏覽器要在使用者點過畫面之後才能出聲：第一次點擊時建立音訊環境，雨聲才能單獨播放
+    unlock() { if (!ambOn) return; if (!ctx) init(); if (ctx.state === 'suspended' && (playing || ambWanted())) ctx.resume().catch(() => {}); applyRain(); },
+    thunder,
     async play(i, at = 0) {
       if (!ctx) init();
       if (ctx.state === 'suspended') await ctx.resume();
@@ -365,7 +390,7 @@ const Music = (() => {
     stop() {
       if (!ctx || !playing) return;
       pausedAt = api.position(); playing = false; endSession(); clearInterval(timer); applyRain(); emit();
-      setTimeout(() => { if (!playing) ctx.suspend(); }, 600);
+      setTimeout(() => { if (!playing && !ambWanted()) ctx.suspend(); }, 600);
     },
     toggle() { return playing ? api.stop() : api.start(); },
     next() { return api.play(idx + 1); },

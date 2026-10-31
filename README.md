@@ -32,7 +32,7 @@
 | `src/data.js` | 車站座標、路線、車種與停靠規則 |
 | `src/engine.js` | 路網圖、班表推估、列車位置計算、TDX 介接 |
 | `src/app.js` | MapLibre 3D 地圖、跟車鏡頭、漫遊、選車 |
-| `src/music.js` | 音樂播放器的曲目與雨聲（Web Audio 即時合成） |
+| `src/music.js` | 音樂播放器的曲目，以及獨立的環境音（雨聲、雷聲）（Web Audio 即時合成） |
 | `src/scene.js` | 3D 車廂造型、跟車視角、光線與天氣 |
 | `data/rail.json` | 軌道線形（自動產生，勿手改） |
 | `src/template.html` | 版面與樣式 |
