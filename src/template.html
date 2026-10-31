@@ -47,6 +47,22 @@ body.clean #tilt { display:none !important; }
 #unclean { display:none; position:fixed; top:calc(env(safe-area-inset-top,0px) + 16px); right:max(16px, env(safe-area-inset-right,0px)); z-index:6; opacity:.35; }
 body.clean #unclean { display:grid; }
 body.clean #brand, body.clean #tools, body.clean #dock, body.clean #caption, body.clean .maplibregl-ctrl-attrib, body.clean .panel { display:none !important; }
+/* 沿線景點字幕與營運快訊 */
+#spotcap { position:fixed; left:50%; top:calc(env(safe-area-inset-top,0px) + 112px); transform:translate(-50%, 6px); z-index:4; pointer-events:none; text-align:center; width:min(560px, calc(100% - 32px));
+  opacity:0; transition:opacity 1.4s ease, transform 1.4s ease; text-shadow:0 1px 14px rgba(0,0,0,.75), 0 0 2px rgba(0,0,0,.5); }
+#spotcap.on { opacity:1; transform:translate(-50%, 0); }
+#spotcap .k { font-size:11px; letter-spacing:.32em; color:var(--accent); margin-bottom:4px; }
+#spotcap b { display:block; font-family:var(--font-display); font-weight:900; font-size:clamp(20px, 5vw, 26px); letter-spacing:.12em; }
+#spotcap span { display:block; margin-top:4px; font-size:13.5px; color:var(--ink); opacity:.85; letter-spacing:.04em; }
+#notice { position:fixed; left:50%; top:calc(env(safe-area-inset-top,0px) + 68px); transform:translate(-50%, -6px); z-index:4; pointer-events:none; display:flex; align-items:center; gap:10px;
+  max-width:min(680px, calc(100% - 32px)); box-sizing:border-box; padding:7px 14px 7px 8px; border-radius:999px; font-size:13px; opacity:0; transition:opacity .6s ease, transform .6s ease; }
+#notice.on { opacity:1; transform:translate(-50%, 0); }
+#notice .tag { flex:none; padding:2px 9px; border-radius:999px; background:var(--accent); color:#1B1408; font-weight:700; font-size:12px; letter-spacing:.06em; }
+#notice .win { overflow:hidden; white-space:nowrap; min-width:0; flex:1; }
+#notice .txt { display:inline-block; }
+#notice .n { flex:none; font-family:var(--font-mono); font-size:11px; color:var(--faint); }
+body.clean #notice { top:calc(env(safe-area-inset-top,0px) + 18px); }
+body.clean #spotcap { top:calc(env(safe-area-inset-top,0px) + 62px); }
 #dock { position:fixed; left:50%; transform:translateX(-50%); bottom:calc(env(safe-area-inset-bottom,0px) + 18px); z-index:5; display:flex; gap:8px; align-items:center; }
 .pillbtn { height:44px; padding:0 18px; border-radius:999px; font-weight:700; font-size:15px; letter-spacing:.04em; display:flex; align-items:center; gap:8px; white-space:nowrap; }
 .pillbtn.small { height:36px; padding:0 14px; font-size:13px; }
@@ -255,6 +271,8 @@ body.clean #brand, body.clean #tools, body.clean #dock, body.clean #caption, bod
       <button id="terrainbtn" aria-pressed="true">3D 地形</button>
       <button id="buildbtn" aria-pressed="true">建築</button>
       <button id="labelbtn" aria-pressed="true">站名</button>
+      <button id="spotbtn" aria-pressed="true" title="跟拍時經過景點，畫面上方淡入一行介紹">沿線景點</button>
+      <button id="alertbtn" aria-pressed="true" title="需要 TDX 金鑰；有停駛、延誤等狀況時才出現">營運快訊</button>
     </div>
   </section>
   <section>
@@ -294,3 +312,4 @@ body.clean #brand, body.clean #tools, body.clean #dock, body.clean #caption, bod
 <script>/*MUSIC*/</script>
 <script>/*SCENE*/</script>
 <script>/*APP*/</script>
+<script>/*EXTRAS*/</script>
