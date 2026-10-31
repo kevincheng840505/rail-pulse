@@ -1737,8 +1737,10 @@ function rawCenter(trip, km) {
 function carFeatures(trip, pos, P, out, detail) {
   const L = liveryOf(trip), key = Object.keys(LIVERY).find(k => LIVERY[k] === L);
   const nDoor = DOORS[key] || 2, doorW = (L.len > 15 ? 1.4 : 1.1) / 1000;
-  const doorOpen = pos.atStation && pos.dwell > 0.08 && pos.dwell < 0.92;
-  const doorColor = doorOpen ? '#0B0F14' : mixHex(L.body, '#2A3038', 0.16), under = '#24282E', ac = mixHex(L.roof, '#5A6068', 0.3);
+  // 車門開合：停站一開始門向兩側滑開，快開車前關上（0 = 關、1 = 全開）
+  const sm = x => x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x);
+  const doorOpen = pos.atStation ? sm((pos.dwell - 0.03) / 0.07) * sm((0.97 - pos.dwell) / 0.07) : 0;
+  const doorColor = mixHex(L.body, '#2A3038', 0.16), under = '#24282E';
   const w = L.w * EX / 1000, h = L.h * EX;
   const winColor = '#141C26', paneColor = P.lit ? P.winLit : '#3A5068';
   const quad = (a, b, wa, wb) => {
@@ -1777,19 +1779,27 @@ function carFeatures(trip, pos, P, out, detail) {
     // 窗帶與腰帶：比車身寬一點點，蓋在側面
     const iw = w / 2 + 0.00008;
     band(iw, h * 0.56, h * 0.8, winColor);
-    // 近看時把窗帶切成一格格車窗，夜裡會亮
-    if (detail) {
-      const span = (front - back) - (lead && nose ? nose : 0) - (tail && nose ? nose : 0);
-      const k0 = back + (tail && nose ? nose : 0);
-      // 車門：一節平均分布（單門、雙門的車型放在兩端），門上有小窗
-      const doors = [];
+    // 車門：跟拍的列車一定畫；其他列車停站時也畫，旅客上下車才是從門口進出，不會穿過車身
+    const span = (front - back) - (lead && nose ? nose : 0) - (tail && nose ? nose : 0);
+    const k0 = back + (tail && nose ? nose : 0);
+    const doors = [];
+    if (detail || pos.atStation) {
+      // 一節平均分布（單門、雙門的車型放在兩端）
       for (let j = 0; j < nDoor; j++) doors.push(k0 + span * (nDoor === 1 ? 0.9 : nDoor === 2 ? (j ? 0.85 : 0.15) : (j + 0.5) / nDoor));
       for (const dc of doors) {
-        const a = cp(dc - doorW / 2), b = cp(dc + doorW / 2);
-        add(quad(a, b, iw + 0.00004, iw + 0.00004), h * 0.12, h * 0.82, doorColor, E(dc));
-        const a2 = cp(dc - doorW * 0.3), b2 = cp(dc + doorW * 0.3);
-        if (!doorOpen) add(quad(a2, b2, iw + 0.00006, iw + 0.00006), h * 0.56, h * 0.78, paneColor, E(dc));
+        const e = E(dc), half = doorW / 2, slide = doorOpen * half;
+        // 門洞：門打開多少就露出多少車廂內部
+        if (doorOpen > 0.02) add(quad(cp(dc - slide), cp(dc + slide), iw + 0.00004, iw + 0.00004), h * 0.12, h * 0.82, '#0B0F14', e);
+        // 兩片門板沿著車身往左右滑開
+        for (const sd of [-1, 1]) {
+          const c0 = dc + sd * (half / 2 + slide), a = cp(c0 - half / 2), b = cp(c0 + half / 2);
+          add(quad(a, b, iw + 0.00007, iw + 0.00007), h * 0.12, h * 0.82, doorColor, e);
+          if (detail) { const a2 = cp(c0 - half * 0.28), b2 = cp(c0 + half * 0.28); add(quad(a2, b2, iw + 0.00009, iw + 0.00009), h * 0.56, h * 0.78, paneColor, e); }
+        }
       }
+    }
+    // 近看時把窗帶切成一格格車窗，夜裡會亮
+    if (detail) {
       // 車窗：避開車門的位置
       const nw = Math.max(2, Math.round(span * 1000 / 3.4));
       for (let k = 0; k < nw; k++) {
@@ -1797,14 +1807,10 @@ function carFeatures(trip, pos, P, out, detail) {
         if (doors.some(dc => kb > dc - doorW * 0.7 && ka < dc + doorW * 0.7)) continue;
         add(quad(cp(kb), cp(ka), iw + 0.00003, iw + 0.00003), h * 0.6, h * 0.77, paneColor, E((ka + kb) / 2));
       }
-      // 轉向架與車頂冷氣機
+      // 轉向架（車頂不放冷氣機方塊：從上面跟拍時看起來像一塊塊灰色色塊）
       for (const u of [0.13, 0.87]) {
         const c = back + (front - back) * u, a = cp(c - 0.0013), b = cp(c + 0.0013);
         add(quad(a, b, w * 0.47, w * 0.47), 0, h * 0.14, '#1A1D21', E(c));
-      }
-      for (const u of [0.28, 0.72]) {
-        const c = back + (front - back) * u, a = cp(c - 0.0014), b = cp(c + 0.0014);
-        add(quad(a, b, w * 0.27, w * 0.27), h * 1.05, h * 1.12, ac, E(c));
       }
       // 車廂之間的貫通道
       if (!tail && L.gap > 0) {
@@ -1852,22 +1858,39 @@ function railBand(trip, k0, k1, o0, o1) {
   }
   const ring = A.concat(B.reverse()); ring.push(ring[0]); return ring;
 }
-/* 小人：兩條腿、身體、兩隻手臂和頭，全身同一個顏色。
-   hd 是面向的方向，phase 是走路擺動的相位，walk（0~1）是擺動幅度：腿前後交錯，手臂跟同側的腿反向擺 */
+/* 小人：全身同一個顏色，但用圓柱、橢圓做出鞋子、小腿、大腿、骨盆、胸腔、肩膀、上臂、前臂、脖子和頭。
+   hd 是面向的方向，phase 是走路擺動的相位，walk（0~1）是擺動幅度。
+   走路時：前後腳交錯，往前邁的那隻腳會抬起來、膝蓋彎（小腿落在大腿後面），
+   手臂跟同側的腳反向擺、前臂擺得比上臂多；身體每一步上下起伏一點、微微前傾。 */
 function personFig(out, x, y, base, hd, phase, walk) {
   const c = Math.cos(hd), s = Math.sin(hd), k = EX / 1000;
-  const box = (fwd, lat, hl, hw, b, t) => {
-    const cx = x + (c * fwd - s * lat) * k, cy = y + (s * fwd + c * lat) * k;
-    const r = [[hl, hw], [-hl, hw], [-hl, -hw], [hl, -hw], [hl, hw]].map(([a, d]) => unproj(cx + (c * a - s * d) * k, cy + (s * a + c * d) * k));
+  // 以人為中心的橢圓柱：fwd 前後、lat 左右（公尺），rf/rl 兩個半徑，b/t 底與頂的高度
+  const ell = (fwd, lat, rf, rl, b, t, n = 6) => {
+    const cx = x + (c * fwd - s * lat) * k, cy = y + (s * fwd + c * lat) * k, r = [];
+    for (let i = 0; i <= n; i++) { const a = (i % n) / n * Math.PI * 2 + Math.PI / n, u = Math.cos(a) * rf, v = Math.sin(a) * rl; r.push(unproj(cx + (c * u - s * v) * k, cy + (s * u + c * v) * k)); }
     out.push(sfeat(r, base + b * EX, base + t * EX, PERSON_COLOR));
   };
-  const sw = Math.sin(phase) * walk, lift = Math.abs(Math.cos(phase)) * walk * 0.03;
-  box(sw * 0.17, 0.085, 0.065, 0.055, 0, 0.78);
-  box(-sw * 0.17, -0.085, 0.065, 0.055, 0, 0.78);
-  box(0, 0, 0.1, 0.17, 0.74 + lift, 1.34 + lift);
-  box(-sw * 0.14, 0.215, 0.05, 0.045, 0.84 + lift, 1.3 + lift);
-  box(sw * 0.14, -0.215, 0.05, 0.045, 0.84 + lift, 1.3 + lift);
-  out.push(sfeat(sngon(x, y, 0.125 * EX, 8), base + (1.4 + lift) * EX, base + (1.65 + lift) * EX, PERSON_COLOR));
+  const sw = Math.sin(phase) * walk, vel = Math.cos(phase) * walk;
+  const bob = (1 - Math.abs(Math.cos(phase))) * walk * 0.035, lean = walk * 0.035;
+  // 腿：L 是左腳（lat > 0）。腳往前移動的那一隻在擺盪，抬腳、膝蓋往後彎
+  for (const [side, f, v] of [[1, sw, vel], [-1, -sw, -vel]]) {
+    const foot = f * 0.21, swing = Math.max(0, v), lift = swing * 0.07;
+    const lat = side * 0.085;
+    ell(foot + 0.04, lat, 0.12, 0.05, lift, lift + 0.07);                              // 鞋子（前端比較長）
+    ell(foot * 0.75 - swing * 0.06, lat, 0.05, 0.05, lift + 0.06, 0.47 + lift * 0.6);   // 小腿
+    ell(foot * 0.38, lat * 0.95, 0.065, 0.065, 0.45 + lift * 0.6, 0.86 + bob);          // 大腿
+  }
+  ell(lean * 0.5, 0, 0.1, 0.16, 0.8 + bob, 0.97 + bob, 8);                              // 骨盆
+  ell(lean, 0, 0.11, 0.17, 0.95 + bob, 1.22 + bob, 8);                                  // 胸腔
+  ell(lean * 1.2, 0, 0.1, 0.205, 1.2 + bob, 1.34 + bob, 8);                             // 肩膀
+  // 手臂：跟同側的腳反向擺
+  for (const [side, a] of [[1, -sw], [-1, sw]]) {
+    const lat = side * 0.235;
+    ell(lean * 1.2 + a * 0.06, lat, 0.045, 0.045, 1.0 + bob, 1.33 + bob);               // 上臂
+    ell(lean + a * 0.17, lat * 0.97, 0.04, 0.04, 0.74 + bob, 1.02 + bob);               // 前臂與手
+  }
+  ell(lean * 1.3, 0, 0.045, 0.045, 1.33 + bob, 1.44 + bob);                             // 脖子
+  ell(lean * 1.4 + 0.01, 0, 0.115, 0.1, 1.42 + bob, 1.68 + bob, 8);                     // 頭
 }
 // 沿著折線走 d 公尺後的位置與方向
 function alongPath(pts, d) {
