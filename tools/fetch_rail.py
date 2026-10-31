@@ -31,7 +31,7 @@ QUERY = """[out:json][timeout:600];
   way["railway"~"^(rail|subway|light_rail|narrow_gauge|monorail)$"]({s},{w},{n},{e});
   node["railway"~"^(station|halt|stop)$"]["name"]({s},{w},{n},{e});
 );
-out geom tags;""".format(s=BBOX[0], w=BBOX[1], n=BBOX[2], e=BBOX[3])
+out body geom;""".format(s=BBOX[0], w=BBOX[1], n=BBOX[2], e=BBOX[3])
 
 # 不適合用來規劃營運路線的側線
 SKIP_SERVICE = {"yard", "siding", "spur"}
@@ -190,7 +190,7 @@ def main():
             if nm:
                 osm_st.setdefault(norm(nm), []).append((el["lon"], el["lat"]))
             continue
-        if el.get("type") != "way" or "geometry" not in el:
+        if el.get("type") != "way" or "geometry" not in el or "nodes" not in el:
             continue
         tags = el.get("tags", {})
         if tags.get("service") in SKIP_SERVICE or tags.get("usage") in ("industrial", "military", "tourism"):
