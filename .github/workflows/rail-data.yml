@@ -1,0 +1,41 @@
+name: 更新軌道資料
+
+# 從 OpenStreetMap 下載台灣軌道線形，產生 data/rail.json 並提交回同一個分支
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - tools/fetch_rail.py
+      - .github/workflows/rail-data.yml
+  schedule:
+    - cron: "0 19 1 * *" # 每月 2 日台灣時間 03:00 更新一次
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rail-data-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 下載並轉換軌道資料
+        run: python3 tools/fetch_rail.py
+      - name: 提交變更
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/rail.json
+          if git diff --cached --quiet; then
+            echo "軌道資料沒有變更"
+          else
+            git commit -m "更新軌道資料（OpenStreetMap）"
+            git push
+          fi
