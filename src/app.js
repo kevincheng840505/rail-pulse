@@ -519,7 +519,8 @@ cap.addEventListener('click', e => {
 });
 cap.addEventListener('keydown', e => {
   if (e.target !== cap || (e.key !== 'Enter' && e.key !== ' ')) return;
-  e.preventDefault(); S.capOpen = !S.capOpen; store.set('capOpen', S.capOpen); renderCaption(true);
+  e.preventDefault(); e.stopPropagation(); // 空白鍵不要再觸發全域的播放／暫停
+  S.capOpen = !S.capOpen; store.set('capOpen', S.capOpen); renderCaption(true);
 });
 
 /* ---------- 選車 ---------- */
