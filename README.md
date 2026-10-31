@@ -20,7 +20,7 @@
 ## 資料
 
 - **預設**：依各營運單位班型推估時刻（班表推估），台鐵誤點為模擬值。
-- **TDX 即時**：在 ⚙ 設定填入 [TDX](https://tdx.transportdata.tw/) 的 Client ID / Secret，台鐵與高鐵改用當日官方時刻表（`v3/Rail/TRA/DailyTrainTimetable/Today`、`v2/Rail/THSR/DailyTimetable/Today`），台鐵每分鐘套用即時誤點（`v2/Rail/TRA/LiveTrainDelay`），並每 5 分鐘讀取營運通阻（`v3/Rail/TRA/Alert`、`v2/Rail/THSR/AlertInfo`、`v2/Rail/Metro/Alert/{TRTC,TYMC,TMRT,KRTC,KLRT}`）。金鑰只存在瀏覽器的 localStorage。
+- **TDX 即時**：在 ⚙ 設定填入 [TDX](https://tdx.transportdata.tw/) 的 Client ID / Secret，台鐵與高鐵改用當日官方時刻表（`v3/Rail/TRA/DailyTrainTimetable/Today`、`v2/Rail/THSR/DailyTimetable/Today`），台鐵每分鐘套用即時誤點（`v2/Rail/TRA/LiveTrainDelay`），捷運與輕軌改用官方站間行駛時間、班距與首末班車（`v2/Rail/Metro/{S2STravelTime,Frequency,FirstLastTimetable}/{TRTC,TYMC,TMRT,KRTC,KLRT}`，含北捷的區間車路線），並每 5 分鐘讀取營運通阻（`v3/Rail/TRA/Alert`、`v2/Rail/THSR/AlertInfo`、`v2/Rail/Metro/Alert/{TRTC,TYMC,TMRT,KRTC,KLRT}`）。金鑰只存在瀏覽器的 localStorage。
 - 縣市底圖來自 [taiwan-atlas](https://www.npmjs.com/package/taiwan-atlas)（內政部資料）。
 - 軌道線形與車站位置來自 [OpenStreetMap](https://www.openstreetmap.org/copyright)（ODbL），由 GitHub Actions（`.github/workflows/rail-data.yml`）每月執行 `tools/fetch_rail.py` 下載並轉成 `data/rail.json`。找不到合理軌道的區間會改畫站間直線。
 - 地圖：[MapLibre GL JS](https://maplibre.org/)，向量圖磚 [OpenFreeMap](https://openfreemap.org/)，地形高程 [Mapzen Terrain Tiles](https://registry.opendata.aws/terrain-tiles/)（AWS Open Data）。
