@@ -1071,7 +1071,21 @@ const twDate = ms => new Date(ms + TW).toISOString().slice(0, 10);
 function afterTripsChanged() {
   // 班次重建後 TRIPS 內的物件已換新，跟車對象要找回同一車次
   if (S.follow) {
-    const f = S.follow, same = TRIPS.includes(f) ? f : TRIPS.find(t => t.sys === f.sys && t.no && t.no === f.no && t.origin === f.origin);
+    const f = S.follow;
+    let same = TRIPS.includes(f) ? f : TRIPS.find(t => t.sys === f.sys && t.no && t.no === f.no && t.origin === f.origin);
+    // 捷運沒有車次號：改找同一路線、同方向、此刻離原本位置最近的一班，鏡頭才不會被丟回全台
+    if (!same && !f.no) {
+      const m = curMin(), p0 = tripPos(f, m);
+      if (p0) {
+        let bd = 2;
+        for (const t of TRIPS) {
+          if (t.sys !== f.sys || t.dest !== f.dest) continue;
+          const p = tripPos(t, m); if (!p) continue;
+          const dd = Math.hypot(p.x - p0.x, p.y - p0.y);
+          if (dd < bd) { bd = dd; same = t; }
+        }
+      }
+    }
     if (same) S.follow = same; else unfollow();
   }
   updatePositions(); pushTrains(); renderClock(); renderCaption(true);
@@ -1087,7 +1101,11 @@ async function connectTDX(cred, quiet) {
     TDX.ok = true; TDX.date = twDate(Date.now());
     let d = 0; try { d = await TDX.loadDelays(cred, isCurrent); } catch {}
     if (!isCurrent()) return;
-    tdxStatus(`已載入 ${trips.length} 班台鐵與高鐵當日時刻，${d} 列台鐵即時誤點。`);
+    let metro = null; try { metro = await TDX.loadMetro(cred); } catch (e) { console.warn(e); }
+    if (!isCurrent()) return;
+    if (metro && metro.trips.length) TDX.applyMetro(metro);
+    const ml = metro ? metro.covered.size : 0;
+    tdxStatus(`已載入 ${trips.length} 班台鐵與高鐵當日時刻，${d} 列台鐵即時誤點` + (ml ? `；${ml} 條捷運／輕軌改用官方行駛時間與班距（${metro.trips.length} 班）。` : '；捷運與輕軌沿用班表推估。'));
     delayTimer = setInterval(() => {
       const now = Date.now();
       if (twDate(now) !== TDX.date && minOfDay(now) >= 240) { connectTDX(cred, true); return; }

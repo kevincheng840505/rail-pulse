@@ -423,6 +423,94 @@ const TDX = {
     resetTrips(t => t.sys !== 'TRA' && t.sys !== 'THSR');
     trips.forEach(registerTrip);
   },
+  /* ---------- 捷運與輕軌：TDX 站間行駛時間、班距、首末班車 ---------- */
+  METRO_OPS: [['TRTC', 'TRTC'], ['TYMC', 'TYMC'], ['TMRT', 'TMRT'], ['KRTC', 'KRTC'], ['KLRT', 'KRTC']],
+  async loadMetro(cred) {
+    const all = await Promise.all(this.METRO_OPS.map(async ([op, sys]) => {
+      const get = path => this.get(`v2/Rail/Metro/${path}/${op}`, cred).catch(() => null);
+      const [s2s, freq, fl] = await Promise.all([get('S2STravelTime'), get('Frequency'), get('FirstLastTimetable')]);
+      return { op, sys, s2s: Array.isArray(s2s) ? s2s : [], freq: Array.isArray(freq) ? freq : [], fl: Array.isArray(fl) ? fl : [] };
+    }));
+    const trips = [], covered = new Set();
+    const zh = v => normName(typeof v === 'string' ? v : v && (v.Zh_tw || v.zh_tw) || '');
+    const wd = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date(Date.now() + 8 * 3600e3).getUTCDay()];
+    const tod = s => { if (!s || !/^\d{1,2}:\d{2}/.test(s)) return null; let m = hm(s); if (m < 180) m += 1440; return m; };
+    for (const D of all) {
+      // 站間時間：不分方向，以站名對當鍵
+      const run = new Map(), dwell = new Map();
+      for (const r of D.s2s) for (const x of (r.TravelTimes || [])) {
+        const a = zh(x.FromStationName), b = zh(x.ToStationName);
+        if (!a || !b || !(x.RunTime > 0)) continue;
+        run.set(a + '>' + b, x.RunTime / 60); if (!run.has(b + '>' + a)) run.set(b + '>' + a, x.RunTime / 60);
+        if (x.StopTime > 0) { dwell.set(a, x.StopTime / 60); if (!dwell.has(b)) dwell.set(b, x.StopTime / 60); }
+      }
+      // 今天適用的班距
+      const freqOf = (routeId, lineId) => {
+        const pick = list => list.find(f => !f.ServiceDay || f.ServiceDay[wd] !== false) || list[0];
+        return pick(D.freq.filter(f => f.RouteID === routeId)) || pick(D.freq.filter(f => f.LineID === lineId && !f.RouteID)) || pick(D.freq.filter(f => f.LineID === lineId));
+      };
+      const firstLast = (from, to) => {
+        const list = D.fl.filter(f => zh(f.StationName) === from && (!f.ServiceDay || f.ServiceDay[wd] !== false));
+        return list.find(f => zh(f.DestinationStationName) === to) || null;
+      };
+      for (const r of D.s2s) {
+        const tt = (r.TravelTimes || []).slice().sort((a, b) => (a.Sequence || 0) - (b.Sequence || 0));
+        if (!tt.length) continue;
+        const names = [zh(tt[0].FromStationName), ...tt.map(x => zh(x.ToStationName))];
+        // 找出包含這條路線全部車站、且順序連續的本站路線
+        let L = null, i0 = -1, rev = false;
+        for (const C of LINES) {
+          if (C.sys !== D.sys) continue;
+          const nm = C.nodes.map(n => normName(n.name));
+          for (const [seq, flip] of [[names, false], [names.slice().reverse(), true]]) {
+            const k = nm.indexOf(seq[0]);
+            if (k >= 0 && seq.every((x, j) => nm[k + j] === x) && (!L || C.nodes.length < L.nodes.length)) { L = C; i0 = k; rev = flip; }
+          }
+        }
+        if (!L) continue;
+        covered.add(L);
+        const seg = L.nodes.slice(i0, i0 + names.length);
+        const dirs = [rev ? seg.slice().reverse() : seg, rev ? seg : seg.slice().reverse()];
+        const F = freqOf(r.RouteID, r.LineID);
+        const heads = ((F && F.Headways) || []).map(h => ({ a: tod(h.StartTime), b: tod(h.EndTime), hw: ((+h.MinHeadwayMins || +h.MaxHeadwayMins) + (+h.MaxHeadwayMins || +h.MinHeadwayMins)) / 2 }))
+          .filter(h => h.a != null && h.b != null && h.hw > 0).map(h => (h.b <= h.a ? { ...h, b: h.b + 1440 } : h));
+        const hwAt = t => { const h = heads.find(h => t >= h.a && t < h.b) || heads.find(h => t + 1440 >= h.a && t + 1440 < h.b); return h ? h.hw : null; };
+        const [hwPeak, hwOff] = L.hw;
+        dirs.forEach((nodes, d) => {
+          const o = normName(nodes[0].name), z = normName(nodes[nodes.length - 1].name);
+          const fl = firstLast(o, z);
+          let t0 = fl && tod(fl.FirstTrainTime), t1 = fl && tod(fl.LastTrainTime);
+          if (t0 == null) t0 = heads.length ? Math.min(...heads.map(h => h.a)) + d * 1.5 : hm('06:00') + d * 1.5;
+          if (t1 == null) t1 = heads.length ? Math.max(...heads.map(h => h.b)) : 24 * 60;
+          if (t1 <= t0) t1 += 1440;
+          // 頭尾不完整的路段（區間車）班距由同一路線的資料決定；全線車都沒有時才用原本的估計
+          let j = 0;
+          for (let t = t0; t <= t1 + 0.01 && j < 400; j++) {
+            const times = []; let c = t;
+            for (let k = 0; k < nodes.length; k++) {
+              if (k) {
+                const a = normName(nodes[k - 1].name), b = normName(nodes[k].name);
+                c += run.get(a + '>' + b) || segLen(nodes[k - 1], nodes[k], 1.03) / L.spd * 60 + 0.3;
+              }
+              const dw = k && k < nodes.length - 1 ? (dwell.get(normName(nodes[k].name)) || 0.35) : 0;
+              times.push({ arr: c, dep: c + dw, stop: true }); c += dw;
+            }
+            trips.push({ sys: L.sys, no: '', line: L, type: L.label || L.name, color: L.color, car: '', nodes, times,
+              origin: nodes[0].name, dest: nodes[nodes.length - 1].name, delay: 0, live: true, tdxMetro: true, seq: j });
+            const h = t / 60, peak = (h >= 7 && h < 9.5) || (h >= 17 && h < 19.5);
+            t += hwAt(t) || (peak ? hwPeak : hwOff);
+          }
+        });
+      }
+    }
+    return { trips, covered };
+  },
+  /* 以 TDX 資料產生的捷運班次取代同一路線的推估班次 */
+  applyMetro({ trips, covered }) {
+    // 舊的 TDX 捷運班次與被取代路線的推估班次一起移除
+    resetTrips(t => !t.tdxMetro && !(t.line && covered.has(t.line)));
+    trips.forEach(registerTrip);
+  },
   async loadDelays(cred, isCurrent = () => true) {
     const j = await this.get('v2/Rail/TRA/LiveTrainDelay', cred);
     if (!isCurrent()) return 0;
