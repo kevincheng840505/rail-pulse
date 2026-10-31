@@ -767,7 +767,12 @@ function stepCamera(now, dt) {
 }
 function unlockView() {
   if (!S.follow) return;
-  if (S.flying) { map.stop(); S.flying = false; }
+  if (S.flying) {
+    // 飛行途中被手指打斷：直接落到列車旁邊再交給使用者，不要停在半空中看不到車
+    map.stop(); S.flying = false; ++flightId;
+    const pos = tripPos(S.follow, curMin());
+    if (pos) { S.rel = null; try { map.jumpTo(viewCamera(S.follow, pos, performance.now(), 1e6)); } catch {} }
+  }
   S.followPaused = true; S.trans = null; S.freeLast = null; S.tiltTo = null;
   renderCaption(true); renderViewBtn();
 }

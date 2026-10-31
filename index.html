@@ -18,7 +18,9 @@
   color-scheme:dark;
 }
 [hidden] { display:none !important; }
-html, body { height:100%; margin:0; }
+/* 整頁固定不捲動：Safari 往下拉會觸發重新整理、把整個畫面往下推，底部按鈕就被工具列蓋住 */
+html, body { height:100%; margin:0; overscroll-behavior:none; }
+body { position:fixed; inset:0; }
 body { background:#070C12; color:var(--ink); font-family:var(--font-body); overflow:hidden; -webkit-font-smoothing:antialiased; }
 #map { position:fixed; inset:0; }
 button, input { font:inherit; color:inherit; }
@@ -3115,7 +3117,12 @@ function stepCamera(now, dt) {
 }
 function unlockView() {
   if (!S.follow) return;
-  if (S.flying) { map.stop(); S.flying = false; }
+  if (S.flying) {
+    // 飛行途中被手指打斷：直接落到列車旁邊再交給使用者，不要停在半空中看不到車
+    map.stop(); S.flying = false; ++flightId;
+    const pos = tripPos(S.follow, curMin());
+    if (pos) { S.rel = null; try { map.jumpTo(viewCamera(S.follow, pos, performance.now(), 1e6)); } catch {} }
+  }
   S.followPaused = true; S.trans = null; S.freeLast = null; S.tiltTo = null;
   renderCaption(true); renderViewBtn();
 }

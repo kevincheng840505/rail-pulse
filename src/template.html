@@ -16,7 +16,9 @@
   color-scheme:dark;
 }
 [hidden] { display:none !important; }
-html, body { height:100%; margin:0; }
+/* 整頁固定不捲動：Safari 往下拉會觸發重新整理、把整個畫面往下推，底部按鈕就被工具列蓋住 */
+html, body { height:100%; margin:0; overscroll-behavior:none; }
+body { position:fixed; inset:0; }
 body { background:#070C12; color:var(--ink); font-family:var(--font-body); overflow:hidden; -webkit-font-smoothing:antialiased; }
 #map { position:fixed; inset:0; }
 button, input { font:inherit; color:inherit; }
