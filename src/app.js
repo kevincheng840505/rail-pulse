@@ -16,7 +16,7 @@ const DEG = 180 / Math.PI;
 const S = {
   simMs: Date.now(), speed: 1, playing: true, live: true,
   positions: [], follow: null, followPaused: false, roam: false, roamAt: 0,
-  view: store.get('view', 'chase'), rel: null, trans: null, ts: null,
+  view: store.get('view2', 'persp'), rel: null, trans: null, ts: null,
   flying: false, mapReady: false, P: null, lookKey: '',
   tod: store.get('tod', 'auto'), wx: store.get('wx', 'auto'), realWx: null, realWxAt: 0, realWxPos: null,
   pickGroup: 'all', terrain: store.get('terrain', true), buildings: store.get('buildings', true), labels: store.get('labels', true),
@@ -59,7 +59,10 @@ const STYLE = {
       filter: ['in', ['get', 'class'], ['literal', ['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'minor']]],
       paint: { 'line-color': P0.road, 'line-width': ['interpolate', ['exponential', 1.6], ['zoom'], 8, 0.4, 14, 2.2, 18, 16], 'line-opacity': 0.8 } },
     { id: 'buildings', type: 'fill-extrusion', source: 'omt', 'source-layer': 'building', minzoom: 13.5,
-      paint: { 'fill-extrusion-color': P0.bld, 'fill-extrusion-height': ['coalesce', ['get', 'render_height'], 8], 'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0], 'fill-extrusion-opacity': 0.8 } },
+      paint: { 'fill-extrusion-color': P0.bld, 'fill-extrusion-height': ['coalesce', ['get', 'render_height'], 8], 'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0], 'fill-extrusion-opacity': 0.32 } },
+    // 透視感：半透明建築加上貼地的輪廓線
+    { id: 'bld-edge', type: 'line', source: 'omt', 'source-layer': 'building', minzoom: 14,
+      paint: { 'line-color': P0.bldEdge, 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 0.4, 18, 1.2], 'line-opacity': 0.7 } },
     { id: 'places', type: 'symbol', source: 'omt', 'source-layer': 'place', filter: ['in', ['get', 'class'], ['literal', ['city', 'town']]],
       layout: { 'text-field': NAME, 'text-font': ['Noto Sans Regular'], 'text-size': ['interpolate', ['linear'], ['zoom'], 6, 11, 12, 15], 'text-letter-spacing': 0.15 },
       paint: { 'text-color': P0.label, 'text-halo-color': P0.halo, 'text-halo-width': 1.4, 'text-opacity': 0.75 } },
@@ -92,7 +95,8 @@ function stationsGeoJSON() {
 let map = null;
 const TAIWAN = { center: [120.95, 23.65], zoom: 6.7, pitch: 35, bearing: -8 };
 const EMPTY = { type: 'FeatureCollection', features: [] };
-const CAR_ZOOM = 13.5; // 這個縮放以上把列車畫成一節節車廂
+const CAR_ZOOM = 13.5;
+const DOT = matchMedia('(pointer: coarse)').matches ? 1.35 : 1; // 手機上列車圓點放大 // 這個縮放以上把列車畫成一節節車廂
 function initMap() {
   if (!window.maplibregl) { $('#intro p').textContent = '地圖元件載入失敗，請確認網路連線後重新整理。'; return; }
   map = new maplibregl.Map({
@@ -103,6 +107,8 @@ function initMap() {
   map.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: '© OpenStreetMap 貢獻者 · OpenFreeMap · 地形 Mapzen／AWS · 天氣 Open-Meteo' }), 'bottom-right');
   // 用 style.load 而非 load：外部圖磚失敗時 load 不會觸發，仍要畫出鐵道與列車
   map.once('style.load', () => {
+    // 手機上版權列預設收起（點 ⓘ 可展開）
+    if (matchMedia('(max-width: 640px)').matches) setTimeout(() => { const el = document.querySelector('.maplibregl-ctrl-attrib'); if (el) el.classList.remove('maplibregl-compact-show'); }, 300);
     try { if (S.terrain) map.setTerrain({ source: 'dem', exaggeration: 1.5 }); } catch {}
     map.addSource('rails', { type: 'geojson', data: railsGeoJSON() });
     map.addLayer({ id: 'rail-glow', type: 'line', source: 'rails', layout: { 'line-cap': 'round', 'line-join': 'round' },
@@ -122,19 +128,32 @@ function initMap() {
     map.addSource('trains', { type: 'geojson', data: EMPTY });
     map.addSource('cars', { type: 'geojson', data: EMPTY });
     map.addSource('focus', { type: 'geojson', data: EMPTY });
+    map.addSource('lights', { type: 'geojson', data: EMPTY });
     map.addLayer({ id: 'train-halo', type: 'circle', source: 'trains', maxzoom: 15,
       paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, ['case', ['get', 'sel'], 14, 6], 13, ['case', ['get', 'sel'], 26, 14]], 'circle-color': ['get', 'color'], 'circle-blur': 1, 'circle-opacity': P0.glow + 0.15, 'circle-pitch-alignment': 'map' } });
-    const carPaint = { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 't'], 'fill-extrusion-base': ['get', 'b'], 'fill-extrusion-opacity': 1, 'fill-extrusion-vertical-gradient': false };
+    const carPaint = { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 't'], 'fill-extrusion-base': ['get', 'b3'], 'fill-extrusion-opacity': 1, 'fill-extrusion-vertical-gradient': false };
+    // 車廂平面輪廓貼在地形上：手機 GPU 深度精度較低時，3D 車廂可能被地形蓋住，至少還看得到車子的形狀
+    const flat = { 'fill-color': ['get', 'c'], 'fill-opacity': 0.95 };
+    map.addLayer({ id: 'cars-flat', type: 'fill', source: 'cars', minzoom: CAR_ZOOM, filter: ['==', ['get', 'b'], 0], paint: flat });
+    map.addLayer({ id: 'focus-flat', type: 'fill', source: 'focus', minzoom: CAR_ZOOM, filter: ['==', ['get', 'b'], 0], paint: flat });
     map.addLayer({ id: 'cars', type: 'fill-extrusion', source: 'cars', minzoom: CAR_ZOOM, paint: carPaint });
     map.addLayer({ id: 'focus-cars', type: 'fill-extrusion', source: 'focus', minzoom: CAR_ZOOM, paint: carPaint });
+    // 車頭燈（暖白）與尾燈（紅）
+    map.addLayer({ id: 'light-glow', type: 'circle', source: 'lights', minzoom: 11,
+      paint: { 'circle-color': ['get', 'c'], 'circle-blur': 1, 'circle-pitch-alignment': 'map',
+        'circle-radius': ['interpolate', ['exponential', 1.6], ['zoom'], 11, ['*', 4, ['get', 'k']], 15, ['*', 12, ['get', 'k']], 19, ['*', 60, ['get', 'k']]],
+        'circle-opacity': ['interpolate', ['linear'], ['zoom'], 11, 0, 12, 0.9] } });
+    map.addLayer({ id: 'light-core', type: 'circle', source: 'lights', minzoom: 12,
+      paint: { 'circle-color': '#FFFFFF', 'circle-pitch-alignment': 'map', 'circle-blur': 0.4,
+        'circle-radius': ['interpolate', ['exponential', 1.6], ['zoom'], 12, ['*', 1, ['get', 'k']], 16, ['*', 3, ['get', 'k']], 19, ['*', 10, ['get', 'k']]] } });
     map.addLayer({ id: 'train', type: 'circle', source: 'trains', maxzoom: CAR_ZOOM + 0.5,
-      paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, ['case', ['get', 'sel'], 5, ['==', ['get', 'g'], 'mrt'], 1.8, 2.6], 12, ['case', ['get', 'sel'], 8, 5]],
+      paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, ['case', ['get', 'sel'], 6, ['==', ['get', 'g'], 'mrt'], 2.4 * DOT, 3 * DOT], 12, ['case', ['get', 'sel'], 9, 5.5]],
         'circle-color': ['get', 'color'], 'circle-stroke-color': '#FFFFFF', 'circle-stroke-width': ['case', ['get', 'sel'], 2, 0.6], 'circle-pitch-alignment': 'map' } });
     map.setLayoutProperty('buildings', 'visibility', S.buildings ? 'visible' : 'none');
     S.mapReady = true;
     applyLook(true); pushTrains(true);
     map.on('click', onMapClick);
-    for (const l of ['train', 'train-halo', 'cars', 'st-dot']) {
+    for (const l of ['train', 'train-halo', 'cars', 'cars-flat', 'st-dot']) {
       map.on('mouseenter', l, () => map.getCanvas().style.cursor = 'pointer');
       map.on('mouseleave', l, () => map.getCanvas().style.cursor = '');
     }
@@ -156,7 +175,7 @@ function applyLook(force) {
   const P = S.P = paletteAt(hour, wx), W = WEATHER[wx];
   const set = (l, k, v) => { try { map.setPaintProperty(l, k, v); } catch {} };
   set('bg', 'background-color', P.sea); set('land', 'fill-color', P.land); set('wood', 'fill-color', P.wood);
-  set('water', 'fill-color', P.water); set('county', 'line-color', P.edge); set('roads', 'line-color', P.road); set('buildings', 'fill-extrusion-color', P.bld);
+  set('water', 'fill-color', P.water); set('bld-edge', 'line-color', P.bldEdge); set('county', 'line-color', P.edge); set('roads', 'line-color', P.road); set('buildings', 'fill-extrusion-color', P.bld);
   set('hills', 'hillshade-shadow-color', P.hsShadow); set('hills', 'hillshade-highlight-color', P.hsHigh); set('hills', 'hillshade-accent-color', P.hsAccent);
   set('places', 'text-color', P.label); set('places', 'text-halo-color', P.halo);
   set('rail', 'line-color', railColor(P)); set('rail-glow', 'line-color', railColor(P));
@@ -193,7 +212,8 @@ let lastCars = 0;
 function pushTrains(force) {
   if (!S.mapReady) return;
   const sel = S.follow, z = map.getZoom();
-  const pts = [], cars = [];
+  const pts = [], cars = [], lights = [];
+  const doLights = z >= 10.5;
   // 近看時只替畫面內的列車建車廂模型
   let bounds = null;
   const doCars = z >= CAR_ZOOM - 0.3 && (force || performance.now() - lastCars > 110);
@@ -202,15 +222,18 @@ function pushTrains(force) {
     const isSel = trip === sel;
     const ll = unproj(pos.x, pos.y);
     pts.push({ type: 'Feature', properties: { idx: trip.idx, color: trip.color, sel: isSel, g: sysGroup(trip.sys) }, geometry: { type: 'Point', coordinates: ll } });
+    if (doLights) trainLights(trip, pos, lights);
     if (doCars && !isSel && ll[0] > bounds[0] && ll[0] < bounds[2] && ll[1] > bounds[1] && ll[1] < bounds[3]) {
       const start = cars.length;
-      carFeatures(trip, pos, S.P, cars, false);
+      carFeatures(trip, pos, S.P, cars, z >= 16);
       for (let i = start; i < cars.length; i++) cars[i].properties.idx = trip.idx;
     }
   }
   map.getSource('trains').setData({ type: 'FeatureCollection', features: pts });
   if (doCars) map.getSource('cars').setData({ type: 'FeatureCollection', features: cars });
   else if (z < CAR_ZOOM - 0.3 && lastCars) { map.getSource('cars').setData(EMPTY); lastCars = 0; }
+  if (doLights || S.hadLights) map.getSource('lights').setData(doLights ? { type: 'FeatureCollection', features: lights } : EMPTY);
+  S.hadLights = doLights;
   pushFocus();
 }
 // 跟拍的列車每一格都更新，畫面上才不會抖
@@ -218,7 +241,7 @@ function pushFocus() {
   if (!S.mapReady) return;
   const t = S.follow, pos = t && tripPos(t, curMin());
   const out = [];
-  if (pos) { carFeatures(t, pos, S.P, out, false); for (const f of out) f.properties.idx = t.idx; }
+  if (pos) { carFeatures(t, pos, S.P, out, true); for (const f of out) f.properties.idx = t.idx; }
   map.getSource('focus').setData({ type: 'FeatureCollection', features: out });
 }
 
@@ -232,6 +255,11 @@ function viewCamera(trip, pos, now, dt) {
   const near = Math.min(len, 0.12);
   let from, to, fa, ta, anchor = 'to';
   switch (S.view) {
+    case 'persp': {
+      // 斜上方透視：看得到整列車與周圍街區
+      to = trackPoint(trip, pos.km - Math.min(len * 0.45, 0.12)); ta = 0;
+      from = offsetPt(to, -190 * M, 150 * M); fa = 190; break;
+    }
     case 'cab': {
       // 站在車頭後上方往前看，畫面下緣看得到車鼻
       from = trackPoint(trip, pos.km - 9 * M); fa = H + 3.5;
@@ -335,7 +363,7 @@ function stepCamera(now, dt) {
   map.jumpTo(cam);
 }
 function setView(id) {
-  S.view = id; store.set('view', id); S.rel = null; S.ts = null;
+  S.view = id; store.set('view2', id); S.rel = null; S.ts = null;
   if (S.follow) { S.followPaused = false; startCamera(false); }
   renderViewBtn(); renderCaption(true);
 }
@@ -465,7 +493,7 @@ plist.addEventListener('click', e => {
 let popup = null;
 function onMapClick(e) {
   const box = [[e.point.x - 10, e.point.y - 10], [e.point.x + 10, e.point.y + 10]];
-  const hit = map.queryRenderedFeatures(box, { layers: ['train', 'train-halo', 'cars', 'focus-cars', 'st-dot'] });
+  const hit = map.queryRenderedFeatures(box, { layers: ['train', 'train-halo', 'cars', 'focus-cars', 'cars-flat', 'focus-flat', 'st-dot'] });
   const tr = hit.find(f => f.layer.id !== 'st-dot');
   if (tr) { const t = TRIPS[tr.properties.idx]; if (t !== S.follow || S.followPaused) { setRoam(false); follow(t); } return; }
   const st = hit.find(f => f.layer.id === 'st-dot');
