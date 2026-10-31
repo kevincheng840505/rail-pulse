@@ -78,6 +78,7 @@ function applyRailData(data) {
   }
   for (const [id, edges] of ADJ) for (const e of edges) e.d = segLen(NODES[id], NODES[e.to]);
   pathCache.clear();
+  if (typeof LINES !== 'undefined') for (const L of LINES) delete L._pp;
 }
 
 for (const L of LINES) {
@@ -313,7 +314,9 @@ function tripPosAt(trip, m) {
   if (m <= dep || i === n - 1) {
     const b = trip.nodes[Math.min(i + 1, n - 1)], pa = trip.nodes[Math.max(i - 1, 0)];
     const hd = i < n - 1 ? segPoint(a, b, 0.001).heading : segPoint(pa, a, 0.999).heading;
-    return { x:a.x, y:a.y, heading:hd, seg:i, atStation:true, km:trip.cum[i] };
+    // dwell：停靠時間的進度 0~1，用來開關車門、安排旅客上下車
+    const arr = effTime(trip, i, 'arr'), dwell = dep > arr ? Math.min(1, Math.max(0, (m - arr) / (dep - arr))) : 1;
+    return { x:a.x, y:a.y, heading:hd, seg:i, atStation:true, km:trip.cum[i], dwell };
   }
   const b = trip.nodes[i + 1];
   const arr = effTime(trip, i + 1, 'arr');

@@ -190,6 +190,11 @@ function initMap() {
     map.addSource('facade', { type: 'geojson', data: EMPTY });
     map.addLayer({ id: 'facade', type: 'fill-extrusion', source: 'facade', minzoom: FACADE_ZOOM,
       paint: { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 't'], 'fill-extrusion-base': ['get', 'b'], 'fill-extrusion-opacity': 0.8, 'fill-extrusion-vertical-gradient': false } }, 'light-glow');
+    const solid = { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 't'], 'fill-extrusion-base': ['get', 'b'], 'fill-extrusion-opacity': 1, 'fill-extrusion-vertical-gradient': false };
+    map.addSource('platforms', { type: 'geojson', data: EMPTY });
+    map.addLayer({ id: 'platforms', type: 'fill-extrusion', source: 'platforms', minzoom: FACADE_ZOOM, paint: solid }, 'focus-cars');
+    map.addSource('people', { type: 'geojson', data: EMPTY });
+    map.addLayer({ id: 'people', type: 'fill-extrusion', source: 'people', minzoom: 16, paint: solid }, 'focus-cars');
     map.addSource('lamps', { type: 'geojson', data: EMPTY });
     map.addLayer({ id: 'lamp-glow', type: 'circle', source: 'lamps', minzoom: FACADE_ZOOM,
       paint: { 'circle-color': '#FFD48A', 'circle-blur': 1, 'circle-pitch-alignment': 'map', 'circle-opacity': 0,
@@ -305,6 +310,21 @@ const Facade = (() => {
     let roads;
     try { roads = map.querySourceFeatures('omt', { sourceLayer: 'transportation', filter: ['in', ['get', 'class'], ['literal', Object.keys(ROAD_W)]] }); } catch { return []; }
     const lamps = [], seen = new Set(), RR = R * 0.8;
+    // 軌道（含月台）兩側 14 公尺內不種樹、不立路燈
+    const rails = [];
+    for (const L of LINES) {
+      if (!L.nodes || L.nodes.length < 2) continue;
+      const pp = L._pp || (L._pp = lineCoords(L).map(([lon, lat]) => proj(lat, lon)));
+      for (let i = 1; i < pp.length; i++) {
+        const [ax, ay] = pp[i - 1], [bx, by] = pp[i];
+        if (Math.min(ax, bx) > cx + RR + 0.02 || Math.max(ax, bx) < cx - RR - 0.02 || Math.min(ay, by) > cy + RR + 0.02 || Math.max(ay, by) < cy - RR - 0.02) continue;
+        rails.push([ax, ay, bx, by]);
+      }
+    }
+    const onRail = (x, y) => rails.some(([ax, ay, bx, by]) => {
+      const dx = bx - ax, dy = by - ay, t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy || 1)));
+      return Math.hypot(ax + dx * t - x, ay + dy * t - y) < 0.014;
+    });
     const trunk = mixHex('#5B4636', P.land, 0.2), pole = mixHex('#7B838C', P.bld, 0.3);
     const leaf = ['#4E7D4A', '#5F8F4E', '#3F6E47', '#6E9A55'].map(c => mixHex(c, P.wood, P.lit ? 0.35 : 0.2));
     let trees = 0;
@@ -326,6 +346,7 @@ const Facade = (() => {
             const k = Math.round((run + d) / 0.012), hs = hash(key);
             for (const side of [-1, 1]) {
               const off = (w / 2 + 1.2) / 1000 * side, tx = x + nx * off, ty = y + ny * off;
+              if (onRail(tx, ty)) continue;
               if (k % 3 === 1 && side > 0) {
                 // 路燈：燈桿＋燈頭，夜裡地上一圈光
                 out.push(poly(ngon(tx, ty, 0.12, 4), 0, 7, pole));
@@ -347,10 +368,30 @@ const Facade = (() => {
     }
     return lamps;
   }
+  // 鏡頭附近車站的月台、雨棚與候車旅客（尖峰時段人多、深夜人少）
+  let lastPf = '';
+  function platforms() {
+    const src = map.getSource('platforms'); if (!src) return;
+    const z = map.getZoom(), c = map.getCenter(), [cx, cy] = proj(c.lat, c.lng);
+    const hr = curMin() / 60, crowd = (hr >= 7 && hr < 9.5) || (hr >= 17 && hr < 19.5) ? 1.3 : hr >= 22 || hr < 6 ? 0.3 : 0.75;
+    const near = z < FACADE_ZOOM ? [] : NODES.filter(n => Math.hypot(n.x - cx, n.y - cy) < 0.8);
+    const key = near.map(n => n.id).join() + '|' + crowd + '|' + S.P.lit + '|' + TRIPS.length;
+    if (key === lastPf) return; lastPf = key;
+    const out = [];
+    for (const n of near) {
+      const seen = new Set();
+      for (const [trip, idx] of NODE_TRIPS.get(n.id) || []) {
+        if (seen.has(trip.line)) continue; seen.add(trip.line);
+        stationFeatures(n, trip, idx, S.P, out, crowd);
+      }
+    }
+    src.setData({ type: 'FeatureCollection', features: out });
+  }
   function build(force) {
     timer = 0;
     if (!map || !S.mapReady || !map.getSource('facade')) return;
     const src = map.getSource('facade');
+    platforms();
     if (!S.buildings || map.getZoom() < FACADE_ZOOM) { if (last) { src.setData(EMPTY); last = null; } return; }
     const c = map.getCenter(), [cx, cy] = proj(c.lat, c.lng);
     if (!force && last && Math.hypot(cx - last.x, cy - last.y) < R * 0.3 && last.lit === S.P.lit) return;
@@ -504,6 +545,13 @@ function pushFocus() {
     for (let i = start; i < out.length; i++) out[i].properties.idx = n.idx;
   }
   map.getSource('focus').setData({ type: 'FeatureCollection', features: out });
+  // 停靠中的列車：旅客上下車
+  const ppl = [];
+  if (map.getZoom() >= 16) for (const n of [t, ...(S.nearby || [])]) {
+    const np = n && (n === t ? pos : tripPos(n, m));
+    if (np && np.atStation) boardingFeatures(n, np, ppl);
+  }
+  if (ppl.length || S.hadPeople) { map.getSource('people').setData({ type: 'FeatureCollection', features: ppl }); S.hadPeople = ppl.length > 0; }
 }
 function pushFocusFrame() { pushFocus(); if (S.hadLights) pushLights(); }
 
