@@ -176,7 +176,9 @@ function initMap() {
       paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, ['case', ['get', 'sel'], 14, 6], 13, ['case', ['get', 'sel'], 26, 14]], 'circle-color': ['get', 'color'], 'circle-blur': 1, 'circle-opacity': P0.glow + 0.15, 'circle-pitch-alignment': 'map' } });
     const carPaint = { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 't'], 'fill-extrusion-base': ['get', 'b3'], 'fill-extrusion-opacity': 1, 'fill-extrusion-vertical-gradient': false };
     map.addLayer({ id: 'cars', type: 'fill-extrusion', source: 'cars', minzoom: CAR_ZOOM, paint: carPaint });
-    map.addLayer({ id: 'focus-cars', type: 'fill-extrusion', source: 'focus', minzoom: CAR_ZOOM, paint: carPaint });
+    map.addLayer({ id: 'focus-cars', type: 'fill-extrusion', source: 'focus', minzoom: CAR_ZOOM, paint: { ...carPaint, 'fill-extrusion-translate-anchor': 'map' } });
+    map.addSource('near', { type: 'geojson', data: EMPTY });
+    map.addLayer({ id: 'near-cars', type: 'fill-extrusion', source: 'near', minzoom: CAR_ZOOM, paint: carPaint });
     // 車頭燈（暖白）與尾燈（紅）
     map.addLayer({ id: 'light-glow', type: 'circle', source: 'lights', minzoom: 11,
       paint: { 'circle-color': ['get', 'c'], 'circle-blur': 1, 'circle-pitch-alignment': 'map',
@@ -529,29 +531,45 @@ function pushLights() {
   if (map.getZoom() >= 10.5) for (const t of [S.follow, ...(S.nearby || [])]) { const pos = t && tripPos(t, curMin()); if (pos) trainLights(t, pos, out); }
   map.getSource('lights').setData({ type: 'FeatureCollection', features: out });
 }
-// 跟拍的列車每一格都更新，畫面上才不會抖
-// GeoJSON 是交給背景執行緒切圖磚的，畫面上真正出現會晚一兩格；鏡頭若直接跟現在的時間走，
-// 車子跟鏡頭就會忽前忽後地抖。所以上一份資料還沒畫上去時先不送新的，鏡頭則對準已經畫上去的那個時間。
+// 跟拍的列車：GeoJSON 交給背景執行緒切圖磚，畫面上真正出現會晚一兩格，而且晚多少不固定。
+// 所以上一份資料畫上去之前不送新的；每一格再用 fill-extrusion-translate 把已經畫上去的車身
+// 平移到現在該在的位置（只是改繪圖參數，當格就生效），鏡頭照常每格平順移動，車子也不會一頓一頓
 function focusReady() {
   if (S.focusPend == null) return true;
   if (!map.isSourceLoaded('focus') && performance.now() - S.focusPendAt < 300) return false;
-  S.focusT = S.focusPend; S.focusPend = null;
+  S.focusT = S.focusPend; S.focusTrip = S.focusPendTrip; S.focusPend = null;
   return true;
 }
-// 鏡頭用的時間：跟車畫面上車子實際所在的時間
-function camMin() { const m = curMin(); return S.focusT != null && Math.abs(S.focusT - m) < 0.02 ? S.focusT : m; }
+function shiftFocus() {
+  let tr = [0, 0];
+  const t = S.follow;
+  if (t && S.focusTrip === t && S.focusT != null) {
+    const a = tripPos(t, S.focusT), b = tripPos(t, curMin());
+    if (a && b) {
+      const p0 = trackPoint(t, a.km), p1 = trackPoint(t, b.km), lat = map.getCenter().lat * Math.PI / 180;
+      const mpp = 40075016.686 * Math.cos(lat) / (512 * Math.pow(2, map.getZoom()));
+      tr = [(p1.x - p0.x) * 1000 / mpp, (p1.y - p0.y) * 1000 / mpp];
+    }
+  }
+  if (!S.focusShift || Math.abs(tr[0] - S.focusShift[0]) + Math.abs(tr[1] - S.focusShift[1]) > 0.01) { map.setPaintProperty('focus-cars', 'fill-extrusion-translate', tr); S.focusShift = tr; }
+}
 function pushFocus() {
-  if (!S.mapReady || !focusReady()) return;
-  const t = S.follow, m = curMin(), pos = t && tripPos(t, m);
-  const out = [];
-  if (pos) { carFeatures(t, pos, S.P, out, true); for (const f of out) f.properties.idx = t.idx; }
+  if (!S.mapReady) return;
+  const t = S.follow, m = curMin();
+  if (focusReady()) {
+    const pos = t && tripPos(t, m), out = [];
+    if (pos) { carFeatures(t, pos, S.P, out, true); for (const f of out) f.properties.idx = t.idx; }
+    map.getSource('focus').setData({ type: 'FeatureCollection', features: out });
+    S.focusPend = m; S.focusPendTrip = t; S.focusPendAt = performance.now();
+  }
+  // 跟拍列車附近的列車另外一個圖層，每一格更新
+  const near = [];
   for (const n of S.nearby || []) {
     const np = tripPos(n, m); if (!np) continue;
-    const start = out.length; carFeatures(n, np, S.P, out, false);
-    for (let i = start; i < out.length; i++) out[i].properties.idx = n.idx;
+    const start = near.length; carFeatures(n, np, S.P, near, false);
+    for (let i = start; i < near.length; i++) near[i].properties.idx = n.idx;
   }
-  map.getSource('focus').setData({ type: 'FeatureCollection', features: out });
-  S.focusPend = m; S.focusPendAt = performance.now();
+  if (near.length || S.hadNear) { map.getSource('near').setData({ type: 'FeatureCollection', features: near }); S.hadNear = near.length > 0; }
   // 畫面附近車站月台上的旅客：候車、上車、下車
   const ppl = [];
   if (map.getZoom() >= 16) {
@@ -683,12 +701,17 @@ const ease = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 function unfollow() { S.follow = null; S.followPaused = false; S.flying = false; S.trans = null; pushTrains(true); renderCaption(); renderViewBtn(); }
 function stepCamera(now, dt) {
   if (!S.follow || S.flying || !map || !S.mapReady) return;
-  const pos = tripPos(S.follow, camMin());
+  const pos = tripPos(S.follow, curMin());
   if (!pos) return;
   if (S.followPaused) {
     // 自由視角：使用者自己控制角度與遠近，畫面只跟著列車平移，車子不會跑出畫面
     const ll = unproj(pos.x, pos.y), prev = S.freeLast; S.freeLast = ll;
-    if (prev && !S.touching && !map.isMoving()) { const c = map.getCenter(); map.jumpTo({ center: [c.lng + ll[0] - prev[0], c.lat + ll[1] - prev[1]] }); }
+    if (prev && !S.touching && !map.isMoving()) {
+      const c = map.getCenter(), cam = { center: [c.lng + ll[0] - prev[0], c.lat + ll[1] - prev[1]] };
+      // 傾斜按鈕：每一格往目標俯仰角靠近一點，跟平移一起做，車子不會在動畫中跑掉
+      if (S.tiltTo != null) { const p0 = map.getPitch(); cam.pitch = p0 + (S.tiltTo - p0) * (1 - Math.exp(-dt / 110)); if (Math.abs(S.tiltTo - cam.pitch) < 0.2) { cam.pitch = S.tiltTo; S.tiltTo = null; } }
+      map.jumpTo(cam);
+    }
     return;
   }
   const cam = viewCamera(S.follow, pos, now, dt);
@@ -705,7 +728,7 @@ function stepCamera(now, dt) {
 function unlockView() {
   if (!S.follow) return;
   if (S.flying) { map.stop(); S.flying = false; }
-  S.followPaused = true; S.trans = null; S.freeLast = null;
+  S.followPaused = true; S.trans = null; S.freeLast = null; S.tiltTo = null;
   renderCaption(true); renderViewBtn();
 }
 function setView(id) {
@@ -714,7 +737,12 @@ function setView(id) {
   renderViewBtn(); renderCaption(true);
 }
 function cycleView() { if (S.follow && S.followPaused) return setView(S.view); /* 自由視角時先鎖回原視角 */ const i = VIEWS.findIndex(v => v.id === S.view); setView(VIEWS[(i + 1) % VIEWS.length].id); }
+// 自由視角時右側的傾斜按鈕（手機上也可以兩指上下滑動，電腦可按住右鍵拖曳）
+function tilt(d) { if (!S.follow || !S.followPaused) return; const base = S.tiltTo != null ? S.tiltTo : map.getPitch(); S.tiltTo = Math.max(0, Math.min(COARSE ? 76 : 80, base + d)); }
+$('#tiltup').addEventListener('click', () => tilt(-12));
+$('#tiltdown').addEventListener('click', () => tilt(12));
 function renderViewBtn() {
+  document.body.classList.toggle('free', !!(S.follow && S.followPaused));
   const b = $('#viewbtn'); b.textContent = S.follow && S.followPaused ? '◉ 回到' + viewName() : '視角・' + viewName(); b.disabled = !S.follow;
 }
 
@@ -851,7 +879,7 @@ plist.addEventListener('click', e => {
 let popup = null;
 function onMapClick(e) {
   const box = [[e.point.x - 10, e.point.y - 10], [e.point.x + 10, e.point.y + 10]];
-  const hit = map.queryRenderedFeatures(box, { layers: ['train', 'train-halo', 'cars', 'focus-cars', 'st-dot'] });
+  const hit = map.queryRenderedFeatures(box, { layers: ['train', 'train-halo', 'cars', 'focus-cars', 'near-cars', 'st-dot'] });
   const tr = hit.find(f => f.layer.id !== 'st-dot');
   if (tr) { const t = TRIPS[tr.properties.idx]; if (t !== S.follow || S.followPaused) { setRoam(false); follow(t); } return; }
   const st = hit.find(f => f.layer.id === 'st-dot');
@@ -1036,6 +1064,7 @@ function frame(now) {
     if (S.roam && S.follow && !S.flying && !tripPos(S.follow, curMin())) roamNext();
   } else if (S.follow || (S.nearby && S.nearby.length)) pushFocusFrame();
   stepCamera(now, dt);
+  if (S.mapReady) shiftFocus();
   Precip.step(dt, now);
   if (S.roam && now > S.roamAt && !S.flying) { S.roamAt = now + ROAM_SEC * 1000; roamNext(); }
   if (now - lastUi > 500) {

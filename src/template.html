@@ -35,6 +35,9 @@ button { cursor:pointer; }
 
 /* 底部：選車與時間 */
 /* 沉浸模式：上下的按鈕、字卡、版權列都收起來，只留右上角一顆小鈕可以叫回來 */
+#tilt { display:none; position:fixed; right:max(16px, env(safe-area-inset-right,0px)); top:50%; transform:translateY(-50%); z-index:4; flex-direction:column; gap:10px; }
+body.free #tilt { display:flex; }
+body.clean #tilt { display:none !important; }
 #unclean { display:none; position:fixed; top:calc(env(safe-area-inset-top,0px) + 16px); right:max(16px, env(safe-area-inset-right,0px)); z-index:6; opacity:.35; }
 body.clean #unclean { display:grid; }
 body.clean #brand, body.clean #tools, body.clean #dock, body.clean #caption, body.clean .maplibregl-ctrl-attrib, body.clean .panel { display:none !important; }
@@ -168,6 +171,10 @@ body.clean #brand, body.clean #tools, body.clean #dock, body.clean #caption, bod
   <button class="ib" id="setbtn" title="設定" aria-label="設定">⚙</button>
 </div>
 
+<div id="tilt" aria-label="調整傾斜">
+  <button class="ib" id="tiltup" title="往下看（俯視）" aria-label="往下看">⌃</button>
+  <button class="ib" id="tiltdown" title="往水平看" aria-label="往水平看">⌄</button>
+</div>
 <button class="ib" id="unclean" title="顯示介面（F）" aria-label="顯示介面">⤡</button>
 <section id="caption" class="glass fade" aria-live="polite" hidden></section>
 
