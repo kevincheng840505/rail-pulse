@@ -122,37 +122,52 @@ class Graph:
         for nid, (lon, lat) in self.coord.items():
             self.grid.setdefault((int(lon * 100), int(lat * 100)), []).append(nid)
 
-    def nearest(self, p, max_m=700):
+    def near(self, p, max_m):
+        """回傳 max_m 公尺內所有軌道節點與距離（同一站附近常有多條路線的軌道）。"""
+        cells = int(max_m / 1000) + 1
         gx, gy = int(p[0] * 100), int(p[1] * 100)
-        best, bd = None, max_m
-        for dx in (-1, 0, 1):
-            for dy in (-1, 0, 1):
+        out = []
+        for dx in range(-cells, cells + 1):
+            for dy in range(-cells, cells + 1):
                 for nid in self.grid.get((gx + dx, gy + dy), ()):
                     d = haversine(p, self.coord[nid])
-                    if d < bd:
-                        best, bd = nid, d
-        return best
+                    if d < max_m:
+                        out.append((nid, d))
+        return out
 
-    def path(self, a, b, limit):
-        dist, prev, pq = {a: 0.0}, {}, [(0.0, a)]
+    def path(self, pa, pb, radius, limit):
+        """從 A 站附近任一軌道節點走到 B 站附近任一節點的最短路徑。
+
+        離站的距離也算進成本，避免吸附到隔壁路線的軌道；總長超過 limit 視為繞路，不採用。
+        """
+        src, dst = self.near(pa, radius), dict(self.near(pb, radius))
+        if not src or not dst:
+            return None, None
+        dist, prev, pq = {}, {}, []
+        for nid, d in src:
+            c = d * 2
+            if c < dist.get(nid, 1e18):
+                dist[nid] = c
+                heapq.heappush(pq, (c, nid))
+        best, best_n = 1e18, None
         while pq:
             d, u = heapq.heappop(pq)
-            if u == b:
-                break
-            if d > dist.get(u, 1e18) or d > limit:
+            if d > dist.get(u, 1e18) or d > limit or d >= best:
                 continue
+            if u in dst and d + dst[u] * 2 < best:
+                best, best_n = d + dst[u] * 2, u
             for v, w in self.adj.get(u, ()):
                 nd = d + w
                 if nd < dist.get(v, 1e18):
                     dist[v], prev[v] = nd, u
                     heapq.heappush(pq, (nd, v))
-        if b not in dist or dist[b] > limit:
+        if best_n is None or best > limit:
             return None, None
-        out = [b]
-        while out[-1] != a:
+        out = [best_n]
+        while out[-1] in prev:
             out.append(prev[out[-1]])
         out.reverse()
-        return [self.coord[n] for n in out], dist[b]
+        return [self.coord[n] for n in out], best
 
 
 def simplify(pts, tol_m=12):
@@ -222,10 +237,12 @@ def main():
             found = None
             for classes in options:
                 g = graphs.get(classes) or graphs.setdefault(classes, Graph(ways, set(classes)))
-                na, nb = g.nearest(pa, 1500), g.nearest(pb, 1500)
-                if na is None or nb is None:
-                    continue
-                pts, length = g.path(na, nb, limit=straight * 2.2 + 2500)
+                pts = None
+                # 先在車站附近 400 公尺找，找不到再放寬；繞路超過直線 1.45 倍不採用
+                for radius in (400, 1200):
+                    pts, _ = g.path(pa, pb, radius, limit=straight * 1.45 + radius * 2 + 800)
+                    if pts:
+                        break
                 if pts:
                     found = pts
                     snapped.setdefault("%s:%s" % (sys_, a), pts[0])
@@ -234,6 +251,9 @@ def main():
             if not found:
                 missing.append(key)
                 continue
+            # 區間頭尾接到車站位置，前端列車停站與行駛時才不會跳動
+            sa, sb = snapped["%s:%s" % (sys_, a)], snapped["%s:%s" % (sys_, b)]
+            found = [sa] + [q for q in found if q != sa and q != sb] + [sb]
             segments[key] = [[round(x, 5), round(y, 5)] for x, y in simplify(found)]
 
     out = {

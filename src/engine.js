@@ -24,6 +24,51 @@ for (const sys in STATION_TEXT) {
 }
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
+/* ---------- 真實軌道線形（data/rail.json，由 tools/fetch_rail.py 產生） ---------- */
+const SEG = new Map(); // `${sys}:${a}|${b}` -> {pts:[[x,y]], cum:[km], len}
+const unproj = (x, y) => [x / KX + LON0, -y / KY + LAT0];
+function segGeom(a, b) {
+  const g = SEG.get(a.sys + ':' + a.name + '|' + b.name);
+  if (g) return { g, rev: false };
+  const r = SEG.get(a.sys + ':' + b.name + '|' + a.name);
+  return r ? { g: r, rev: true } : null;
+}
+/* 兩站之間的軌道長度（公里）；沒有線形時用直線乘上彎曲係數 */
+function segLen(a, b, curve = 1.12) {
+  const s = segGeom(a, b);
+  return s ? s.g.len : dist(a, b) * curve;
+}
+/* 兩站之間比例 p（0~1，依距離）的位置與方向 */
+function segPoint(a, b, p) {
+  const s = segGeom(a, b);
+  if (!s) return { x: a.x + (b.x - a.x) * p, y: a.y + (b.y - a.y) * p, heading: Math.atan2(b.y - a.y, b.x - a.x) };
+  const { pts, cum, len } = s.g;
+  let d = (s.rev ? 1 - p : p) * len;
+  let lo = 0, hi = cum.length - 1;
+  while (lo < hi - 1) { const mid = (lo + hi) >> 1; if (cum[mid] <= d) lo = mid; else hi = mid; }
+  const t = Math.min(1, Math.max(0, (d - cum[lo]) / ((cum[hi] - cum[lo]) || 1)));
+  const [x1, y1] = pts[lo], [x2, y2] = pts[hi];
+  let hd = Math.atan2(y2 - y1, x2 - x1);
+  if (s.rev) hd += Math.PI;
+  return { x: x1 + (x2 - x1) * t, y: y1 + (y2 - y1) * t, heading: hd };
+}
+function applyRailData(data) {
+  for (const [key, [lon, lat]] of Object.entries(data.stations || {})) {
+    const n = NODE_BY.get(key);
+    if (!n) continue;
+    n.lon = lon; n.lat = lat; [n.x, n.y] = proj(lat, lon);
+  }
+  SEG.clear();
+  for (const [key, coords] of Object.entries(data.segments || {})) {
+    const pts = coords.map(([lon, lat]) => proj(lat, lon));
+    const cum = [0];
+    for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+    SEG.set(key, { pts, cum, len: cum[cum.length - 1] || 0.001, coords });
+  }
+  for (const [id, edges] of ADJ) for (const e of edges) e.d = segLen(NODES[id], NODES[e.to]);
+  pathCache.clear();
+}
+
 for (const L of LINES) {
   L.nodes = L.st.split(' ').map(nm => {
     const n = NODE_BY.get(L.sys + ':' + nm);
@@ -85,7 +130,7 @@ function buildTimes(nodes, stopFn, t0, spd, dwell, acc, curve = 1.12) {
   for (let i = 0; i < nodes.length; i++) {
     const stop = i === 0 || i === nodes.length - 1 || stopFn(nodes[i], i);
     if (i > 0) {
-      const d = dist(nodes[i - 1], nodes[i]) * curve; // 軌道彎曲修正
+      const d = segLen(nodes[i - 1], nodes[i], curve); // 有真實線形時用軌道長度
       let rt = d / spd * 60;
       if (out[i - 1].stop) rt += acc;
       if (stop) rt += acc;
@@ -104,7 +149,7 @@ function registerTrip(trip) {
   trip.start = trip.times[0].dep;
   trip.end = trip.times[trip.times.length - 1].arr + (trip.delay || 0);
   trip.cum = [0];
-  for (let i = 1; i < trip.nodes.length; i++) trip.cum.push(trip.cum[i - 1] + dist(trip.nodes[i - 1], trip.nodes[i]));
+  for (let i = 1; i < trip.nodes.length; i++) trip.cum.push(trip.cum[i - 1] + segLen(trip.nodes[i - 1], trip.nodes[i]));
   TRIPS.push(trip);
   trip.nodes.forEach((n, i) => {
     if (!trip.times[i].stop) return;
@@ -256,7 +301,7 @@ function tripPosAt(trip, m) {
   const dep = effTime(trip, i, 'dep');
   if (m <= dep || i === n - 1) {
     const b = trip.nodes[Math.min(i + 1, n - 1)], pa = trip.nodes[Math.max(i - 1, 0)];
-    const hd = i < n - 1 ? Math.atan2(b.y - a.y, b.x - a.x) : Math.atan2(a.y - pa.y, a.x - pa.x);
+    const hd = i < n - 1 ? segPoint(a, b, 0.001).heading : segPoint(pa, a, 0.999).heading;
     return { x:a.x, y:a.y, heading:hd, seg:i, atStation:true, km:trip.cum[i] };
   }
   const b = trip.nodes[i + 1];
@@ -264,7 +309,8 @@ function tripPosAt(trip, m) {
   const f = Math.min(1, Math.max(0, (m - dep) / Math.max(0.01, arr - dep)));
   const aS = trip.times[i].stop ? 0.2 : 0, aE = trip.times[i + 1].stop ? 0.2 : 0;
   const p = easePos(f, aS, aE);
-  return { x:a.x + (b.x - a.x) * p, y:a.y + (b.y - a.y) * p, heading:Math.atan2(b.y - a.y, b.x - a.x),
+  const pt = segPoint(a, b, p);
+  return { x:pt.x, y:pt.y, heading:pt.heading,
     seg:i, atStation:false, km:trip.cum[i] + (trip.cum[i + 1] - trip.cum[i]) * p, f };
 }
 
@@ -314,7 +360,7 @@ const TDX = {
       if (!p) return null;
       const seg = p.map(id => NODES[id]);
       let tot = 0; const cum = [0];
-      for (let k = 1; k < seg.length; k++) { tot += dist(seg[k - 1], seg[k]); cum.push(tot); }
+      for (let k = 1; k < seg.length; k++) { tot += segLen(seg[k - 1], seg[k]); cum.push(tot); }
       const t0 = known[i - 1].dep, t1 = known[i].arr;
       for (let k = 1; k < seg.length - 1; k++) {
         const t = t0 + (t1 - t0) * (cum[k] / (tot || 1));

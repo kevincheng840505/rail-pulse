@@ -4,19 +4,21 @@
 
 ## 功能
 
-- 依系統篩選（全／台鐵／高鐵／捷運），選縣市一鍵跳轉
-- 搜尋車站、車次（如 `152`）或車種（如 `自強`、`EMU3000`）
-- 點列車跟車：下一站、到站倒數、停靠站列表、誤點
-- 點車站看出發看板；捷運站依方向列出下一班
-- 時間軸：暫停、1× / 10× / 30× / 60×、拖曳回看或預看
-- 亮暗主題、最愛車站、全螢幕、快捷鍵（空白鍵、1–4、←→、F、Esc、/）
+- 3D 地形（山脈起伏）與建築，列車沿 OpenStreetMap 的真實軌道行駛
+- 沉浸式畫面：只留「選一列車」與「漫遊」，選定後鏡頭會在列車後方跟拍
+- 漫遊模式每隔一段時間自動換一列車；拖動地圖會暫停跟拍，可一鍵回到列車
+- 底圖配色隨模擬時間在白天、黃昏、夜晚之間切換
+- 背景音樂由瀏覽器即時合成（Web Audio），沒有任何音檔，也沒有版權問題
+- 點車站看接下來的班次；時間可暫停、1× / 10× / 30× / 60× 快轉、拖曳回看
+- 快捷鍵：空白鍵 暫停、1–4 速度、←→ 前後 10 分鐘、R 漫遊、M 音樂、F 全螢幕、Esc 離開
 
 ## 資料
 
 - **預設**：依各營運單位班型推估時刻（班表推估），台鐵誤點為模擬值。
 - **TDX 即時**：在 ⚙ 設定填入 [TDX](https://tdx.transportdata.tw/) 的 Client ID / Secret，台鐵與高鐵改用當日官方時刻表（`v3/Rail/TRA/DailyTrainTimetable/Today`、`v2/Rail/THSR/DailyTimetable/Today`），台鐵每分鐘套用即時誤點（`v2/Rail/TRA/LiveTrainDelay`）。金鑰只存在瀏覽器的 localStorage。
 - 縣市底圖來自 [taiwan-atlas](https://www.npmjs.com/package/taiwan-atlas)（內政部資料）。
-- 車站座標為整理的近似值，路線畫成站與站之間的連線，不是實際軌道線形。
+- 軌道線形與車站位置來自 [OpenStreetMap](https://www.openstreetmap.org/copyright)（ODbL），由 GitHub Actions（`.github/workflows/rail-data.yml`）每月執行 `tools/fetch_rail.py` 下載並轉成 `data/rail.json`。找不到合理軌道的區間會改畫站間直線。
+- 地圖：[MapLibre GL JS](https://maplibre.org/)，向量圖磚 [OpenFreeMap](https://openfreemap.org/)，地形高程 [Mapzen Terrain Tiles](https://registry.opendata.aws/terrain-tiles/)（AWS Open Data）。
 
 ## 開發
 
@@ -26,7 +28,9 @@
 | --- | --- |
 | `src/data.js` | 車站座標、路線、車種與停靠規則 |
 | `src/engine.js` | 路網圖、班表推估、列車位置計算、TDX 介接 |
-| `src/app.js` | Canvas 地圖、面板、搜尋、時間軸、操作 |
+| `src/app.js` | MapLibre 3D 地圖、跟車鏡頭、漫遊、選車、時間 |
+| `src/music.js` | 背景音樂（Web Audio 即時合成） |
+| `data/rail.json` | 軌道線形（自動產生，勿手改） |
 | `src/template.html` | 版面與樣式 |
 | `src/geo.json` | 縣市輪廓（由 `tools/geo.py` 從 taiwan-atlas 轉出） |
 
