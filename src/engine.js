@@ -446,8 +446,12 @@ const TDX = {
       }
       // 今天適用的班距
       const freqOf = (routeId, lineId) => {
-        const pick = list => list.find(f => !f.ServiceDay || f.ServiceDay[wd] !== false) || list[0];
-        return pick(D.freq.filter(f => f.RouteID === routeId)) || pick(D.freq.filter(f => f.LineID === lineId && !f.RouteID)) || pick(D.freq.filter(f => f.LineID === lineId));
+        // 回傳今天適用的那筆；有資料但今天都不開行時回傳 false，完全沒資料才回傳 null
+        const pick = list => list.length ? (list.find(f => !f.ServiceDay || f.ServiceDay[wd] !== false) || false) : null;
+        for (const list of [D.freq.filter(f => f.RouteID === routeId), D.freq.filter(f => f.LineID === lineId && !f.RouteID)]) {
+          const f = pick(list); if (f !== null) return f;
+        }
+        return null;
       };
       const firstLast = (from, to) => {
         const list = D.fl.filter(f => zh(f.StationName) === from && (!f.ServiceDay || f.ServiceDay[wd] !== false));
@@ -468,10 +472,12 @@ const TDX = {
           }
         }
         if (!L) continue;
-        covered.add(L);
+        const F = freqOf(r.RouteID, r.LineID);
+        if (F === false) continue; // 今天不開行
+        // 只有跑完整條路線的資料才取代推估班次；只對到區間車時保留原本的全線推估
+        if (names.length === L.nodes.length) covered.add(L);
         const seg = L.nodes.slice(i0, i0 + names.length);
         const dirs = [rev ? seg.slice().reverse() : seg, rev ? seg : seg.slice().reverse()];
-        const F = freqOf(r.RouteID, r.LineID);
         const heads = ((F && F.Headways) || []).map(h => ({ a: tod(h.StartTime), b: tod(h.EndTime), hw: ((+h.MinHeadwayMins || +h.MaxHeadwayMins) + (+h.MaxHeadwayMins || +h.MinHeadwayMins)) / 2 }))
           .filter(h => h.a != null && h.b != null && h.hw > 0).map(h => (h.b <= h.a ? { ...h, b: h.b + 1440 } : h));
         const hwAt = t => { const h = heads.find(h => t >= h.a && t < h.b) || heads.find(h => t + 1440 >= h.a && t + 1440 < h.b); return h ? h.hw : null; };
@@ -498,7 +504,16 @@ const TDX = {
             trips.push({ sys: L.sys, no: '', line: L, type: L.label || L.name, color: L.color, car: '', nodes, times,
               origin: nodes[0].name, dest: nodes[nodes.length - 1].name, delay: 0, live: true, tdxMetro: true, seq: j });
             const h = t / 60, peak = (h >= 7 && h < 9.5) || (h >= 17 && h < 19.5);
-            t += hwAt(t) || (peak ? hwPeak : hwOff);
+            const hw = hwAt(t);
+            if (hw) t += hw;
+            else if (heads.length) {
+              // 有班距資料但此刻不在任何時段內：跳到下一個時段開始，沒有就收班
+              const nx = heads.map(x => x.a).filter(a => a > t).sort((a, b) => a - b)[0];
+              if (nx != null) t = nx;
+              // 官方末班車比最後一個班距時段晚時，用最後時段的班距開到末班車
+              else if (fl && fl.LastTrainTime) t += heads.reduce((x, y) => (y.b > x.b ? y : x)).hw;
+              else break;
+            } else t += peak ? hwPeak : hwOff;
           }
         });
       }
