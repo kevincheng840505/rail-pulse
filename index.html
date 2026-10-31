@@ -1122,7 +1122,13 @@ function tripPosAt(trip, m) {
 /* 營運日：凌晨 0~3 點視為前一營運日的延續 */
 function serviceMinute(min) { return min < 180 ? min + 1440 : min; }
 function tripPos(trip, min) {
-  return tripPosAt(trip, min) || (min < 240 ? tripPosAt(trip, min + 1440) : null);
+  const p = tripPosAt(trip, min) || (min < 240 ? tripPosAt(trip, min + 1440) : null);
+  // 從起點站發車時，整列車要停在月台與軌道上：車頭至少在一個車長之外，車尾才不會伸出路線終點
+  if (p && typeof trainLength === 'function') {
+    if (trip.trainLen == null) trip.trainLen = Math.min(trainLength(trip), trip.cum[trip.cum.length - 1] * 0.5);
+    if (p.km < trip.trainLen) p.km = trip.trainLen;
+  }
+  return p;
 }
 
 /* ---------- TDX 即時資料（部署於自有網域時可用） ---------- */
@@ -1431,7 +1437,18 @@ function trackPoint(trip, km) {
   // 投影座標 y 軸朝南，o 為正時偏向行進方向的右側
   return { x: p.x - Math.sin(h) * o, y: p.y + Math.cos(h) * o, heading: h };
 }
+/* 軌道資料是一站一站接起來的，車站接點常有幾公尺的側向錯位或轉折（彎道上看起來就是 Z 字破圖）。
+   在前後 25 公尺內做三角加權平均，把接點的錯位抹成平順的過渡 */
+const SMOOTH_W = [1, 2, 3, 4, 5, 6, 5, 4, 3, 2, 1], SMOOTH_SUM = 36, SMOOTH_STEP = 0.005;
 function centerPoint(trip, km) {
+  let x = 0, y = 0;
+  for (let i = 0; i < SMOOTH_W.length; i++) {
+    const q = rawCenter(trip, km + (i - 5) * SMOOTH_STEP);
+    x += q.x * SMOOTH_W[i]; y += q.y * SMOOTH_W[i];
+  }
+  return { x: x / SMOOTH_SUM, y: y / SMOOTH_SUM, heading: rawCenter(trip, km).heading };
+}
+function rawCenter(trip, km) {
   const c = trip.cum, n = c.length;
   if (km <= 0) { const p = segPoint(trip.nodes[0], trip.nodes[1], 0); return { x: p.x + Math.cos(p.heading) * km, y: p.y + Math.sin(p.heading) * km, heading: p.heading }; }
   if (km >= c[n - 1]) { const p = segPoint(trip.nodes[n - 2], trip.nodes[n - 1], 1), d = km - c[n - 1]; return { x: p.x + Math.cos(p.heading) * d, y: p.y + Math.sin(p.heading) * d, heading: p.heading }; }
@@ -1466,9 +1483,12 @@ function carFeatures(trip, pos, P, out, detail) {
     const lead = i === 0, tail = i === L.n - 1;
     const nose = L.nose / 1000;
     const f = trackPoint(trip, Math.min(front, total + 0.02)), bk = trackPoint(trip, back);
+    // 整節車廂的零件（車門、車窗、轉向架、車頭）都放在車頭到車尾這條直線上，
+    // 彎道上才不會有零件沿著弧線跑出車身之外
+    const span0 = front - back, cp = k => { const t = (k - back) / span0; return { x: bk.x + (f.x - bk.x) * t, y: bk.y + (f.y - bk.y) * t, heading: f.heading }; };
     // 車身主體（去掉車頭流線段）
-    const bodyF = lead && nose ? trackPoint(trip, front - nose) : f;
-    const bodyB = tail && nose ? trackPoint(trip, back + nose) : bk;
+    const bodyF = lead && nose ? cp(front - nose) : f;
+    const bodyB = tail && nose ? cp(back + nose) : bk;
     // 車身底下留一段深色車底，看起來才像架在轉向架上
     add(quad(bodyF, bodyB, w * 0.42, w * 0.42), 0, h * 0.12, under);
     add(quad(bodyF, bodyB, w / 2, w / 2), h * 0.1, h, L.body);
@@ -1483,9 +1503,9 @@ function carFeatures(trip, pos, P, out, detail) {
       const doors = [];
       for (let j = 0; j < nDoor; j++) doors.push(k0 + span * (nDoor === 1 ? 0.9 : nDoor === 2 ? (j ? 0.85 : 0.15) : (j + 0.5) / nDoor));
       for (const dc of doors) {
-        const a = trackPoint(trip, dc - doorW / 2), b = trackPoint(trip, dc + doorW / 2);
+        const a = cp(dc - doorW / 2), b = cp(dc + doorW / 2);
         add(quad(a, b, iw + 0.00004, iw + 0.00004), h * 0.12, h * 0.82, doorColor);
-        const a2 = trackPoint(trip, dc - doorW * 0.3), b2 = trackPoint(trip, dc + doorW * 0.3);
+        const a2 = cp(dc - doorW * 0.3), b2 = cp(dc + doorW * 0.3);
         add(quad(a2, b2, iw + 0.00006, iw + 0.00006), h * 0.56, h * 0.78, paneColor);
       }
       // 車窗：避開車門的位置
@@ -1493,20 +1513,20 @@ function carFeatures(trip, pos, P, out, detail) {
       for (let k = 0; k < nw; k++) {
         const ka = k0 + span * (k + 0.18) / nw, kb = k0 + span * (k + 0.82) / nw;
         if (doors.some(dc => kb > dc - doorW * 0.7 && ka < dc + doorW * 0.7)) continue;
-        add(quad(trackPoint(trip, kb), trackPoint(trip, ka), iw + 0.00003, iw + 0.00003), h * 0.6, h * 0.77, paneColor);
+        add(quad(cp(kb), cp(ka), iw + 0.00003, iw + 0.00003), h * 0.6, h * 0.77, paneColor);
       }
       // 轉向架與車頂冷氣機
       for (const u of [0.13, 0.87]) {
-        const c = back + (front - back) * u, a = trackPoint(trip, c - 0.0013), b = trackPoint(trip, c + 0.0013);
+        const c = back + (front - back) * u, a = cp(c - 0.0013), b = cp(c + 0.0013);
         add(quad(a, b, w * 0.47, w * 0.47), 0, h * 0.14, '#1A1D21');
       }
       for (const u of [0.28, 0.72]) {
-        const c = back + (front - back) * u, a = trackPoint(trip, c - 0.0014), b = trackPoint(trip, c + 0.0014);
+        const c = back + (front - back) * u, a = cp(c - 0.0014), b = cp(c + 0.0014);
         add(quad(a, b, w * 0.27, w * 0.27), h * 1.05, h * 1.12, ac);
       }
       // 車廂之間的貫通道
       if (!tail && L.gap > 0) {
-        const a = trackPoint(trip, back - L.gap / 1000 - 0.0002), b = trackPoint(trip, back + 0.0002);
+        const a = cp(back - L.gap / 1000 - 0.0002), b = cp(back + 0.0002);
         add(quad(a, b, w * 0.4, w * 0.4), h * 0.15, h * 0.9, under);
       }
     }
@@ -1514,8 +1534,8 @@ function carFeatures(trip, pos, P, out, detail) {
     if (L.stripe2) add(quad(bodyF, bodyB, iw + 0.00002, iw + 0.00002), h * 0.33, h * 0.37, L.stripe2);
     add(quad(bodyF, bodyB, w * 0.36, w * 0.36), h, h * 1.07, L.roof);
     if (!L.stripe && trip.color) add(quad(bodyF, bodyB, iw + 0.00002, iw + 0.00002), h * 0.42, h * 0.52, trip.color);
-    if (lead && nose) noseFeatures(trip, L, trackPoint(trip, front - nose), trackPoint(trip, front), nose, w, h, detail, add, winColor, trip.color);
-    if (tail && nose && L.n > 1) noseFeatures(trip, L, trackPoint(trip, back + nose), trackPoint(trip, back), nose, w, h, detail, add, winColor, trip.color);
+    if (lead && nose) noseFeatures(trip, L, cp(front - nose), cp(front), nose, w, h, detail, add, winColor, trip.color);
+    if (tail && nose && L.n > 1) noseFeatures(trip, L, cp(back + nose), cp(back), nose, w, h, detail, add, winColor, trip.color);
   }
 }
 
@@ -1746,6 +1766,8 @@ const STYLE = {
     { id: 'bg', type: 'background', paint: { 'background-color': P0.sea } },
     { id: 'land', type: 'fill', source: 'land', paint: { 'fill-color': P0.land } },
     { id: 'wood', type: 'fill', source: 'omt', 'source-layer': 'landcover', filter: ['in', ['get', 'class'], ['literal', ['wood', 'forest']]], paint: { 'fill-color': P0.wood, 'fill-opacity': 0.6 } },
+    { id: 'park', type: 'fill', source: 'omt', 'source-layer': 'park', minzoom: 12, paint: { 'fill-color': P0.wood, 'fill-opacity': 0.55 } },
+    { id: 'grass', type: 'fill', source: 'omt', 'source-layer': 'landcover', minzoom: 13, filter: ['in', ['get', 'class'], ['literal', ['grass', 'farmland']]], paint: { 'fill-color': P0.wood, 'fill-opacity': 0.35 } },
     { id: 'hills', type: 'hillshade', source: 'demhs', paint: { 'hillshade-shadow-color': P0.hsShadow, 'hillshade-highlight-color': P0.hsHigh, 'hillshade-accent-color': P0.hsAccent, 'hillshade-exaggeration': 0.55 } },
     { id: 'water', type: 'fill', source: 'omt', 'source-layer': 'water', paint: { 'fill-color': P0.water } },
     { id: 'county', type: 'line', source: 'land', paint: { 'line-color': P0.edge, 'line-width': 0.8, 'line-opacity': 0.6 } },
@@ -1757,6 +1779,13 @@ const STYLE = {
     // 透視感：半透明建築加上貼地的輪廓線
     { id: 'bld-edge', type: 'line', source: 'omt', 'source-layer': 'building', minzoom: 14,
       paint: { 'line-color': P0.bldEdge, 'line-width': ['interpolate', ['linear'], ['zoom'], 14, 0.5, 18, 1.4], 'line-opacity': 0.85 } },
+    // 近看時的城市小細節：街道名稱與店家、廟宇、學校等地標
+    { id: 'street-names', type: 'symbol', source: 'omt', 'source-layer': 'transportation_name', minzoom: 16,
+      layout: { 'text-field': NAME, 'text-font': ['Noto Sans Regular'], 'text-size': 11, 'symbol-placement': 'line', 'text-letter-spacing': 0.1 },
+      paint: { 'text-color': P0.label, 'text-halo-color': P0.halo, 'text-halo-width': 1.2, 'text-opacity': 0.8 } },
+    { id: 'poi', type: 'symbol', source: 'omt', 'source-layer': 'poi', minzoom: 16.5, filter: ['has', 'name'],
+      layout: { 'text-field': NAME, 'text-font': ['Noto Sans Regular'], 'text-size': 10.5, 'text-max-width': 7, 'symbol-sort-key': ['get', 'rank'] },
+      paint: { 'text-color': P0.label, 'text-halo-color': P0.halo, 'text-halo-width': 1.2, 'text-opacity': 0.75 } },
     { id: 'places', type: 'symbol', source: 'omt', 'source-layer': 'place', filter: ['in', ['get', 'class'], ['literal', ['city', 'town']]],
       layout: { 'text-field': NAME, 'text-font': ['Noto Sans Regular'], 'text-size': ['interpolate', ['linear'], ['zoom'], 6, 11, 12, 15], 'text-letter-spacing': 0.15 },
       paint: { 'text-color': P0.label, 'text-halo-color': P0.halo, 'text-halo-width': 1.4, 'text-opacity': 0.75 } },
@@ -1765,11 +1794,39 @@ const STYLE = {
 
 /* ---------- 路線與車站資料 ---------- */
 function lineCoords(L) {
-  const out = [];
+  const out = [], joints = [];
   for (let i = 1; i < L.nodes.length; i++) {
     const a = L.nodes[i - 1], b = L.nodes[i], s = segGeom(a, b);
     const seg = s ? (s.rev ? s.g.coords.slice().reverse() : s.g.coords) : [[a.lon, a.lat], [b.lon, b.lat]];
+    if (out.length) joints.push(out.length - 1);
     out.push(...(out.length ? seg.slice(1) : seg));
+  }
+  return smoothJoints(out, joints);
+}
+/* 車站接點常有幾公尺的錯位：跟列車用一樣的前後 25 公尺三角加權平均，把接點附近重新取樣，軌道與列車才會疊在一起 */
+function smoothJoints(coords, joints) {
+  if (!joints.length) return coords;
+  const pts = coords.map(([lon, lat]) => proj(lat, lon)), cum = [0];
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+  const tot = cum[cum.length - 1];
+  const at = d => {
+    d = Math.max(0, Math.min(tot, d));
+    let lo = 0, hi = cum.length - 1;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (cum[m] <= d) lo = m; else hi = m; }
+    const t = (d - cum[lo]) / ((cum[hi] - cum[lo]) || 1);
+    return [pts[lo][0] + (pts[hi][0] - pts[lo][0]) * t, pts[lo][1] + (pts[hi][1] - pts[lo][1]) * t];
+  };
+  const sm = d => { let x = 0, y = 0; SMOOTH_W.forEach((w, i) => { const q = at(d + (i - 5) * SMOOTH_STEP); x += q[0] * w; y += q[1] * w; }); return [x / SMOOTH_SUM, y / SMOOTH_SUM]; };
+  const W = 0.05, out = [], done = new Set();
+  let j = 0;
+  for (let i = 0; i < pts.length; i++) {
+    while (j < joints.length && cum[joints[j]] + W <= cum[i]) j++;
+    const dj = j < joints.length ? cum[joints[j]] : Infinity;
+    if (cum[i] > dj - W) {
+      if (!done.has(j)) { done.add(j); for (let d = dj - W; d <= dj + W + 1e-9; d += SMOOTH_STEP) out.push(unproj(...sm(d))); }
+      continue;
+    }
+    out.push(coords[i]);
   }
   return out;
 }
@@ -1843,10 +1900,16 @@ function initMap() {
         'circle-radius': ['interpolate', ['exponential', 1.6], ['zoom'], 12, ['*', 1, ['get', 'k']], 16, ['*', 3, ['get', 'k']], 19, ['*', 10, ['get', 'k']]] } });
     // 半透明建築要畫在車廂之後：先畫的 3D 圖層會擋住後畫的，這樣隔著建築也看得到列車
     try { map.moveLayer('buildings', 'light-glow'); } catch {}
+    map.addSource('facade', { type: 'geojson', data: EMPTY });
+    map.addLayer({ id: 'facade', type: 'fill-extrusion', source: 'facade', minzoom: FACADE_ZOOM,
+      paint: { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 't'], 'fill-extrusion-base': ['get', 'b'], 'fill-extrusion-opacity': 0.8, 'fill-extrusion-vertical-gradient': false } }, 'light-glow');
+    map.on('moveend', () => Facade.soon());
+    map.on('sourcedata', e => { if (e.sourceId === 'omt' && e.isSourceLoaded) Facade.soon(); });
     map.addLayer({ id: 'train', type: 'circle', source: 'trains', maxzoom: CAR_ZOOM + 0.5,
       paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, ['case', ['get', 'sel'], 6, ['==', ['get', 'g'], 'mrt'], 2.4 * DOT, 3 * DOT], 12, ['case', ['get', 'sel'], 9, 5.5]],
         'circle-color': ['get', 'color'], 'circle-stroke-color': '#FFFFFF', 'circle-stroke-width': ['case', ['get', 'sel'], 2, 0.6], 'circle-pitch-alignment': 'map' } });
     map.setLayoutProperty('buildings', 'visibility', S.buildings ? 'visible' : 'none');
+    map.setLayoutProperty('facade', 'visibility', S.buildings ? 'visible' : 'none');
     S.mapReady = true;
     applyLook(true); pushTrains(true);
     map.on('click', onMapClick);
@@ -1881,6 +1944,75 @@ function syncTerrain(force) {
   try { map.setTerrain(want ? { source: 'dem', exaggeration: 1.5 } : null); } catch {}
 }
 
+/* ---------- 建築立面：近看時在附近建築外面貼上一層層窗帶與屋頂邊緣 ----------
+   向量圖磚的建築只有外框與高度，這裡把鏡頭附近的建築外框往外推一點點，
+   每層樓做一圈薄薄的窗帶（夜裡隨機亮燈），屋頂再加一圈收邊，城市才看得出樓層與細節 */
+const FACADE_ZOOM = 15.5;
+const Facade = (() => {
+  let timer = 0, last = null;
+  const R = COARSE ? 0.3 : 0.45, FLOOR = 0.0034, MAX_FEAT = COARSE ? 2500 : 5000;
+  // 把外框往外推 d 公里（每個頂點沿兩條邊的外法線平均方向）
+  function outset(pts, d) {
+    let a = 0;
+    for (let i = 0; i < pts.length - 1; i++) a += pts[i][0] * pts[i + 1][1] - pts[i + 1][0] * pts[i][1];
+    const sgn = a > 0 ? 1 : -1, n = pts.length - 1, out = [];
+    for (let i = 0; i < n; i++) {
+      const p = pts[i], q0 = pts[(i - 1 + n) % n], q1 = pts[i + 1];
+      const e0 = Math.hypot(p[0] - q0[0], p[1] - q0[1]) || 1, e1 = Math.hypot(q1[0] - p[0], q1[1] - p[1]) || 1;
+      let nx = (p[1] - q0[1]) / e0 + (q1[1] - p[1]) / e1, ny = -(p[0] - q0[0]) / e0 - (q1[0] - p[0]) / e1;
+      const l = Math.hypot(nx, ny) || 1;
+      const k = Math.min(3, 2 / l); // 尖角不要推太遠
+      out.push(unproj(p[0] + sgn * nx / l * d * k, p[1] + sgn * ny / l * d * k));
+    }
+    out.push(out[0]);
+    return out;
+  }
+  function build(force) {
+    timer = 0;
+    if (!map || !S.mapReady || !map.getSource('facade')) return;
+    const src = map.getSource('facade');
+    if (!S.buildings || map.getZoom() < FACADE_ZOOM) { if (last) { src.setData(EMPTY); last = null; } return; }
+    const c = map.getCenter(), [cx, cy] = proj(c.lat, c.lng);
+    if (!force && last && Math.hypot(cx - last.x, cy - last.y) < R * 0.3 && last.lit === S.P.lit) return;
+    let feats;
+    try { feats = map.querySourceFeatures('omt', { sourceLayer: 'building' }); } catch { return; }
+    const P = S.P, seen = new Set(), cand = [];
+    for (const f of feats) {
+      const h = +f.properties.render_height || 0, b0 = +f.properties.render_min_height || 0;
+      if (h - b0 < 6 || f.properties.hide_3d) continue;
+      const g = f.geometry, ring = g.type === 'Polygon' ? g.coordinates[0] : g.type === 'MultiPolygon' ? g.coordinates[0][0] : null;
+      if (!ring || ring.length < 4 || ring.length > 80) continue;
+      const pts = ring.map(([lon, lat]) => proj(lat, lon));
+      const d = Math.hypot(pts[0][0] - cx, pts[0][1] - cy);
+      if (d > R) continue;
+      const key = Math.round(pts[0][0] * 1e5) + ',' + Math.round(pts[0][1] * 1e5) + ',' + h;
+      if (seen.has(key)) continue; seen.add(key);
+      cand.push({ pts, h, b0, d, key });
+    }
+    cand.sort((a, b) => a.d - b.d);
+    const out = [], glass = P.lit ? '#1A2330' : mixHex(P.bld, '#24384E', 0.65), lit = '#FFC25A', warm = '#FF9E45';
+    const rim = mixHex(P.bldEdge, '#FFFFFF', P.lit ? 0 : 0.3), band = mixHex(P.bld, P.land, 0.4);
+    for (const B of cand) {
+      if (out.length > MAX_FEAT) break;
+      const outer = outset(B.pts, 0.0003), inner = outset(B.pts, 0.00008), shell = [outer, inner.slice().reverse()];
+      const nF = Math.min(45, Math.floor((B.h - B.b0) / (FLOOR * 1000)));
+      const seed = hash(B.key);
+      // 一樓店面：較高的一整圈玻璃
+      if (B.b0 === 0) out.push({ type: 'Feature', properties: { b: 0.4, t: 2.9, c: P.lit ? (seed < 0.6 ? warm : glass) : glass }, geometry: { type: 'Polygon', coordinates: shell } });
+      for (let k = 1; k < nF; k++) {
+        const z = B.b0 + k * FLOOR * 1000, on = P.lit && hash(B.key + k) < 0.32 + seed * 0.25;
+        out.push({ type: 'Feature', properties: { b: z + 1.0, t: z + 2.3, c: on ? (hash(k + B.key) < 0.25 ? warm : lit) : glass }, geometry: { type: 'Polygon', coordinates: shell } });
+        // 每隔幾層加一道樓板線，讓立面有分段
+        if (k % 4 === 0) out.push({ type: 'Feature', properties: { b: z - 0.25, t: z + 0.15, c: band }, geometry: { type: 'Polygon', coordinates: shell } });
+      }
+      out.push({ type: 'Feature', properties: { b: B.h - 0.1, t: B.h + 0.7, c: rim }, geometry: { type: 'Polygon', coordinates: shell } });
+    }
+    src.setData({ type: 'FeatureCollection', features: out });
+    last = { x: cx, y: cy, lit: P.lit };
+  }
+  return { soon(force) { if (force) last = null; if (!timer) timer = setTimeout(() => build(), 350); } };
+})();
+
 /* ---------- 光線與天氣 ---------- */
 function applyLook(force) {
   if (!map || !S.mapReady) return;
@@ -1891,9 +2023,13 @@ function applyLook(force) {
   const P = S.P = paletteAt(hour, wx), W = WEATHER[wx];
   const set = (l, k, v) => { try { map.setPaintProperty(l, k, v); } catch {} };
   set('bg', 'background-color', P.sea); set('land', 'fill-color', P.land); set('wood', 'fill-color', P.wood);
-  set('water', 'fill-color', P.water); set('bld-edge', 'line-color', P.bldEdge); set('county', 'line-color', P.edge); set('roads', 'line-color', P.road); set('buildings', 'fill-extrusion-color', P.bld); set('buildings', 'fill-extrusion-opacity', P.bldOp);
+  set('water', 'fill-color', P.water); set('bld-edge', 'line-color', P.bldEdge); set('county', 'line-color', P.edge); set('roads', 'line-color', P.road); set('buildings', 'fill-extrusion-opacity', P.bldOp);
   set('hills', 'hillshade-shadow-color', P.hsShadow); set('hills', 'hillshade-highlight-color', P.hsHigh); set('hills', 'hillshade-accent-color', P.hsAccent);
-  set('places', 'text-color', P.label); set('places', 'text-halo-color', P.halo);
+  for (const l of ['places', 'street-names', 'poi']) { set(l, 'text-color', P.label); set(l, 'text-halo-color', P.halo); }
+  set('park', 'fill-color', P.wood); set('grass', 'fill-color', P.wood);
+  // 高樓顏色亮一點、矮房暗一點，整片街區才有層次
+  set('buildings', 'fill-extrusion-color', ['interpolate', ['linear'], ['coalesce', ['get', 'render_height'], 8], 4, mixHex(P.bld, P.land, 0.25), 30, P.bld, 120, mixHex(P.bld, P.bldEdge, 0.35)]);
+  Facade.soon(true);
   set('rail', 'line-color', railColor(P)); set('rail-glow', 'line-color', railColor(P));
   set('rail-glow', 'line-opacity', ['interpolate', ['linear'], ['zoom'], 13, P.glow * 0.5, 16, 0]);
   set('train-halo', 'circle-opacity', P.glow + 0.15);
@@ -2334,7 +2470,7 @@ function toggleBtn(id, key, apply) {
   b.addEventListener('click', () => { S[key] = !S[key]; store.set(key, S[key]); b.setAttribute('aria-pressed', String(S[key])); if (S.mapReady) apply(S[key]); });
 }
 toggleBtn('#terrainbtn', 'terrain', () => syncTerrain(true));
-toggleBtn('#buildbtn', 'buildings', on => map.setLayoutProperty('buildings', 'visibility', on ? 'visible' : 'none'));
+toggleBtn('#buildbtn', 'buildings', on => { for (const l of ['buildings', 'facade']) map.setLayoutProperty(l, 'visibility', on ? 'visible' : 'none'); });
 toggleBtn('#labelbtn', 'labels', on => map.setLayoutProperty('st-label', 'visibility', on ? 'visible' : 'none'));
 
 $('#viewbtn').addEventListener('click', cycleView);

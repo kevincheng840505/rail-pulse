@@ -328,7 +328,13 @@ function tripPosAt(trip, m) {
 /* 營運日：凌晨 0~3 點視為前一營運日的延續 */
 function serviceMinute(min) { return min < 180 ? min + 1440 : min; }
 function tripPos(trip, min) {
-  return tripPosAt(trip, min) || (min < 240 ? tripPosAt(trip, min + 1440) : null);
+  const p = tripPosAt(trip, min) || (min < 240 ? tripPosAt(trip, min + 1440) : null);
+  // 從起點站發車時，整列車要停在月台與軌道上：車頭至少在一個車長之外，車尾才不會伸出路線終點
+  if (p && typeof trainLength === 'function') {
+    if (trip.trainLen == null) trip.trainLen = Math.min(trainLength(trip), trip.cum[trip.cum.length - 1] * 0.5);
+    if (p.km < trip.trainLen) p.km = trip.trainLen;
+  }
+  return p;
 }
 
 /* ---------- TDX 即時資料（部署於自有網域時可用） ---------- */
