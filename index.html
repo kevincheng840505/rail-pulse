@@ -74,7 +74,8 @@ body.clean #spotcap { top:calc(env(safe-area-inset-top,0px) + 62px); }
 #aircap .st { margin-top:10px; font-family:var(--font-mono); font-size:14px; color:var(--accent); }
 #aircap .caprow { display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
 body.airwatch #caption, body.airwatch #viewbtn { display:none !important; }
-body.clean #aircap, body.clean #dock { position:fixed; left:50%; transform:translateX(-50%); bottom:calc(env(safe-area-inset-bottom,0px) + 18px); z-index:5; display:flex; gap:8px; align-items:center; }
+body.clean #aircap { display:none !important; }
+#dock { position:fixed; left:50%; transform:translateX(-50%); bottom:calc(env(safe-area-inset-bottom,0px) + 18px); z-index:5; display:flex; gap:8px; align-items:center; }
 .pillbtn { height:44px; padding:0 18px; border-radius:999px; font-weight:700; font-size:15px; letter-spacing:.04em; display:flex; align-items:center; gap:8px; white-space:nowrap; }
 .pillbtn.small { height:36px; padding:0 14px; font-size:13px; }
 .pillbtn:disabled { opacity:.45; cursor:progress; }
