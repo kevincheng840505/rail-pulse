@@ -388,7 +388,7 @@ const TDX = {
      - 每 260 毫秒最多送出一個（約每秒 4 次）
      - pri 大的先送：使用者正在看的（客運即時位置、點選的車）排在背景讀路線形狀之前
      - 遇到 429 整個佇列暫停一下再重送，最多重試 4 次，呼叫端多半不會看到失敗 */
-  q: [], qTimer: 0, nextAt: 0, holdUntil: 0, hold: 0,
+  q: [], qTimer: 0, nextAt: 0, holdUntil: 0, hold: 0, gap: 260, gapAt: 0,
   get(path, cred, pri = 1) {
     return new Promise((res, rej) => {
       const job = { path, cred, pri, res, rej, tries: 0, q0: performance.now() };
@@ -412,7 +412,9 @@ const TDX = {
       return;
     }
     const job = this.q.shift();
-    this.nextAt = Date.now() + 260;
+    // 收到 429 後把間隔拉長（最多 1 秒一個），30 秒沒再遇到就慢慢縮回 260 毫秒
+    if (this.gap > 260 && Date.now() - this.gapAt > 30e3) { this.gap = Math.max(260, this.gap * 0.8); this.gapAt = Date.now(); }
+    this.nextAt = Date.now() + this.gap;
     this.send(job);
     this.pump();
   },
@@ -425,6 +427,7 @@ const TDX = {
       if (r.status === 429 && job.tries < 4) {
         job.tries++;
         const ra = +r.headers.get('retry-after');
+        this.gap = Math.min(1000, this.gap * 1.5); this.gapAt = Date.now();
         this.hold = Math.min(8000, Math.max(1500, this.hold * 2));
         this.holdUntil = Math.max(this.holdUntil, Date.now() + (ra > 0 ? ra * 1000 : this.hold));
         this.q.unshift(job); this.pump();
@@ -477,7 +480,7 @@ const TDX = {
   },
   async loadTimetables(cred) {
     // 台鐵與高鐵同時讀：以前要等台鐵整份（好幾 MB）下載完才開始讀高鐵
-    const [tra, thsr] = await Promise.all([this.get('v3/Rail/TRA/DailyTrainTimetable/Today', cred), this.get('v2/Rail/THSR/DailyTimetable/Today', cred)]);
+    const [tra, thsr] = await Promise.all([this.get('v3/Rail/TRA/DailyTrainTimetable/Today', cred, 4), this.get('v2/Rail/THSR/DailyTimetable/Today', cred, 4)]);
     const trips = [];
     for (const t of (tra.TrainTimetables || [])) {
       const info = t.TrainInfo;
@@ -503,7 +506,7 @@ const TDX = {
   METRO_OPS: [['TRTC', 'TRTC'], ['TYMC', 'TYMC'], ['TMRT', 'TMRT'], ['KRTC', 'KRTC'], ['KLRT', 'KRTC']],
   async loadMetro(cred) {
     const all = await Promise.all(this.METRO_OPS.map(async ([op, sys]) => {
-      const get = path => this.get(`v2/Rail/Metro/${path}/${op}`, cred).catch(() => null);
+      const get = path => this.get(`v2/Rail/Metro/${path}/${op}`, cred, 2).catch(() => null);
       const [s2s, freq, fl] = await Promise.all([get('S2STravelTime'), get('Frequency'), get('FirstLastTimetable')]);
       return { op, sys, s2s: Array.isArray(s2s) ? s2s : [], freq: Array.isArray(freq) ? freq : [], fl: Array.isArray(fl) ? fl : [] };
     }));
@@ -602,8 +605,9 @@ const TDX = {
     resetTrips(t => !t.tdxMetro && !(t.line && covered.has(t.line)));
     trips.forEach(registerTrip);
   },
-  async loadDelays(cred, isCurrent = () => true) {
-    const j = await this.get('v2/Rail/TRA/LiveTrainDelay', cred);
+  // pre：已經先排進佇列的請求（開頁時誤點和時刻表一起排，不等捷運）
+  async loadDelays(cred, isCurrent = () => true, pre) {
+    const j = await (pre || this.get('v2/Rail/TRA/LiveTrainDelay', cred, 3));
     if (!isCurrent()) return 0;
     const map = new Map();
     for (const d of j) map.set(String(d.TrainNo), d.DelayTime);

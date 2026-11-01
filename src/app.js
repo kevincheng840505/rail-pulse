@@ -1240,6 +1240,7 @@ async function connectTDX(cred, quiet) {
   try {
     // 時刻表先排進 TDX 佇列，捷運資料緊接著排（以前要等時刻表、誤點都讀完才開始讀捷運）
     const ttP = TDX.loadTimetables(cred);
+    const delayP = TDX.get('v2/Rail/TRA/LiveTrainDelay', cred, 4); delayP.catch(() => {});
     const metroP = TDX.loadMetro(cred).catch(e => { console.warn(e); return null; });
     const trips = await ttP;
     if (!isCurrent()) return;
@@ -1248,7 +1249,7 @@ async function connectTDX(cred, quiet) {
     perfMark('台鐵高鐵當日時刻表套用');
     afterTripsChanged(); // 官方時刻表一到就換上，不等捷運
     tdxStatus(`已載入 ${trips.length} 班台鐵與高鐵當日時刻，正在讀即時誤點與捷運資料…`);
-    let d = 0; try { d = await TDX.loadDelays(cred, isCurrent); } catch {}
+    let d = 0; try { d = await TDX.loadDelays(cred, isCurrent, delayP); } catch {}
     if (!isCurrent()) return;
     perfMark('台鐵即時誤點套用');
     const metro = await metroP;
