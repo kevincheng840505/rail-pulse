@@ -29,6 +29,7 @@ async function loadBuses() {
   if (gen !== BUS.gen || !Array.isArray(j)) return;
   BUS.loadAt = Date.now();
   if (!BUS.ops.size) loadOperators();
+  loadAllRoutes();
   const seen = new Set();
   for (const r of j) {
     const pos = r.BusPosition || {}, lat = +pos.PositionLat, lon = +pos.PositionLon, plate = r.PlateNumb;
@@ -55,10 +56,23 @@ async function loadOperators() {
   } catch {}
 }
 // 路線形狀與起訖站：只讀畫面附近與跟拍中的路線，排隊慢慢讀，不一次打爆額度
-function wantRoute(uid) {
-  if (!uid || BUS.shapes.has(uid) || BUS.queue.includes(uid) || BUS_DEMO) return;
-  if ((BUS.retryAt.get(uid) || 0) > Date.now()) return; // 上次讀取失敗，稍後再試
-  BUS.queue.push(uid); pumpQueue();
+// urgent：使用者點選的車，插到最前面並立刻讀，不等間隔
+function wantRoute(uid, urgent) {
+  if (!uid || BUS_DEMO) return;
+  if (urgent && BUS.queue.includes(uid)) { BUS.queue.splice(BUS.queue.indexOf(uid), 1); BUS.queue.unshift(uid); }
+  else if (BUS.shapes.has(uid) || BUS.queue.includes(uid)) return;
+  else if ((BUS.retryAt.get(uid) || 0) > Date.now() && !urgent) return; // 上次讀取失敗，稍後再試
+  else if (urgent) BUS.queue.unshift(uid); else BUS.queue.push(uid);
+  if (urgent && BUS.qWait) { clearTimeout(BUS.qWait); BUS.qWait = 0; BUS.qBusy = false; }
+  pumpQueue();
+}
+// 所有路線的起訖站一次讀完（資料小），點車就馬上有起訖站
+async function loadAllRoutes() {
+  if (BUS.routesAll) return; BUS.routesAll = true;
+  try {
+    const j = await busFetch('v2/Bus/Route/InterCity?$select=RouteUID,DepartureStopNameZh,DestinationStopNameZh,Operators');
+    if (Array.isArray(j)) for (const r of j) if (r.RouteUID) BUS.routes.set(r.RouteUID, { from: r.DepartureStopNameZh || '', to: r.DestinationStopNameZh || '', op: r.Operators && r.Operators[0] ? zh(r.Operators[0].OperatorName) : '' });
+  } catch { BUS.routesAll = false; }
 }
 async function pumpQueue() {
   if (BUS.qBusy || !BUS.queue.length) return;
@@ -75,11 +89,11 @@ async function pumpQueue() {
     // 暫時性失敗（斷線、429）不要永久快取成空的，60 秒後允許重讀
     BUS.shapes.delete(uid); BUS.retryAt.set(uid, Date.now() + 60e3);
   }
-  try {
+  if (!BUS.routes.has(uid)) try {
     const j = await busFetch(`v2/Bus/Route/InterCity?$filter=${f}&$select=RouteUID,DepartureStopNameZh,DestinationStopNameZh,Operators`);
     if (Array.isArray(j) && j[0]) BUS.routes.set(uid, { from: j[0].DepartureStopNameZh || '', to: j[0].DestinationStopNameZh || '', op: j[0].Operators && j[0].Operators[0] ? zh(j[0].Operators[0].OperatorName) : '' });
   } catch {}
-  setTimeout(() => { BUS.qBusy = false; pumpQueue(); }, 1200);
+  BUS.qWait = setTimeout(() => { BUS.qWait = 0; BUS.qBusy = false; pumpQueue(); }, 1200);
 }
 // WKT：LINESTRING(lon lat, ...) 或 MULTILINESTRING((...),(...))，多段就接起來
 function parseWKT(w) {
@@ -88,9 +102,6 @@ function parseWKT(w) {
   return pts;
 }
 // 形狀換成平面公尺座標並算累積距離，方便沿線找位置
-const BKX = 111320 * Math.cos(23.7 / DEG), BKY = 110570;
-const bxy = (lon, lat) => [(lon - 121) * BKX, (lat - 23.7) * BKY];
-const bll = (x, y) => [x / BKX + 121, y / BKY + 23.7];
 function shapeOf(line) {
   const xy = line.map(([lon, lat]) => bxy(lon, lat)), cum = [0];
   for (let i = 1; i < xy.length; i++) cum.push(cum[i - 1] + Math.hypot(xy[i][0] - xy[i - 1][0], xy[i][1] - xy[i - 1][1]));
@@ -121,29 +132,39 @@ function shapeFor(b) {
 }
 
 /* ---------- 位置推算 ----------
-   定位約每 30~60 秒一筆：從最新一筆沿路線往前推（用回報的車速，最多推 2 分鐘），
-   畫出來的位置再慢慢追上推算值，修正時不會瞬移。 */
+   定位約每 30~60 秒一筆，從最新一筆往前推算（用回報的車速，最多推 2 分鐘）：
+   有 TDX 路線形狀就沿形狀走；沒有的話沿國道路網（data/freeway.json）走；
+   都不在路上時只沿方位角推 15 秒，不會開進田裡。
+   最後一律貼到附近同方向的國道車道上，高架段跟著升高；畫出的位置再慢慢追上推算值。 */
 function busPos(b, now, dt) {
   const f = b.fixes[b.fixes.length - 1]; if (!f) return null;
-  const v = (f.speed || 0) / 3.6, ahead = Math.min(120, Math.max(0, (now - f.t) / 1000)) * v;
-  const sh = shapeFor(b);
-  let want;
+  const v = (f.speed || 0) / 3.6, age = Math.min(120, Math.max(0, (now - f.t) / 1000)), ahead = age * v;
+  const sh = shapeFor(b), [x0, y0] = bxy(f.lon, f.lat), az = f.az || b.az || 0;
+  let want = null;
   if (sh) {
-    if (b.s0 == null || b.sh !== sh) { const [x, y] = bxy(f.lon, f.lat), pr = project(sh, x, y, b.sh === sh ? b.s : null); if (pr && pr.d < 400) { b.s0 = pr.s; b.sh = sh; } else b.s0 = -1; }
+    if (b.s0 == null || b.sh !== sh) { const pr = project(sh, x0, y0, b.sh === sh ? b.s : null); if (pr && pr.d < 400) { b.s0 = pr.s; b.sh = sh; } else b.s0 = -1; }
     if (b.s0 >= 0) {
       let s = b.s0 + ahead;
       if (b.s == null || Math.abs(s - b.s) > 3000) b.s = s;
       else if (s > b.s) b.s += (s - b.s) * Math.min(1, dt * 1.2);   // 只往前追，推算值落後時就停著等
-      const q = along(sh, b.s);
-      return { x: q.x, y: q.y, h: q.h };
+      want = along(sh, b.s); b.xy = null;
     }
   }
-  // 沒有路線形狀：沿回報的方位角直線推
-  const [x0, y0] = bxy(f.lon, f.lat), h = f.az || b.az || 0;
-  want = { x: x0 + Math.sin(h / DEG) * ahead, y: y0 + Math.cos(h / DEG) * ahead, h };
-  if (!b.xy || Math.hypot(want.x - b.xy.x, want.y - b.xy.y) > 3000) b.xy = { ...want };
-  else { const k = Math.min(1, dt * 1.2); b.xy.x += (want.x - b.xy.x) * k; b.xy.y += (want.y - b.xy.y) * k; b.xy.h = want.h; }
-  return b.xy;
+  if (!want) {
+    // 定位點貼到國道上（每筆定位只找一次）
+    if (b.fwFix !== f) { b.fwFix = f; b.fw = fwySnap(x0, y0, az, 60, b.fwOn); }
+    if (b.fw) { const p = fwyAdvance(b.fw.w, b.fw.s, ahead); want = { x: p.x, y: p.y, h: p.h }; }
+    else { const d = Math.min(age, 15) * v; want = { x: x0 + Math.sin(az / DEG) * d, y: y0 + Math.cos(az / DEG) * d, h: az }; }
+    if (!b.xy || Math.hypot(want.x - b.xy.x, want.y - b.xy.y) > 3000) b.xy = { ...want };
+    else { const k = Math.min(1, dt * 1.2); b.xy.x += (want.x - b.xy.x) * k; b.xy.y += (want.y - b.xy.y) * k; b.xy.h = want.h; }
+    want = b.xy;
+  }
+  // 貼到同方向車道、取得橋面高度
+  let x = want.x, y = want.y, alt = 0;
+  const sn = fwySnap(x, y, want.h, 28, b.fwOn);
+  if (sn) { x = sn.x; y = sn.y; alt = sn.alt; b.fwOn = sn.w; } else b.fwOn = null;
+  b.alt = b.alt == null || Math.abs(alt - b.alt) > 20 ? alt : b.alt + (alt - b.alt) * Math.min(1, dt * 4);
+  return { x, y, h: want.h, alt: b.alt };
 }
 
 /* ---------- 3D 模型：國道客運遊覽車 ----------
@@ -336,8 +357,8 @@ function stepBuses(now) {
     wantRoute(b.route);
     const q = busPos(b, t, dt); if (!q) continue;
     const ll = bll(q.x, q.y), [lk, lv] = busLivery(b);
-    b.drawn = { ll, h: q.h };
-    extra.push({ p: { alt: 0, h: q.h, pitch: 0 }, ll, len: 12, mesh: () => PlaneGL.meshFor('bus|' + lk, () => busParts(lv)), onPick: () => followBus(b) });
+    b.drawn = { ll, h: q.h, alt: q.alt || 0 };
+    extra.push({ p: { alt: q.alt || 0, h: q.h, pitch: 0 }, ll, len: 12, mesh: () => PlaneGL.meshFor('bus|' + lk, () => busParts(lv)), onPick: () => followBus(b) });
   }
   PlaneGL.extra = extra;
   let cam = null;
@@ -365,7 +386,10 @@ function busCamera(b) {
   else if (view === 'top') { back = 25; right = 6; up = 110; }
   else if (view === 'orbit') { const th = performance.now() / 1000 * 0.15; back = Math.cos(th) * 55; right = Math.sin(th) * 55; up = 22; }
   const cx = x - v[0] * back + n[0] * right, cy = y - v[1] * back + n[1] * right;
-  let cam = camFromTo(bll(cx, cy), up, ll, 1.5, COARSE ? 76 : 80);
+  // 沿「相機→客運」的視線延伸到地面，地面那一點當畫面中心，客運才會在畫面正中
+  const alt = b.drawn.alt || 0, cz = up + alt, tz = 1.5 + alt, k = cz / Math.max(0.5, cz - tz);
+  const gx = cx + (x - cx) * k, gy = cy + (y - cy) * k;
+  let cam = camFromTo(bll(cx, cy), cz, bll(gx, gy), 0, COARSE ? 76 : 80);
   if (BUS.blend) {
     const T = BUS.blend, k = ease(Math.min(1, (performance.now() - T.t0) / 1800));
     cam.center = [T.from.c.lng + (cam.center.lng - T.from.c.lng) * k, T.from.c.lat + (cam.center.lat - T.from.c.lat) * k];
@@ -381,7 +405,7 @@ function followBus(b) {
   if (S.follow) unfollow();
   if (AIR.watch) exitWatch();
   BUS.follow = b; BUS.paused = false; BUS.auto = null; busBlend();
-  wantRoute(b.route);
+  wantRoute(b.route, true);
   renderBusCap(true);
 }
 function exitBusFollow() {
@@ -515,7 +539,7 @@ setInterval(() => { if (S.pickGroup === 'bus' && !$('#picker').hidden) renderBus
   }
 }
 function reloadBuses() { loadBuses().catch(e => console.warn(e)); }
-setTimeout(reloadBuses, 7000);
+setTimeout(reloadBuses, 3000);
 setInterval(reloadBuses, 30e3);
 document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - BUS.loadAt > 30e3) reloadBuses(); });
 $('#tdxgo').addEventListener('click', () => setTimeout(reloadBuses, 3000));
