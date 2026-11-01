@@ -463,7 +463,7 @@ function airportFeatures() {
    每種「機型＋航空公司＋起落架」的模型只建一次放進 GPU，每格只換一個矩陣（位置、航向、仰角）。
    以前每格把幾百個多邊形用 GeoJSON 重送，要等背景執行緒切完圖磚才畫得出來，飛機和鏡頭對不上就會抖。 */
 const PlaneGL = {
-  draw: [], extra: [], meshes: new Map(), gl: null, prog: null, last: null, hover: false, kickAt: 0,
+  draw: [], extra: [], stat: [], meshes: new Map(), gl: null, prog: null, last: null, hover: false, kickAt: 0,
   /* 飛機與客運會動，地圖要重畫才看得到。但每一格都重畫整張地圖（圖磚、建築、標籤全部）對手機很重，
      所以只在東西真的在畫面上時才重畫，而且依它在螢幕上有多大決定頻率：
      大到看得清楚才每格重畫；只有幾個像素時一秒幾次就夠，肉眼看不出差別 */
@@ -511,7 +511,8 @@ const PlaneGL = {
   meshFor(key, parts) {
     let m = PlaneGL.meshes.get(key);
     if (!m) {
-      const d = PlaneGL.build(parts()), gl = PlaneGL.gl;
+      // parts() 可回傳部位清單，或已經算好的三角形（國道高架網格）
+      const raw = parts(), d = raw && raw.P ? raw : PlaneGL.build(raw), gl = PlaneGL.gl;
       m = { n: d.n, bufs: [d.P, d.N, d.C].map(arr => { const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, arr, gl.STATIC_DRAW); return b; }) };
       PlaneGL.meshes.set(key, m);
     }
@@ -566,8 +567,8 @@ const PlaneGL = {
     onRemove() { PlaneGL.gl = null; PlaneGL.meshes.clear(); },
     render(gl, matrix) {
       PlaneGL.last = matrix;
-      // 飛機（關掉時不畫）加上其他交通工具（國道客運）
-      const list = (AIR.on ? PlaneGL.draw : []).concat(PlaneGL.extra);
+      // 飛機（關掉時不畫）加上國道高架（靜態）與其他交通工具（國道客運）
+      const list = (AIR.on ? PlaneGL.draw : []).concat(PlaneGL.stat, PlaneGL.extra);
       if (!list.length || !PlaneGL.prog) return;
       const L = PlaneGL.loc;
       gl.useProgram(PlaneGL.prog);

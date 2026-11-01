@@ -17,19 +17,27 @@ async function loadBuses() {
   const cred = busCred();
   if (!cred.id || !cred.secret) { BUS.live = false; BUS.status = '需要 TDX 金鑰'; return; }
   if (!BUS.on || document.hidden) return;
+  if (BUS.loading) return;
   const gen = ++BUS.gen;
   const sel = '$select=PlateNumb,OperatorID,RouteUID,RouteName,SubRouteUID,SubRouteName,Direction,BusPosition,Speed,Azimuth,GPSTime';
   let j;
+  BUS.loading = true;
   try { j = await busFetch('v2/Bus/RealTimeByFrequency/InterCity?' + (BUS.noSelect ? '' : sel)); }
   catch (e) {
+    BUS.loading = false;
     // 欄位名稱不合時 TDX 會回 400：改成不指定欄位再試一次
     if (!BUS.noSelect && /400/.test(e.message)) { BUS.noSelect = true; return loadBuses(); }
-    BUS.status = 'TDX 客運讀取失敗'; return;
+    // 開頁時列車資料也在讀，TDX 可能回 429（太頻繁）：不要等 30 秒，3、6、12 秒後重試
+    BUS.fails = (BUS.fails || 0) + 1;
+    BUS.status = /429/.test(e.message) ? 'TDX 忙碌中，稍後重試…' : 'TDX 客運讀取失敗，稍後重試…';
+    if (!BUS.list.size && BUS.fails <= 5) setTimeout(reloadBuses, 3000 * 2 ** Math.min(2, BUS.fails - 1));
+    return;
   }
+  BUS.loading = false; BUS.fails = 0;
   if (gen !== BUS.gen || !Array.isArray(j)) return;
   BUS.loadAt = Date.now();
-  if (!BUS.ops.size) loadOperators();
-  loadAllRoutes();
+  // 起訖站、客運公司名稱接著依序讀，不同時打（避免 429 擋到使用者點的車）
+  if (!BUS.extraLoading) { BUS.extraLoading = true; (async () => { await loadAllRoutes(); if (!BUS.ops.size) await loadOperators(); BUS.extraLoading = false; })(); }
   const seen = new Set();
   for (const r of j) {
     const pos = r.BusPosition || {}, lat = +pos.PositionLat, lon = +pos.PositionLon, plate = r.PlateNumb;
@@ -126,6 +134,11 @@ function along(sh, s) {
   const i = lo, a = sh.xy[i - 1], b = sh.xy[i], seg = sh.cum[i] - sh.cum[i - 1] || 1, k = (s - sh.cum[i - 1]) / seg;
   return { x: a[0] + (b[0] - a[0]) * k, y: a[1] + (b[1] - a[1]) * k, h: (Math.atan2(b[0] - a[0], b[1] - a[1]) * DEG + 360) % 360 };
 }
+function revShape(sh) {
+  const xy = sh.xy.slice().reverse(), cum = [0];
+  for (let i = 1; i < xy.length; i++) cum.push(cum[i - 1] + Math.hypot(xy[i][0] - xy[i - 1][0], xy[i][1] - xy[i - 1][1]));
+  return { sub: sh.sub, dir: sh.dir, xy, cum, len: cum[cum.length - 1] };
+}
 function shapeFor(b) {
   const list = BUS.shapes.get(b.route); if (!list || !list.length) return null;
   return list.find(x => x.sub === b.sub && x.dir === b.dir) || list.find(x => x.dir === b.dir) || list[0];
@@ -136,28 +149,70 @@ function shapeFor(b) {
    有 TDX 路線形狀就沿形狀走；沒有的話沿國道路網（data/freeway.json）走；
    都不在路上時只沿方位角推 15 秒，不會開進田裡。
    最後一律貼到附近同方向的國道車道上，高架段跟著升高；畫出的位置再慢慢追上推算值。 */
+// 推算距離：前 60 秒照回報車速，之後逐漸放慢（定位太舊時不會一直衝、也不會一秒內煞停）
+function busAhead(v, age, tau) {
+  if (tau) return v * tau * (1 - Math.exp(-age / tau));
+  return age <= 60 ? v * age : v * (60 + 40 * (1 - Math.exp(-(age - 60) / 40)));
+}
+// 畫出的車用「有加減速限制」的速度去追推算位置：落後就加速、超前就慢慢煞車停住，
+// 不會瞬間停下或倒退
+function busChase(b, gap, vRep, dt) {
+  const vmax = Math.max(6, vRep * 1.3 + 3), want = gap <= 0.5 ? 0 : Math.min(vmax, gap / 3);
+  if (b.vd == null) b.vd = Math.min(vmax, Math.max(0, want));
+  const acc = want > b.vd ? 1.4 : 2.4;
+  b.vd = Math.max(0, b.vd + Math.max(-acc * dt, Math.min(acc * dt, want - b.vd)));
+  return b.vd * dt;
+}
 function busPos(b, now, dt) {
   const f = b.fixes[b.fixes.length - 1]; if (!f) return null;
-  const v = (f.speed || 0) / 3.6, age = Math.min(120, Math.max(0, (now - f.t) / 1000)), ahead = age * v;
-  const sh = shapeFor(b), [x0, y0] = bxy(f.lon, f.lat), az = f.az || b.az || 0;
+  const v = (f.speed || 0) / 3.6, age = Math.max(0, (now - f.t) / 1000), ahead = busAhead(v, age);
+  let sh = shapeFor(b);
+  const [x0, y0] = bxy(f.lon, f.lat), az = f.az || b.az || 0;
   let want = null;
+  // 路線形狀的方向和車的行進方向相反時（TDX 去回程對不上），改用反向的形狀，不然推算值會一直落後、車停住
+  if (sh && b.shFix !== f) {
+    b.shFix = f; const pr = project(sh, x0, y0, null);
+    // 車速太低或沒有方位角時判斷不出方向，沿用原本的判斷
+    if (pr && az && f.speed > 5) {
+      const rev = angGap(along(sh, pr.s).h, az) > 110;
+      // 方向改變時，畫出的位置換到另一個方向的座標（反向形狀的 s = 全長 − s）
+      if (rev !== !!b.shRev && b.s != null) b.s = sh.len - b.s;
+      b.shRev = rev;
+    }
+  }
+  if (sh && b.shRev) sh = sh.rev || (sh.rev = revShape(sh));
   if (sh) {
     if (b.s0 == null || b.sh !== sh) { const pr = project(sh, x0, y0, b.sh === sh ? b.s : null); if (pr && pr.d < 400) { b.s0 = pr.s; b.sh = sh; } else b.s0 = -1; }
     if (b.s0 >= 0) {
-      let s = b.s0 + ahead;
-      if (b.s == null || Math.abs(s - b.s) > 3000) b.s = s;
-      else if (s > b.s) b.s += (s - b.s) * Math.min(1, dt * 1.2);   // 只往前追，推算值落後時就停著等
-      want = along(sh, b.s); b.xy = null;
+      const est = Math.min(sh.len, b.s0 + ahead);
+      if (b.s == null || Math.abs(est - b.s) > 3000) { b.s = est; b.vd = v; }
+      else b.s = Math.min(sh.len, b.s + busChase(b, est - b.s, v, dt));
+      want = along(sh, b.s); b.xy = null; b.fd = null;
     }
   }
   if (!want) {
-    // 定位點貼到國道上（每筆定位只找一次）
+    // 定位點貼到國道上（每筆定位只找一次），沿國道路網推算
     if (b.fwFix !== f) { b.fwFix = f; b.fw = fwySnap(x0, y0, az, 60, b.fwOn); }
-    if (b.fw) { const p = fwyAdvance(b.fw.w, b.fw.s, ahead); want = { x: p.x, y: p.y, h: p.h }; }
-    else { const d = Math.min(age, 15) * v; want = { x: x0 + Math.sin(az / DEG) * d, y: y0 + Math.cos(az / DEG) * d, h: az }; }
-    if (!b.xy || Math.hypot(want.x - b.xy.x, want.y - b.xy.y) > 3000) b.xy = { ...want };
-    else { const k = Math.min(1, dt * 1.2); b.xy.x += (want.x - b.xy.x) * k; b.xy.y += (want.y - b.xy.y) * k; b.xy.h = want.h; }
-    want = b.xy;
+    if (b.fw) {
+      const e = fwyAdvance(b.fw.w, b.fw.s, ahead);
+      let d = b.fd ? fwyPoint(FWY.ways[b.fd.w], b.fd.s) : null;
+      if (!d || Math.hypot(e.x - d.x, e.y - d.y) > 1500) { b.fd = { w: e.w, s: e.s }; b.vd = v; }
+      else {
+        // 沿路網量距離（交流道的環形匝道用切線投影會變成負的，車就卡住）；接不上才退回切線投影
+        let gap = fwyGap(b.fd.w, b.fd.s, e.w, e.s, 3000);
+        if (gap == null) { const back = fwyGap(e.w, e.s, b.fd.w, b.fd.s, 3000); gap = back != null ? -back : (e.x - d.x) * Math.sin(d.h / DEG) + (e.y - d.y) * Math.cos(d.h / DEG); }
+        const n = fwyAdvance(b.fd.w, b.fd.s, busChase(b, gap, v, dt)); b.fd = { w: n.w, s: n.s };
+      }
+      const p = fwyPoint(FWY.ways[b.fd.w], b.fd.s); want = { x: p.x, y: p.y, h: p.h }; b.xy = null;
+    } else {
+      // 市區、不在國道上又還沒有路線形狀：沿方位角推，十幾秒內慢慢停住
+      b.fd = null;
+      const d = busAhead(v, age, 12);
+      const e = { x: x0 + Math.sin(az / DEG) * d, y: y0 + Math.cos(az / DEG) * d, h: az };
+      if (!b.xy || Math.hypot(e.x - b.xy.x, e.y - b.xy.y) > 3000) b.xy = { ...e };
+      else { const k = Math.min(1, dt * 1.2); b.xy.x += (e.x - b.xy.x) * k; b.xy.y += (e.y - b.xy.y) * k; b.xy.h = e.h; }
+      want = b.xy;
+    }
   }
   // 貼到同方向車道、取得橋面高度
   let x = want.x, y = want.y, alt = 0;
@@ -508,7 +563,9 @@ function renderBusPick(force) {
   const q = $('#pq').value.trim();
   let html = '<i data-buslist hidden></i>';
   if (!busVisible() || !BUS.list.size) {
-    html += `<div class="empty">${!BUS_DEMO && !busCred().id ? '國道客運需要 TDX 金鑰：到設定填入後就會出現全台公路客運的即時位置。' : !BUS.on ? '國道客運已在設定中關閉。' : Math.abs(S.simMs - Date.now()) >= 3 * 60e3 ? '國道客運只在即時模式顯示（時間要是現在）。' : '正在讀取客運位置…'}</div>`;
+    html += `<div class="empty">${!BUS_DEMO && !busCred().id ? '國道客運需要 TDX 金鑰：到設定填入後就會出現全台公路客運的即時位置。' : !BUS.on ? '國道客運已在設定中關閉。' : Math.abs(S.simMs - Date.now()) >= 3 * 60e3 ? '國道客運只在即時模式顯示（時間要是現在）。' : BUS.fails ? esc(BUS.status) : '正在讀取客運位置…'}</div>`;
+    // 打開分頁時還沒有資料就馬上讀，不等下一輪
+    if (busCred().id && BUS.on && !BUS.loading && !BUS.list.size && Date.now() - (BUS.kickAt || 0) > 5000) { BUS.kickAt = Date.now(); reloadBuses(); }
   } else {
     const rows = [...BUS.list.values()].filter(b => !q || (b.routeName || '').includes(q) || opName(b).includes(q) || busRoute(b).includes(q) || b.plate.includes(q.toUpperCase()));
     rows.sort((a, b) => (a.routeName || '').localeCompare(b.routeName || '', 'zh-Hant', { numeric: true }) || a.plate.localeCompare(b.plate));
