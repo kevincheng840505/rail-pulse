@@ -72,12 +72,17 @@ body.clean #spotcap { top:calc(env(safe-area-inset-top,0px) + 62px); }
 #aircap h2 { margin:6px 0 2px; font-family:var(--font-display); font-weight:900; font-size:26px; letter-spacing:.06em; }
 #aircap .route { color:var(--muted); font-size:14px; }
 #aircap .st { margin-top:10px; font-family:var(--font-mono); font-size:14px; color:var(--accent); }
-#aircap .vrow { display:flex; gap:6px; margin-top:12px; flex-wrap:wrap; }
-#aircap .vchip { height:30px; padding:0 11px; border-radius:999px; font-size:12.5px; font-weight:700; letter-spacing:.04em; border:1px solid var(--line); background:var(--glass); color:var(--ink); }
-#aircap .vchip[aria-pressed="true"] { background:var(--accent); color:#1B1408; border-color:transparent; }
-#aircap .vchip.cur { border-color:var(--accent); }
 #aircap .caprow { display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
-body.airwatch #caption, body.airwatch #viewbtn { display:none !important; }
+body.airwatch #caption { display:none !important; }
+/* 收合的飛機字卡：和列車一樣是一條細長列 */
+#aircap { cursor:pointer; }
+#aircap .strip { display:none; }
+#aircap.mini { width:auto; max-width:min(380px, calc(100% - 24px)); padding:8px 8px 8px 12px; border-radius:999px; }
+#aircap.mini > :not(.strip) { display:none; }
+#aircap.mini .strip { display:flex; align-items:center; gap:8px; white-space:nowrap; font-size:13px; }
+#aircap.mini .strip .nm { font-family:var(--font-display); font-size:14px; overflow:hidden; text-overflow:ellipsis; }
+#aircap.mini .strip .nx { color:var(--accent); font-family:var(--font-mono); font-size:12px; overflow:hidden; text-overflow:ellipsis; }
+#aircap .strip .x { flex:none; width:28px; height:28px; border-radius:50%; padding:0; display:grid; place-items:center; cursor:pointer; border:1px solid var(--line); background:var(--glass); color:var(--ink); }
 body.clean #aircap { display:none !important; }
 #dock { position:fixed; left:50%; transform:translateX(-50%); bottom:calc(env(safe-area-inset-bottom,0px) + 18px); z-index:5; display:flex; gap:8px; align-items:center; }
 .pillbtn { height:44px; padding:0 18px; border-radius:999px; font-weight:700; font-size:15px; letter-spacing:.04em; display:flex; align-items:center; gap:8px; white-space:nowrap; }
@@ -4801,7 +4806,7 @@ $('#pq').addEventListener('keydown', e => { if (e.key === 'Enter' && pickIsAir()
 function renderAirCap(force) {
   const W = AIR.watch;
   document.body.classList.toggle('airwatch', !!W);
-  if (!W) { airCap.hidden = true; return; }
+  if (!W) { airCap.hidden = true; if (typeof renderViewBtn === 'function') renderViewBtn(); return; }
   const m = curMin(), f = W.f;
   let kicker = `觀察起降 · ${AIRPORTS[W.ap][0]}機場`, title, route = '', status = '';
   if (f) {
@@ -4819,23 +4824,41 @@ function renderAirCap(force) {
   }
   if (W.note && performance.now() < W.note.until) status = W.note.text;
   if (!airCap.querySelector('#airnext')) {
-    airCap.innerHTML = `<div class="kicker"><span class="dot"></span><span class="kt"></span></div><h2></h2><div class="route"></div><div class="st"></div>
-      <div class="vrow">${AIR_VIEWS.map(v => `<button class="vchip" data-view="${v.id}">${v.name}</button>`).join('')}</div>
-      <div class="caprow"><button class="pillbtn small" id="airback" hidden></button><button class="pillbtn small" id="airnext">換一架</button><button class="pillbtn small" id="airexit">離開</button></div>`;
+    airCap.setAttribute('role', 'button'); airCap.tabIndex = 0;
+    airCap.innerHTML = `<div class="strip"><span class="dot"></span><b class="nm"></b><span class="nx"></span><button class="x" id="airexit2" aria-label="離開"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      <div class="kicker"><span class="dot"></span><span class="kt"></span></div><h2></h2><div class="route"></div><div class="st"></div>
+      <div class="caprow"><button class="pillbtn small" id="airnext">換一架</button><button class="pillbtn small" id="airexit">離開</button></div>`;
   }
   airCap.hidden = false;
+  // 和列車字卡共用展開／收合的設定
+  airCap.classList.toggle('mini', !S.capOpen);
+  airCap.setAttribute('aria-expanded', String(!!S.capOpen)); airCap.setAttribute('aria-label', '飛機資訊，按下可' + (S.capOpen ? '收起' : '展開'));
   const set = (sel, t) => { const el = airCap.querySelector(sel); if (el.textContent !== t) el.textContent = t; };
   set('.kt', kicker); set('h2', title); set('.route', route); set('.st', status);
+  set('.strip .nm', title); set('.strip .nx', status.replace(/^進場中 · /, '').replace(/^爬升中 · /, '↑ '));
   airCap.querySelector('.route').hidden = !route;
-  const cur = AIR.view === 'auto' && W.auto ? W.auto.v : null;
-  for (const b of airCap.querySelectorAll('.vchip')) {
-    const on = b.dataset.view === AIR.view;
-    if (b.getAttribute('aria-pressed') !== String(on)) b.setAttribute('aria-pressed', String(on));
-    b.classList.toggle('cur', b.dataset.view === cur);
-  }
-  const back = airCap.querySelector('#airback');
-  back.hidden = !AIR.paused; set('#airback', '◉ 回到' + (f ? '飛機' : '跑道'));
+  renderAirViewBtn();
 }
+// 視角按鈕：和列車共用底部的「視角」按鈕，觀察起降時換成飛機的視角
+function airViewName() {
+  const v = AIR_VIEWS.find(v => v.id === AIR.view) || AIR_VIEWS[0];
+  return v.id === 'auto' && AIR.watch && AIR.watch.auto ? '自動（' + AIR_VIEWS.find(x => x.id === AIR.watch.auto.v).name + '）' : v.name;
+}
+function renderAirViewBtn() {
+  const b = $('#viewbtn'); if (!b || !AIR.watch) return;
+  b.disabled = false;
+  b.textContent = AIR.paused ? '◉ 回到' + (AIR.watch.f ? '飛機' : '跑道') : '視角・' + airViewName();
+}
+if (typeof renderViewBtn === 'function') {
+  const _rvb = renderViewBtn;
+  renderViewBtn = function () { if (AIR.watch) return renderAirViewBtn(); return _rvb.apply(this, arguments); };
+}
+function cycleAirView() {
+  if (AIR.paused) { AIR.paused = false; airBlend(); renderAirCap(true); return; } // 自由視角時先回到原視角
+  const i = AIR_VIEWS.findIndex(v => v.id === AIR.view);
+  setAirView(AIR_VIEWS[(i + 1) % AIR_VIEWS.length].id);
+}
+$('#viewbtn').addEventListener('click', e => { if (!AIR.watch) return; e.stopImmediatePropagation(); cycleAirView(); }, { capture: true });
 function airBlend() { if (AIR.watch) AIR.watch.blend = { t0: performance.now(), from: { c: map.getCenter(), zoom: map.getZoom(), pitch: map.getPitch(), bearing: map.getBearing() } }; }
 function setAirView(id) {
   AIR.view = id; store.set('airView', id); AIR.paused = false;
@@ -4854,18 +4877,23 @@ function nextAirPlane() {
   else W.note = { text: '目前機場附近只有這一架，換不了', until: performance.now() + 2500 };
   renderAirCap(true);
 }
+// 字卡點一下展開、再點一下收起；裡面的按鈕各做各的事
 airCap.addEventListener('click', e => {
-  const b = e.target.closest('button'); if (!b) return;
-  if (b.id === 'airexit') exitWatch();
-  else if (b.id === 'airback') { AIR.paused = false; airBlend(); renderAirCap(true); }
-  else if (b.id === 'airnext') nextAirPlane();
-  else if (b.dataset.view) setAirView(b.dataset.view);
+  const b = e.target.closest('button');
+  if (b && (b.id === 'airexit' || b.id === 'airexit2')) return exitWatch();
+  if (b && b.id === 'airnext') return nextAirPlane();
+  S.capOpen = !S.capOpen; store.set('capOpen', S.capOpen); renderAirCap(true);
+});
+airCap.addEventListener('keydown', e => {
+  if (e.target !== airCap || (e.key !== 'Enter' && e.key !== ' ')) return;
+  e.preventDefault(); e.stopPropagation();
+  S.capOpen = !S.capOpen; store.set('capOpen', S.capOpen); renderAirCap(true);
 });
 setInterval(() => { if (AIR.watch) renderAirCap(); if (pickIsAir()) renderAirPick(); }, 1000);
 document.addEventListener('keydown', e => {
   if (!AIR.watch || e.target.matches('input, textarea')) return;
   if (e.key === 'Escape') { exitWatch(); e.stopImmediatePropagation(); }
-  else if (e.key === 'v' || e.key === 'V') { const i = AIR_VIEWS.findIndex(v => v.id === AIR.view); setAirView(AIR_VIEWS[(i + 1) % AIR_VIEWS.length].id); }
+  else if (e.key === 'v' || e.key === 'V') { cycleAirView(); e.stopImmediatePropagation(); }
 }, true);
 
 /* ---------- 開關與排程 ---------- */
