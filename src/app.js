@@ -600,7 +600,10 @@ function shiftFocus() {
 function pushFocus() {
   if (!S.mapReady) return;
   const t = S.follow, m = curMin();
-  if (focusSwap()) {
+  // 沒在跟車而且跟拍圖層已經清空：不用再一直送空資料（每次送都會讓整張地圖重畫）
+  const idle = !t && S.fb && !S.fb.trip && (!S.fb.pend || !S.fb.pend.trip);
+  if (idle) { if (S.fb.pend) focusSwap(); }
+  else if (focusSwap()) {
     const pos = t && tripPos(t, m), out = [], buf = 1 - S.fb.show;
     if (pos) { carFeatures(t, pos, S.P, out, true); for (const f of out) f.properties.idx = t.idx; out[0].properties.ts = m; }
     map.getSource(FOCUS_BUF[buf].src).setData({ type: 'FeatureCollection', features: out });
@@ -1168,7 +1171,11 @@ function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(1000, now - last); last = now;
   if (S.playing) { if (S.live && S.speed === 1) S.simMs = Date.now(); else S.simMs += dt * S.speed; }
-  if (now - lastPush > 100) {
+  // 拉遠時列車一秒只移動不到一個像素：每 0.1 秒重送一次列車資料，整張地圖就得一直重畫，手機很吃力。
+  // 依縮放放慢更新頻率；跟車時維持每 0.1 秒
+  const zNow = S.mapReady ? map.getZoom() : 0;
+  const pushGap = S.follow ? 100 : zNow < 9 ? 1000 : zNow < 12 ? 500 : zNow < 13.5 ? 200 : 100;
+  if (now - lastPush > pushGap) {
     updatePositions(); pushTrains(); lastPush = now;
     // 列車抵達終點：漫遊時換下一列
     if (S.roam && S.follow && !S.flying && !tripPos(S.follow, curMin())) roamNext();
