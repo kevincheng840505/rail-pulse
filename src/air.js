@@ -287,25 +287,18 @@ function acTypeOf(f) {
   return (f.ac = t);
 }
 
-/* detail：被跟拍的那架用較多層切面，其他飛機用較少層 */
-function planeFeatures(f, p, out, detail) {
-  const T = AC_TYPES[acTypeOf(f)], Lv = AIR_LIVERY[f.airline] || {};
-  const body = Lv.body || '#EEF1F4', belly = Lv.belly || body, tail = Lv.tail || TAIL_OLD[f.airline] || '#8C9AA6', tail2 = Lv.tail2 || body, stripe = Lv.stripe || null;
+/* 依機型與塗裝組出機身各部位：每個部位是一個四邊形往上擠出的柱體。
+   座標以公尺計：fw 以機身中點為 0、往機頭為正；rt 往右為正；z 從起落架輪子（或收起時的機腹）算起 */
+function planeParts(type, airline, gearDown) {
+  const T = AC_TYPES[type], Lv = AIR_LIVERY[airline] || {}, out = [];
+  const body = Lv.body || '#EEF1F4', belly = Lv.belly || body, tail = Lv.tail || TAIL_OLD[airline] || '#8C9AA6', tail2 = Lv.tail2 || body, stripe = Lv.stripe || null;
   const dark = '#27303A', metal = '#B7C0C8', gearC = '#3A4148';
-  const [lon0, lat0] = toLL(p.x, p.y);
-  const mx = 1 / (111320 * Math.cos(lat0 / DEG)), my = 1 / 110570;
-  const v = hdgVec(p.h), n = [v[1], -v[0]]; // n：右手邊
-  const pt = (fw, rt) => [lon0 + (v[0] * fw + n[0] * rt) * mx, lat0 + (v[1] * fw + n[1] * rt) * my];
-  const ring = c => [c.map(([a, b]) => pt(a, b)).concat([pt(c[0][0], c[0][1])])];
-  const tp = Math.tan(p.pitch / DEG);
-  // fw：以機身中點為 0、往機頭為正；z：離機腹（起落架收起時）的高度
-  const gearDown = p.alt < 450;
-  const z0 = p.alt + (gearDown ? T.gear : 0);
-  const Z = (fw, z) => z0 + z + fw * tp;
-  const add = (c, fwc, zb, zt, col) => { const b = Z(fwc, zb), t = Z(fwc, zt); out.push({ type: 'Feature', properties: { id: f.id, b: Math.max(0, b), t: Math.max(0, t), c: col }, geometry: { type: 'Polygon', coordinates: ring(c) } }); };
-  const box = (f1, f2, r1, r2, zb, zt, col) => add([[f1, r1], [f2, r1], [f2, r2], [f1, r2]], (f1 + f2) / 2, zb, zt, col);
+  const detail = true;
+  const z0 = gearDown ? T.gear : 0;
+  const add = (c, fwc, zb, zt, col) => out.push({ c, b: z0 + zb, t: z0 + zt, col });
+  const box = (f1, f2, r1, r2, zb, zt, col) => add([[f1, r1], [f2, r1], [f2, r2], [f1, r2]], 0, zb, zt, col);
   const L = T.L, D = T.D, R = D / 2, nose = L / 2, tailEnd = -L / 2;
-  const layers = detail ? 7 : 4, segs = detail ? 18 : 9;
+  const layers = 12, segs = 28;
   // 機身平面與側面輪廓：機頭以橢圓收窄、下緣往上收；機尾變細並上翹
   const noseLen = D * 1.9, tailLen = L * 0.24;
   const prof = fw => {
@@ -351,7 +344,7 @@ function planeFeatures(f, p, out, detail) {
     // 發動機：翼下吊掛的圓筒（ATR 是翼上的短艙加螺旋槳）
     const ey = R + (semi - R) * T.ey, ef = le(ey) + T.le * (T.prop ? 0.25 : 0.55), ea = ef - T.le;
     const er = T.de / 2, ezc = T.prop ? wingZ + er * 0.6 : wingZ + (ey - R) * dih - er - 0.35;
-    const eL = detail ? 5 : 3;
+    const eL = 8;
     for (let k = 0; k < eL; k++) {
       const za = ezc - er + 2 * er * k / eL, zb2 = ezc - er + 2 * er * (k + 1) / eL, w = er * Math.sqrt(Math.max(0.05, 1 - (((za + zb2) / 2 - ezc) / er) ** 2));
       box(ea, ef, s * ey - w, s * ey + w, za, zb2, T.prop ? body : metal);
@@ -370,7 +363,7 @@ function planeFeatures(f, p, out, detail) {
   const hsZ = T.prop ? finTop + T.fin * 0.95 : D * 0.42, hsLE = T.prop ? finLE - T.fin * finTanSw : tailEnd + tailLen * 0.42, hsC = T.cr * 0.5;
   for (const s of [-1, 1]) add([[hsLE, s * 0.3], [hsLE - T.hs * 0.55, s * T.hs], [hsLE - T.hs * 0.55 - hsC * 0.45, s * T.hs], [hsLE - hsC, s * 0.3]], hsLE - hsC / 2, hsZ, hsZ + 0.3, body);
   // 垂直尾翼：分層往後移，做出後掠；下半主色、上緣第二色
-  const fl = detail ? 6 : 3;
+  const fl = 8;
   for (let k = 0; k < fl; k++) {
     const h1 = T.fin * k / fl, h2 = T.fin * (k + 1) / fl, hm = (h1 + h2) / 2;
     const c = finRoot * (1 - 0.62 * hm / T.fin), lead = finLE - hm * finTanSw;
@@ -382,6 +375,7 @@ function planeFeatures(f, p, out, detail) {
     box(nose - noseLen * 1.1 - 0.3, nose - noseLen * 1.1 + 0.3, -0.25, 0.25, -g, 0.05, gearC);
     for (const s of [-1, 1]) { const y = R * (T.prop ? 0.9 : 1.15), gf = rootLE - T.cr * 0.75; box(gf - 0.7, gf + 0.7, s * y - 0.45, s * y + 0.45, -g, 0.05, gearC); }
   }
+  return out;
 }
 
 /* ---------- 機場：跑道、滑行道、停機坪、航廈、塔台 ----------
@@ -465,6 +459,118 @@ function airportFeatures() {
   return (AIRPORT_FC = { type: 'FeatureCollection', features: out });
 }
 
+/* ---------- 3D 飛機：WebGL 自訂圖層 ----------
+   每種「機型＋航空公司＋起落架」的模型只建一次放進 GPU，每格只換一個矩陣（位置、航向、仰角）。
+   以前每格把幾百個多邊形用 GeoJSON 重送，要等背景執行緒切完圖磚才畫得出來，飛機和鏡頭對不上就會抖。 */
+const PlaneGL = {
+  draw: [], meshes: new Map(), gl: null, prog: null, last: null, hover: false,
+  hex(c) { const n = parseInt(c.slice(1), 16); return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255]; },
+  // 把部位清單變成三角形：每個柱體有頂面、底面與四個側面，各自帶法向量與顏色
+  build(parts) {
+    const P = [], N = [], C = [];
+    const tri = (a, b, c, n, col) => { for (const v of [a, b, c]) { P.push(v[0], v[1], v[2]); N.push(n[0], n[1], n[2]); C.push(col[0], col[1], col[2]); } };
+    for (const q of parts) {
+      if (q.t - q.b < 1e-3) continue;
+      const col = PlaneGL.hex(q.col), c = q.c;
+      const lo = c.map(([x, y]) => [x, y, q.b]), hi = c.map(([x, y]) => [x, y, q.t]);
+      tri(hi[0], hi[1], hi[2], [0, 0, 1], col); tri(hi[0], hi[2], hi[3], [0, 0, 1], col);
+      tri(lo[0], lo[2], lo[1], [0, 0, -1], col); tri(lo[0], lo[3], lo[2], [0, 0, -1], col);
+      for (let i = 0; i < 4; i++) {
+        const j = (i + 1) % 4, dx = c[j][0] - c[i][0], dy = c[j][1] - c[i][1], l = Math.hypot(dx, dy) || 1;
+        // 法向量朝外：依四邊形繞行方向決定正負
+        const area = (c[1][0] - c[0][0]) * (c[2][1] - c[0][1]) - (c[1][1] - c[0][1]) * (c[2][0] - c[0][0]);
+        const sg = area >= 0 ? 1 : -1, n = [sg * dy / l, -sg * dx / l, 0];
+        tri(lo[i], lo[j], hi[j], n, col); tri(lo[i], hi[j], hi[i], n, col);
+      }
+    }
+    return { P: new Float32Array(P), N: new Float32Array(N), C: new Float32Array(C), n: P.length / 3 };
+  },
+  mesh(type, airline, gear) {
+    const key = type + '|' + airline + '|' + gear;
+    let m = PlaneGL.meshes.get(key);
+    if (!m) {
+      const d = PlaneGL.build(planeParts(type, airline, gear)), gl = PlaneGL.gl;
+      m = { n: d.n, bufs: [d.P, d.N, d.C].map(arr => { const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, arr, gl.STATIC_DRAW); return b; }) };
+      PlaneGL.meshes.set(key, m);
+    }
+    return m;
+  },
+  // 模型矩陣：本地 x 往機頭、y 往右、z 往上（公尺），換到 Web 墨卡托座標
+  model(p, ll) {
+    const mc = maplibregl.MercatorCoordinate.fromLngLat(ll, p.alt), s = mc.meterInMercatorCoordinateUnits();
+    const h = p.h / DEG, pt = p.pitch / DEG;
+    const fw = [Math.sin(h), -Math.cos(h), 0], rt = [Math.cos(h), Math.sin(h), 0], up = [0, 0, 1];
+    const cp = Math.cos(pt), sp = Math.sin(pt);
+    const F = [fw[0] * cp, fw[1] * cp, sp], U = [-fw[0] * sp, -fw[1] * sp, cp];
+    return [F[0] * s, F[1] * s, F[2] * s, 0, rt[0] * s, rt[1] * s, 0, 0, U[0] * s, U[1] * s, U[2] * s, 0, mc.x, mc.y, mc.z, 1];
+  },
+  mul(a, b) { const o = new Float64Array(16); for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) { let v = 0; for (let k = 0; k < 4; k++) v += a[k * 4 + j] * b[i * 4 + k]; o[i * 4 + j] = v; } return o; },
+  // 點選：用上一格的投影矩陣把每架飛機的中心投到螢幕上
+  pick(pt) {
+    const M = PlaneGL.last; if (!M) return null;
+    const cv = map.getCanvas(), w = cv.clientWidth, h = cv.clientHeight;
+    let best = null, bd = 1e9;
+    for (const d of PlaneGL.draw) {
+      const m = PlaneGL.model(d.p, d.ll), PM = PlaneGL.mul(M, m), L = AC_TYPES[acTypeOf(d.f)].L;
+      const proj = (x) => { const cx = PM[0] * x + PM[12], cy = PM[1] * x + PM[13], cw = PM[3] * x + PM[15]; return cw > 0 ? [(cx / cw + 1) / 2 * w, (1 - cy / cw) / 2 * h] : null; };
+      const c = proj(0), nose = proj(L / 2); if (!c || !nose) continue;
+      const r = Math.max(14, Math.hypot(nose[0] - c[0], nose[1] - c[1])), dd = Math.hypot(pt.x - c[0], pt.y - c[1]);
+      if (dd < r && dd < bd) { bd = dd; best = d.f; }
+    }
+    return best;
+  },
+  layer: {
+    id: 'planes3d', type: 'custom', renderingMode: '3d',
+    onAdd(m, gl) {
+      PlaneGL.gl = gl; PlaneGL.meshes.clear();
+      const sh = (type, src) => { const o = gl.createShader(type); gl.shaderSource(o, src); gl.compileShader(o); return o; };
+      const prog = gl.createProgram();
+      gl.attachShader(prog, sh(gl.VERTEX_SHADER, `
+        uniform mat4 u_pm; uniform mat4 u_m; uniform vec3 u_light; uniform vec3 u_lc; uniform float u_li;
+        attribute vec3 a_pos; attribute vec3 a_n; attribute vec3 a_c; varying vec3 v_c;
+        void main() {
+          vec3 n = normalize(mat3(u_m) * a_n);
+          float d = max(dot(n, u_light), 0.0);
+          float k = (0.72 + 0.3 * d) * clamp(0.3 + u_li * 2.3, 0.45, 1.05);
+          v_c = a_c * mix(vec3(1.0), u_lc, 0.35) * k;
+          gl_Position = u_pm * vec4(a_pos, 1.0);
+        }`));
+      gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, `precision mediump float; varying vec3 v_c; void main() { gl_FragColor = vec4(v_c, 1.0); }`));
+      gl.linkProgram(prog);
+      PlaneGL.prog = prog;
+      PlaneGL.loc = { pm: gl.getUniformLocation(prog, 'u_pm'), m: gl.getUniformLocation(prog, 'u_m'), light: gl.getUniformLocation(prog, 'u_light'), lc: gl.getUniformLocation(prog, 'u_lc'), li: gl.getUniformLocation(prog, 'u_li'),
+        attrs: ['a_pos', 'a_n', 'a_c'].map(a => gl.getAttribLocation(prog, a)) };
+    },
+    onRemove() { PlaneGL.gl = null; PlaneGL.meshes.clear(); },
+    render(gl, matrix) {
+      PlaneGL.last = matrix;
+      if (!AIR.on || !PlaneGL.draw.length || !PlaneGL.prog) return;
+      const L = PlaneGL.loc;
+      gl.useProgram(PlaneGL.prog);
+      // 光線跟著地圖的日夜設定
+      let lc = [1, 1, 1], li = 0.3, dir = [0.4, -0.3, 0.86];
+      try {
+        const lt = map.getLight() || {};
+        if (typeof lt.color === 'string' && lt.color[0] === '#') lc = PlaneGL.hex(lt.color);
+        if (typeof lt.intensity === 'number') li = lt.intensity;
+        if (Array.isArray(lt.position)) { const a = lt.position[1] / DEG, pl = lt.position[2] / DEG; dir = [Math.sin(pl) * Math.sin(a), -Math.sin(pl) * Math.cos(a), Math.cos(pl)]; }
+      } catch {}
+      gl.uniform3fv(L.light, dir); gl.uniform3fv(L.lc, lc); gl.uniform1f(L.li, li);
+      gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(true); gl.disable(gl.CULL_FACE); gl.disable(gl.BLEND);
+      for (const d of PlaneGL.draw) {
+        const mesh = PlaneGL.mesh(acTypeOf(d.f), d.f.airline || '', d.p.alt < 450);
+        const m = PlaneGL.model(d.p, d.ll), PM = PlaneGL.mul(matrix, m);
+        // 只保留旋轉（去掉縮放）給法向量用
+        const s = Math.hypot(m[0], m[1], m[2]) || 1;
+        gl.uniformMatrix4fv(L.pm, false, new Float32Array(PM));
+        gl.uniformMatrix4fv(L.m, false, new Float32Array([m[0] / s, m[1] / s, m[2] / s, 0, m[4] / s, m[5] / s, m[6] / s, 0, m[8] / s, m[9] / s, m[10] / s, 0, 0, 0, 0, 1]));
+        mesh.bufs.forEach((b, i) => { gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.enableVertexAttribArray(L.attrs[i]); gl.vertexAttribPointer(L.attrs[i], 3, gl.FLOAT, false, 0, 0); });
+        gl.drawArrays(gl.TRIANGLES, 0, mesh.n);
+      }
+    },
+  },
+};
+
 /* ---------- 圖層 ---------- */
 function ensureLayers() {
   if (AIR.layers || !map || !S.mapReady) return;
@@ -472,22 +578,14 @@ function ensureLayers() {
   map.addLayer({ id: 'airports', type: 'fill-extrusion', source: 'airports', minzoom: 10.5,
     paint: { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 't'], 'fill-extrusion-base': ['get', 'b'], 'fill-extrusion-vertical-gradient': false,
       'fill-extrusion-opacity': ['interpolate', ['linear'], ['zoom'], 10.5, 0, 11.5, 1] } }, 'light-glow');
-  map.addSource('planes', { type: 'geojson', data: EMPTY });
   map.addSource('plane-pts', { type: 'geojson', data: EMPTY });
   map.addLayer({ id: 'plane-shadow', type: 'circle', source: 'plane-pts', minzoom: 12, filter: ['<', ['get', 'alt'], 900],
     paint: { 'circle-color': '#000', 'circle-blur': 1, 'circle-pitch-alignment': 'map',
       'circle-radius': ['interpolate', ['exponential', 2], ['zoom'], 12, 3, 16, 40, 19, 300],
       'circle-opacity': ['*', 0.28, ['-', 1, ['/', ['get', 'alt'], 900]]] } }, 'light-glow');
-  map.addLayer({ id: 'planes', type: 'fill-extrusion', source: 'planes', minzoom: 11,
-    paint: { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 't'], 'fill-extrusion-base': ['get', 'b'], 'fill-extrusion-opacity': 1, 'fill-extrusion-vertical-gradient': false } });
-  // 正在觀察的那架飛機單獨一個來源，鏡頭等它載入完才跟著移動，飛機在畫面上才不會抖
-  map.addSource('plane-focus', { type: 'geojson', data: EMPTY });
-  map.addLayer({ id: 'plane-focus', type: 'fill-extrusion', source: 'plane-focus', minzoom: 10,
-    paint: { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 't'], 'fill-extrusion-base': ['get', 'b'], 'fill-extrusion-opacity': 1, 'fill-extrusion-vertical-gradient': false } });
-  map.on('sourcedata', e => { if (e.sourceId === 'plane-focus' && e.isSourceLoaded && AIR.pend) { AIR.shown = AIR.pend; AIR.pend = null; } });
-  map.on('click', 'planes', e => { const id = e.features && e.features[0] && e.features[0].properties.id; const f = id && AIR.flights.find(x => x.id === id); if (f) watchFlight(f); });
-  map.on('mouseenter', 'planes', () => { map.getCanvas().style.cursor = 'pointer'; });
-  map.on('mouseleave', 'planes', () => { map.getCanvas().style.cursor = ''; });
+  map.addLayer(PlaneGL.layer);
+  map.on('click', e => { const f = PlaneGL.pick(e.point); if (f) watchFlight(f); });
+  map.on('mousemove', e => { if (map.getZoom() < 11) return; const hit = !!PlaneGL.pick(e.point); if (hit !== PlaneGL.hover) { PlaneGL.hover = hit; map.getCanvas().style.cursor = hit ? 'pointer' : ''; } });
   map.addLayer({ id: 'plane-dot', type: 'circle', source: 'plane-pts', maxzoom: 11.5,
     paint: { 'circle-color': '#F4F7FA', 'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, 1.6, 11, 3.2], 'circle-opacity': ['*', 0.9, ['get', 'fade']],
       'circle-stroke-color': 'rgba(244,247,250,0.25)', 'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 6, 2, 11, 5], 'circle-stroke-opacity': ['get', 'fade'] } });
@@ -496,7 +594,7 @@ function ensureLayers() {
 }
 function setPlaneVis() {
   if (!AIR.layers) return;
-  for (const l of ['planes', 'plane-dot', 'plane-shadow', 'plane-focus']) try { map.setLayoutProperty(l, 'visibility', AIR.on ? 'visible' : 'none'); } catch {}
+  for (const l of ['planes3d', 'plane-dot', 'plane-shadow']) try { map.setLayoutProperty(l, 'visibility', AIR.on ? 'visible' : 'none'); } catch {}
 }
 
 let airRaf = 0;
@@ -504,30 +602,33 @@ function stepPlanes(now) {
   airRaf = requestAnimationFrame(stepPlanes);
   if (!AIR.layers) { ensureLayers(); return; }
   if (!AIR.on) return;
-  const z = map.getZoom();
-  // 只有畫面裡真的有飛機時才每格更新；其他時候一秒一次。
-  // GeoJSON 每次 setData 都要重新切圖磚、整張地圖重畫，空的資料一秒送三十次就足以讓手機一直卡頓
-  const near = z >= 11;
-  if (AIR.watch) stepWatch(now);
-  if (now - AIR.last < (near && AIR.inView ? 33 : 1000)) return;
+  const z = map.getZoom(), near = z >= 11, m = curMin();
+  // 3D 飛機每格都算位置，交給 WebGL 圖層直接畫：不經過 GeoJSON，鏡頭和飛機用同一個時間點，不會抖
+  const draw = [], b = map.getBounds();
+  let cam = null;
+  if (AIR.watch) cam = stepWatch(now, m, draw);
+  if (near) for (const f of AIR.flights) {
+    if (AIR.watch && f === AIR.watch.f) continue;
+    const p = flightPos(f, m); if (!p) continue;
+    const [lon, lat] = toLL(p.x, p.y);
+    // 地圖範圍是地面上的範圍；高空的飛機斜看時會偏離它在地面的位置，所以飛得越高留越大的邊
+    const pad = 0.05 + Math.min(1, p.alt / 9500) * 0.3;
+    if (lon > b.getWest() - pad && lon < b.getEast() + pad && lat > b.getSouth() - pad && lat < b.getNorth() + pad) draw.push({ f, p, ll: [lon, lat] });
+  }
+  PlaneGL.draw = draw;
+  if (cam) { try { map.jumpTo(cam); } catch {} }
+  else if (draw.length) map.triggerRepaint();
+  // 遠景圓點與地面陰影：近看時每格更新，其他時候一秒一次
+  if (now - AIR.last < (near && draw.length ? 33 : 1000)) return;
   AIR.last = now;
-  const m = curMin(), pts = [], polys = [];
-  const b = map.getBounds();
+  const pts = [];
   for (const f of AIR.flights) {
     const p = flightPos(f, m); if (!p) continue;
     const [lon, lat] = toLL(p.x, p.y);
     pts.push({ type: 'Feature', properties: { alt: p.alt, fade: p.fade }, geometry: { type: 'Point', coordinates: [lon, lat] } });
-    if (AIR.watch && f === AIR.watch.f) { f._pos = p; f._ll = [lon, lat]; continue; }
-    // 地圖範圍是地面上的範圍；高空的飛機斜看時會偏離它在地面的位置，所以飛得越高留越大的邊
-    const pad = 0.05 + Math.min(1, p.alt / 9500) * 0.3;
-    if (near && lon > b.getWest() - pad && lon < b.getEast() + pad && lat > b.getSouth() - pad && lat < b.getNorth() + pad) planeFeatures(f, p, polys);
     f._pos = p; f._ll = [lon, lat];
   }
-  AIR.inView = polys.length > 0;
-  // 遠景的飛機圓點只在拉遠時看得到；拉近又沒有飛機在畫面裡時就不用一直送
-  if (!near || AIR.inView || AIR.ptsAt === undefined || now - AIR.ptsAt > 5000) { map.getSource('plane-pts').setData({ type: 'FeatureCollection', features: pts }); AIR.ptsAt = now; }
-  if (polys.length || AIR.hadPolys) map.getSource('planes').setData({ type: 'FeatureCollection', features: polys });
-  AIR.hadPolys = polys.length > 0;
+  if (!near || draw.length || AIR.ptsAt === undefined || now - AIR.ptsAt > 5000) { map.getSource('plane-pts').setData({ type: 'FeatureCollection', features: pts }); AIR.ptsAt = now; }
 }
 requestAnimationFrame(stepPlanes);
 
@@ -553,7 +654,21 @@ setInterval(planeSpot, 1000);
 
 /* ---------- 觀察起降：鏡頭跟著一架飛機，只在機場附近 ---------- */
 const WATCH_APS = ['TPE', 'TSA', 'KHH', 'RMQ'];
-const AIR_VIEWS = [{ id: 'chase', name: '追機' }, { id: 'side', name: '側拍' }, { id: 'tower', name: '塔台' }];
+const AIR_VIEWS = [{ id: 'auto', name: '自動' }, { id: 'chase', name: '追機' }, { id: 'side', name: '側拍' }, { id: 'front', name: '迎面' }, { id: 'wing', name: '翼尖' },
+  { id: 'top', name: '俯瞰' }, { id: 'orbit', name: '環繞' }, { id: 'tower', name: '塔台' }];
+// 自動運鏡：每隔一段時間換一個視角
+const AUTO_VIEWS = ['chase', 'side', 'wing', 'front', 'orbit', 'top', 'tower'], AUTO_SEC = 12;
+function curAirView() {
+  if (AIR.view !== 'auto') return AIR.view;
+  const W = AIR.watch, now = performance.now();
+  if (!W.auto || now - W.auto.t0 > AUTO_SEC * 1000) {
+    const i = W.auto ? (AUTO_VIEWS.indexOf(W.auto.v) + 1) % AUTO_VIEWS.length : 0;
+    W.auto = { v: AUTO_VIEWS[i], t0: now };
+    if (W.f) W.blend = { t0: now, from: { c: map.getCenter(), zoom: map.getZoom(), pitch: map.getPitch(), bearing: map.getBearing() } };
+    renderAirCap(true);
+  }
+  return W.auto.v;
+}
 AIR.view = store.get('airView', 'chase');
 /* 這架飛機在機場 ap 附近的「可觀察」區段：起飛從滑行到 2500 公尺或離場 25 公里，降落從 30 公里外到滑行結束 */
 function watchPhase(f, ap, m) {
@@ -588,10 +703,11 @@ function eventTime(f, ap) {
   if (f.arrAp === ap && P.ti >= 0) return { t: P.tt[P.ti], kind: 'arr' };
   return null;
 }
-function pickWatchFlight(ap, m, not) {
+function pickWatchFlight(ap, m, not, skip) {
   let best = null, bd = Infinity;
   for (const f of AIR.flights) {
-    if (f === not) continue;
+    // 航班清單會定時重新載入（物件會換新），所以用航班 id 比對
+    if ((not && f.id === not.id) || (skip && skip.has(f.id))) continue;
     const ph = watchPhase(f, ap, m); if (!ph) continue;
     const ev = eventTime(f, ap), dt = Math.abs(ev.t - m);
     if (dt < bd) { bd = dt; best = f; }
@@ -613,7 +729,7 @@ function watchAirport(ap) {
   if (typeof setRoam === 'function') setRoam(false);
   if (S.follow) unfollow();
   AIR.watch = { ap, f: null, sticky: false, cam: null, t0: performance.now() };
-  AIR.paused = false; AIR.shown = null; AIR.pend = null;
+  AIR.paused = false;
   if (!AIR.on) { AIR.on = true; store.set('planes', true); const b = $('#planebtn'); if (b) b.setAttribute('aria-pressed', 'true'); setPlaneVis(); }
   renderAirCap(true);
 }
@@ -626,8 +742,7 @@ function watchFlight(f) {
 }
 function exitWatch() {
   if (!AIR.watch) return;
-  AIR.watch = null; AIR.shown = null; AIR.pend = null;
-  try { map.getSource('plane-focus').setData(EMPTY); } catch {}
+  AIR.watch = null;
   renderAirCap(true);
 }
 // 選列車、漫遊或回到全台時離開觀察起降
@@ -637,23 +752,28 @@ follow = function () { exitWatch(); return _follow.apply(this, arguments); };
 
 /* 鏡頭位置：在飛機（或跑道）旁邊、略高於飛機，視線穿過飛機落到地面，飛機就在畫面正中央 */
 function airCamera(f, p, ap) {
-  const v = hdgVec(p.h), n = [v[1], -v[0]];
-  const A = AIRPORTS[ap];
-  let cx, cy, dh;
-  if (AIR.view === 'tower') {
+  const v = hdgVec(p.h), n = [v[1], -v[0]], T = AC_TYPES[acTypeOf(f)];
+  const view = curAirView();
+  let cx, cy, ang = Math.min(55, 12 + p.alt / 80), minUp = 35;
+  // 以飛機為準的相機位置：back 往機尾方向、right 往右手邊（公尺）
+  const at = (back, right) => { cx = p.x - (v[0] * back - n[0] * right) / 1000; cy = p.y - (v[1] * back - n[1] * right) / 1000; };
+  const dh = Math.max(130, T.L * 3);
+  if (view === 'tower') {
     // 塔台：跑道中段旁 900 公尺
     const rw = runwayFor(ap, 'tower'), mid = [rw.start[0] + rw.v[0] * rw.len / 2, rw.start[1] + rw.v[1] * rw.len / 2];
     const side = [rw.v[1], -rw.v[0]];
     cx = mid[0] - side[0] * 0.9; cy = mid[1] - side[1] * 0.9;
-    dh = Math.hypot(p.x - cx, p.y - cy) * 1000;
-  } else if (AIR.view === 'side') {
-    const Lm = AC_TYPES[acTypeOf(f)].L; dh = Math.max(150, Lm * 3.4); cx = p.x - n[0] * dh / 1000 + v[0] * 0.05; cy = p.y - n[1] * dh / 1000 + v[1] * 0.05;
-  } else {
-    const Lm = AC_TYPES[acTypeOf(f)].L; dh = Math.max(130, Lm * 3); cx = p.x - v[0] * dh * 0.92 / 1000 - n[0] * dh * 0.38 / 1000; cy = p.y - v[1] * dh * 0.92 / 1000 - n[1] * dh * 0.38 / 1000;
-  }
+  } else if (view === 'side') at(-50, -Math.max(150, T.L * 3.4));
+  else if (view === 'front') { at(-dh * 0.95, dh * 0.32); ang = Math.min(40, 10 + p.alt / 100); }
+  else if (view === 'wing') { at(T.L * 0.5, T.b / 2 + 22); ang = 14; minUp = 10; }
+  else if (view === 'top') { at(dh * 0.55, dh * 0.2); ang = 60; }
+  else if (view === 'orbit') { const th = performance.now() / 1000 * 0.12; at(Math.cos(th) * dh * 1.1, Math.sin(th) * dh * 1.1); }
+  else at(dh * 0.92, dh * 0.38);
   // 往下看的角度隨高度加大，避免視線太平、地面落點跑到很遠
-  const ang = Math.min(55, 12 + p.alt / 80) / DEG;
-  const ca = p.alt + Math.max(35, dh * Math.tan(ang));
+  const hd = Math.hypot(p.x - cx, p.y - cy) * 1000;
+  // MapLibre 的近裁切面約是鏡頭到地面中心距離的 1/75；飛得越高，視線就要越陡，近拍的飛機才不會被切掉
+  ang = Math.max(ang, Math.atan(2.4 * p.alt / (75 * Math.max(1, hd))) * DEG);
+  const ca = p.alt + Math.max(minUp, hd * Math.tan(ang / DEG));
   const k = ca / Math.max(1, ca - p.alt);
   const gx = cx + (p.x - cx) * k, gy = cy + (p.y - cy) * k;
   return camFromTo(toLL(cx, cy), ca, toLL(gx, gy), 0, COARSE ? 76 : 80);
@@ -665,26 +785,22 @@ function idleCamera(ap) {
   const c = [mid[0] - side[0] * 1.6 - rw.v[0] * 0.6, mid[1] - side[1] * 1.6 - rw.v[1] * 0.6];
   return camFromTo(toLL(c[0], c[1]), 420, toLL(mid[0], mid[1]), 0, 72);
 }
-function stepWatch(now) {
-  const W = AIR.watch; if (!W || !S.mapReady) return;
-  const m = curMin();
+function stepWatch(now, m, draw) {
+  const W = AIR.watch; if (!W || !S.mapReady) return null;
   // 換下一架：目前這架離開機場範圍，或還沒有對象
   if (!W.f || !watchPhase(W.f, W.ap, m)) {
-    const nf = pickWatchFlight(W.ap, m, W.f);
-    if (nf !== W.f) { W.f = nf; W.sticky = false; AIR.shown = null; AIR.pend = null; if (!nf) try { map.getSource('plane-focus').setData(EMPTY); } catch {} W.blend = { t0: now, from: { c: map.getCenter(), zoom: map.getZoom(), pitch: map.getPitch(), bearing: map.getBearing() } }; renderAirCap(true); }
+    let nf = pickWatchFlight(W.ap, m, W.f, W.skip);
+    if (!nf && W.skip && W.skip.size) { W.skip.clear(); nf = pickWatchFlight(W.ap, m, W.f); }
+    if (nf !== W.f) { W.f = nf; W.sticky = false; W.blend = { t0: now, from: { c: map.getCenter(), zoom: map.getZoom(), pitch: map.getPitch(), bearing: map.getBearing() } }; renderAirCap(true); }
   }
   let cam;
   if (W.f) {
-    const p = flightPos(W.f, m); if (!p) return;
-    // 把這架畫進專用圖層；上一份載入完才送下一份
-    if (!AIR.pend) {
-      const polys = []; planeFeatures(W.f, p, polys, true);
-      AIR.pend = p; map.getSource('plane-focus').setData({ type: 'FeatureCollection', features: polys });
-    }
-    if (AIR.paused) return;
-    cam = airCamera(W.f, AIR.shown || p, W.ap);
+    const p = flightPos(W.f, m); if (!p) return null;
+    draw.push({ f: W.f, p, ll: toLL(p.x, p.y) });
+    if (AIR.paused) return null;
+    cam = airCamera(W.f, p, W.ap);
   } else {
-    if (AIR.paused) return;
+    if (AIR.paused) return null;
     cam = idleCamera(W.ap);
   }
   if (W.blend) {
@@ -695,7 +811,7 @@ function stepWatch(now) {
     cam.bearing = T.from.bearing + angDiff(T.from.bearing, cam.bearing) * k;
     if (k >= 1) W.blend = null;
   }
-  try { map.jumpTo(cam); } catch {}
+  return cam;
 }
 // 使用者拖動地圖：暫停鏡頭，按「回到飛機」再接上
 (function () {
@@ -751,17 +867,17 @@ $('#plist').addEventListener('click', e => {
 });
 $('#pq').addEventListener('keydown', e => { if (e.key === 'Enter' && pickIsAir()) { const b = $('#plist').querySelector('button[data-fid], button[data-ap]'); if (b) b.click(); } });
 
-let airCapKey = '';
+// 字卡只建一次，之後只換文字：每秒重建會讓按下去的那一下點不到
 function renderAirCap(force) {
   const W = AIR.watch;
   document.body.classList.toggle('airwatch', !!W);
-  if (!W) { airCap.hidden = true; airCapKey = ''; return; }
+  if (!W) { airCap.hidden = true; return; }
   const m = curMin(), f = W.f;
   let kicker = `觀察起降 · ${AIRPORTS[W.ap][0]}機場`, title, route = '', status = '';
   if (f) {
     const ph = watchPhase(f, W.ap, m), p = ph && ph.p;
     title = airTitle(f);
-    route = `${nameOf(f.dep)} → ${nameOf(f.arr)}`;
+    route = `${nameOf(f.dep)} → ${nameOf(f.arr)} · ${AC_TYPES[acTypeOf(f)].name}`;
     if (ph) {
       if (ph.kind === 'dep') status = ph.ground ? (pathS(f, m) < 0.05 ? '對正跑道' : '起飛滾行') : `爬升中 · ${Math.round(p.alt)} m`;
       else status = ph.ground ? '已落地，減速滑行' : `進場中 · ${(f.path.cum[f.path.ti] - ph.s).toFixed(1)} km · ${Math.round(p.alt)} m`;
@@ -771,33 +887,55 @@ function renderAirCap(force) {
     title = '等待下一架';
     status = up ? `${Math.max(0, Math.round(up.dt))} 分後${up.kind === 'dep' ? '起飛' : '降落'} · ${airTitle(up.f)}` : '今天沒有更多班機';
   }
-  const vname = (AIR_VIEWS.find(v => v.id === AIR.view) || AIR_VIEWS[0]).name;
-  const key = [kicker, title, route, status, vname, AIR.paused].join('|');
-  if (key === airCapKey && !force) return;
-  airCapKey = key;
+  if (W.note && performance.now() < W.note.until) status = W.note.text;
+  if (!airCap.querySelector('#airnext')) {
+    airCap.innerHTML = `<div class="kicker"><span class="dot"></span><span class="kt"></span></div><h2></h2><div class="route"></div><div class="st"></div>
+      <div class="vrow">${AIR_VIEWS.map(v => `<button class="vchip" data-view="${v.id}">${v.name}</button>`).join('')}</div>
+      <div class="caprow"><button class="pillbtn small" id="airback" hidden></button><button class="pillbtn small" id="airnext">換一架</button><button class="pillbtn small" id="airexit">離開</button></div>`;
+  }
   airCap.hidden = false;
-  airCap.innerHTML = `<div class="kicker"><span class="dot"></span>${esc(kicker)}</div><h2>${esc(title)}</h2>${route ? `<div class="route">${esc(route)}</div>` : ''}<div class="st">${esc(status)}</div>
-    <div class="caprow"><button class="pillbtn small" id="airview">${AIR.paused ? '◉ 回到' + (f ? '飛機' : '跑道') : '視角・' + vname}</button><button class="pillbtn small" id="airnext">換一架</button><button class="pillbtn small" id="airexit">離開</button></div>`;
+  const set = (sel, t) => { const el = airCap.querySelector(sel); if (el.textContent !== t) el.textContent = t; };
+  set('.kt', kicker); set('h2', title); set('.route', route); set('.st', status);
+  airCap.querySelector('.route').hidden = !route;
+  const cur = AIR.view === 'auto' && W.auto ? W.auto.v : null;
+  for (const b of airCap.querySelectorAll('.vchip')) {
+    const on = b.dataset.view === AIR.view;
+    if (b.getAttribute('aria-pressed') !== String(on)) b.setAttribute('aria-pressed', String(on));
+    b.classList.toggle('cur', b.dataset.view === cur);
+  }
+  const back = airCap.querySelector('#airback');
+  back.hidden = !AIR.paused; set('#airback', '◉ 回到' + (f ? '飛機' : '跑道'));
+}
+function airBlend() { if (AIR.watch) AIR.watch.blend = { t0: performance.now(), from: { c: map.getCenter(), zoom: map.getZoom(), pitch: map.getPitch(), bearing: map.getBearing() } }; }
+function setAirView(id) {
+  AIR.view = id; store.set('airView', id); AIR.paused = false;
+  if (AIR.watch) AIR.watch.auto = null;
+  airBlend(); renderAirCap(true);
+}
+function nextAirPlane() {
+  const W = AIR.watch; if (!W) return;
+  const m = curMin();
+  // 記住看過的，連按會依序輪過每一架；輪完一圈再從頭
+  W.skip = W.skip || new Set();
+  if (W.f) W.skip.add(W.f.id);
+  let nf = pickWatchFlight(W.ap, m, W.f, W.skip);
+  if (!nf && W.skip.size) { W.skip.clear(); nf = pickWatchFlight(W.ap, m, W.f); }
+  if (nf) { W.f = nf; W.sticky = true; AIR.paused = false; airBlend(); }
+  else W.note = { text: '目前機場附近只有這一架，換不了', until: performance.now() + 2500 };
+  renderAirCap(true);
 }
 airCap.addEventListener('click', e => {
-  const id = e.target.closest('button') && e.target.closest('button').id;
-  if (id === 'airexit') exitWatch();
-  else if (id === 'airview') {
-    if (AIR.paused) AIR.paused = false;
-    else { const i = AIR_VIEWS.findIndex(v => v.id === AIR.view); AIR.view = AIR_VIEWS[(i + 1) % AIR_VIEWS.length].id; store.set('airView', AIR.view); }
-    if (AIR.watch) AIR.watch.blend = { t0: performance.now(), from: { c: map.getCenter(), zoom: map.getZoom(), pitch: map.getPitch(), bearing: map.getBearing() } };
-    renderAirCap(true);
-  } else if (id === 'airnext' && AIR.watch) {
-    const W = AIR.watch, nf = pickWatchFlight(W.ap, curMin(), W.f);
-    if (nf) { W.f = nf; AIR.shown = null; AIR.pend = null; AIR.paused = false; W.blend = { t0: performance.now(), from: { c: map.getCenter(), zoom: map.getZoom(), pitch: map.getPitch(), bearing: map.getBearing() } }; }
-    renderAirCap(true);
-  }
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.id === 'airexit') exitWatch();
+  else if (b.id === 'airback') { AIR.paused = false; airBlend(); renderAirCap(true); }
+  else if (b.id === 'airnext') nextAirPlane();
+  else if (b.dataset.view) setAirView(b.dataset.view);
 });
 setInterval(() => { if (AIR.watch) renderAirCap(); if (pickIsAir()) renderAirPick(); }, 1000);
 document.addEventListener('keydown', e => {
   if (!AIR.watch || e.target.matches('input, textarea')) return;
   if (e.key === 'Escape') { exitWatch(); e.stopImmediatePropagation(); }
-  else if (e.key === 'v' || e.key === 'V') $('#airview') && $('#airview').click();
+  else if (e.key === 'v' || e.key === 'V') { const i = AIR_VIEWS.findIndex(v => v.id === AIR.view); setAirView(AIR_VIEWS[(i + 1) % AIR_VIEWS.length].id); }
 }, true);
 
 /* ---------- 開關與排程 ---------- */
