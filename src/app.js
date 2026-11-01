@@ -891,6 +891,7 @@ function openPicker() { settings.hidden = true; sky.hidden = true; musicPanel.hi
 function closePicker() { picker.hidden = true; scrim.hidden = true; }
 function renderPicker() {
   if (S.pickGroup === 'air' && typeof renderAirPick === 'function') return renderAirPick(); // 飛機分頁在 air.js
+  if (S.pickGroup === 'bus' && typeof renderBusPick === 'function') return renderBusPick(); // 國道客運分頁在 bus.js
   const q = normName(pq.value.trim());
   let rows = S.positions.filter(p => S.pickGroup === 'all' || sysGroup(p.trip.sys) === S.pickGroup);
   if (q) {

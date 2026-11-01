@@ -463,7 +463,7 @@ function airportFeatures() {
    每種「機型＋航空公司＋起落架」的模型只建一次放進 GPU，每格只換一個矩陣（位置、航向、仰角）。
    以前每格把幾百個多邊形用 GeoJSON 重送，要等背景執行緒切完圖磚才畫得出來，飛機和鏡頭對不上就會抖。 */
 const PlaneGL = {
-  draw: [], meshes: new Map(), gl: null, prog: null, last: null, hover: false,
+  draw: [], extra: [], meshes: new Map(), gl: null, prog: null, last: null, hover: false,
   hex(c) { const n = parseInt(c.slice(1), 16); return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255]; },
   // 把部位清單變成三角形：每個柱體有頂面、底面與四個側面，各自帶法向量與顏色
   build(parts) {
@@ -485,11 +485,12 @@ const PlaneGL = {
     }
     return { P: new Float32Array(P), N: new Float32Array(N), C: new Float32Array(C), n: P.length / 3 };
   },
-  mesh(type, airline, gear) {
-    const key = type + '|' + airline + '|' + gear;
+  mesh(type, airline, gear) { return PlaneGL.meshFor(type + '|' + airline + '|' + gear, () => planeParts(type, airline, gear)); },
+  // 依 key 快取模型；parts() 只在第一次用到時呼叫（國道客運也用這個）
+  meshFor(key, parts) {
     let m = PlaneGL.meshes.get(key);
     if (!m) {
-      const d = PlaneGL.build(planeParts(type, airline, gear)), gl = PlaneGL.gl;
+      const d = PlaneGL.build(parts()), gl = PlaneGL.gl;
       m = { n: d.n, bufs: [d.P, d.N, d.C].map(arr => { const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, arr, gl.STATIC_DRAW); return b; }) };
       PlaneGL.meshes.set(key, m);
     }
@@ -507,15 +508,15 @@ const PlaneGL = {
   mul(a, b) { const o = new Float64Array(16); for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) { let v = 0; for (let k = 0; k < 4; k++) v += a[k * 4 + j] * b[i * 4 + k]; o[i * 4 + j] = v; } return o; },
   // 點選：用上一格的投影矩陣把每架飛機的中心投到螢幕上
   pick(pt) {
-    const M = PlaneGL.last; if (!M || !AIR.on) return null; // 飛機關掉時不能點到看不見的飛機
+    const M = PlaneGL.last; if (!M) return null;
     const cv = map.getCanvas(), w = cv.clientWidth, h = cv.clientHeight;
     let best = null, bd = 1e9;
-    for (const d of PlaneGL.draw) {
-      const m = PlaneGL.model(d.p, d.ll), PM = PlaneGL.mul(M, m), L = AC_TYPES[acTypeOf(d.f)].L;
+    for (const d of PlaneGL.draw.concat(PlaneGL.extra)) {
+      const m = PlaneGL.model(d.p, d.ll), PM = PlaneGL.mul(M, m), L = d.len || AC_TYPES[acTypeOf(d.f)].L;
       const proj = (x) => { const cx = PM[0] * x + PM[12], cy = PM[1] * x + PM[13], cw = PM[3] * x + PM[15]; return cw > 0 ? [(cx / cw + 1) / 2 * w, (1 - cy / cw) / 2 * h] : null; };
       const c = proj(0), nose = proj(L / 2); if (!c || !nose) continue;
       const r = Math.max(14, Math.hypot(nose[0] - c[0], nose[1] - c[1])), dd = Math.hypot(pt.x - c[0], pt.y - c[1]);
-      if (dd < r && dd < bd) { bd = dd; best = d.f; }
+      if (dd < r && dd < bd) { bd = dd; best = d; }
     }
     return best;
   },
@@ -544,7 +545,9 @@ const PlaneGL = {
     onRemove() { PlaneGL.gl = null; PlaneGL.meshes.clear(); },
     render(gl, matrix) {
       PlaneGL.last = matrix;
-      if (!AIR.on || !PlaneGL.draw.length || !PlaneGL.prog) return;
+      // 飛機（關掉時不畫）加上其他交通工具（國道客運）
+      const list = (AIR.on ? PlaneGL.draw : []).concat(PlaneGL.extra);
+      if (!list.length || !PlaneGL.prog) return;
       const L = PlaneGL.loc;
       gl.useProgram(PlaneGL.prog);
       // 光線跟著地圖的日夜設定
@@ -557,8 +560,8 @@ const PlaneGL = {
       } catch {}
       gl.uniform3fv(L.light, dir); gl.uniform3fv(L.lc, lc); gl.uniform1f(L.li, li);
       gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(true); gl.disable(gl.CULL_FACE); gl.disable(gl.BLEND);
-      for (const d of PlaneGL.draw) {
-        const mesh = PlaneGL.mesh(acTypeOf(d.f), d.f.airline || '', d.p.alt < 450);
+      for (const d of list) {
+        const mesh = d.mesh ? d.mesh() : PlaneGL.mesh(acTypeOf(d.f), d.f.airline || '', d.p.alt < 450);
         const m = PlaneGL.model(d.p, d.ll), PM = PlaneGL.mul(matrix, m);
         // 只保留旋轉（去掉縮放）給法向量用
         const s = Math.hypot(m[0], m[1], m[2]) || 1;
@@ -584,7 +587,7 @@ function ensureLayers() {
       'circle-radius': ['interpolate', ['exponential', 2], ['zoom'], 12, 3, 16, 40, 19, 300],
       'circle-opacity': ['*', 0.28, ['-', 1, ['/', ['get', 'alt'], 900]]] } }, 'light-glow');
   map.addLayer(PlaneGL.layer);
-  map.on('click', e => { const f = PlaneGL.pick(e.point); if (f) watchFlight(f); });
+  map.on('click', e => { const d = PlaneGL.pick(e.point); if (!d) return; if (d.onPick) d.onPick(); else watchFlight(d.f); });
   map.on('mousemove', e => { if (map.getZoom() < 11) return; const hit = !!PlaneGL.pick(e.point); if (hit !== PlaneGL.hover) { PlaneGL.hover = hit; map.getCanvas().style.cursor = hit ? 'pointer' : ''; } });
   map.addLayer({ id: 'plane-dot', type: 'circle', source: 'plane-pts', maxzoom: 11.5,
     paint: { 'circle-color': '#F4F7FA', 'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, 1.6, 11, 3.2], 'circle-opacity': ['*', 0.9, ['get', 'fade']],
@@ -594,7 +597,8 @@ function ensureLayers() {
 }
 function setPlaneVis() {
   if (!AIR.layers) return;
-  for (const l of ['planes3d', 'plane-dot', 'plane-shadow']) try { map.setLayoutProperty(l, 'visibility', AIR.on ? 'visible' : 'none'); } catch {}
+  // planes3d 也畫國道客運，所以一直開著；飛機開關由圖層的 render 依 AIR.on 決定
+  for (const l of ['plane-dot', 'plane-shadow']) try { map.setLayoutProperty(l, 'visibility', AIR.on ? 'visible' : 'none'); } catch {}
 }
 
 let airRaf = 0;
