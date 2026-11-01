@@ -1230,6 +1230,15 @@ const PERF = /[?&]perf\b/.test(location.search) ? { marks: [], tdx: [] } : null;
 function perfMark(name) { if (PERF && !PERF.marks.some(m => m[0] === name)) PERF.marks.push([name, performance.now()]); }
 
 /* ---------- TDX 即時資料（部署於自有網域時可用） ---------- */
+// 瀏覽器端的小快取（IndexedDB）；不能用時（無痕模式等）就當作沒有快取
+const cacheDB = (() => {
+  let dbP = null;
+  const open = () => dbP || (dbP = new Promise(res => {
+    try { const r = indexedDB.open('rail-pulse-cache', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => res(null); } catch { res(null); }
+  }));
+  const tx = async (mode, fn) => { const db = await open(); if (!db) return null; return new Promise(res => { try { const t = db.transaction('kv', mode), q = fn(t.objectStore('kv')); q.onsuccess = () => res(q.result); q.onerror = () => res(null); } catch { res(null); } }); };
+  return { get: k => tx('readonly', s => s.get(k)), set: (k, v) => tx('readwrite', s => s.put(v, k)) };
+})();
 // TDX 偶爾不回應：超過時間就放棄，不要讓「連線中」一直掛著（下載大檔的時間也算在內）
 async function tdxFetch(url, ms, what, opt) {
   const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), ms);
@@ -1382,10 +1391,16 @@ const TDX = {
   /* ---------- 捷運與輕軌：TDX 站間行駛時間、班距、首末班車 ---------- */
   METRO_OPS: [['TRTC', 'TRTC'], ['TYMC', 'TYMC'], ['TMRT', 'TMRT'], ['KRTC', 'KRTC'], ['KLRT', 'KRTC']],
   async loadMetro(cred) {
+    // 捷運站間時間、班距、首末班車很少變：讀到的存在瀏覽器 3 天，再開頁直接用，不必再排 15 個 TDX 請求
     const all = await Promise.all(this.METRO_OPS.map(async ([op, sys]) => {
+      const key = 'metro:' + op, c = await cacheDB.get(key);
+      if (c && Date.now() - c.t < 3 * 864e5) { if (PERF) perfMark('捷運快取 ' + op); return { op, sys, s2s: c.s2s, freq: c.freq, fl: c.fl }; }
       const get = path => this.get(`v2/Rail/Metro/${path}/${op}`, cred, 2).catch(() => null);
       const [s2s, freq, fl] = await Promise.all([get('S2STravelTime'), get('Frequency'), get('FirstLastTimetable')]);
-      return { op, sys, s2s: Array.isArray(s2s) ? s2s : [], freq: Array.isArray(freq) ? freq : [], fl: Array.isArray(fl) ? fl : [] };
+      const D = { op, sys, s2s: Array.isArray(s2s) ? s2s : [], freq: Array.isArray(freq) ? freq : [], fl: Array.isArray(fl) ? fl : [] };
+      // 站間時間和首末班都有才存；班距沒有（例如高雄輕軌 TDX 回 400）照存，下次也不再問
+      if (D.s2s.length && D.fl.length) cacheDB.set(key, { t: Date.now(), s2s: D.s2s, freq: D.freq, fl: D.fl });
+      return D;
     }));
     const trips = [], covered = new Set();
     const zh = v => normName(typeof v === 'string' ? v : v && (v.Zh_tw || v.zh_tw) || '');
