@@ -3,14 +3,14 @@
    畫面附近或正在跟拍的路線再讀路線形狀（v2/Bus/Shape/InterCity），讓客運沿著道路平順移動，
    不會每 30 秒跳一格。只在即時模式（時間是現在）顯示。網址加上 ?busdemo 可用假資料預覽。 */
 
-const BUS = { on: store.get('buses', true), list: new Map(), shapes: new Map(), routes: new Map(), ops: new Map(), queue: [], qBusy: false, stops: new Map(), retryAt: new Map(),
+const BUS = { on: store.get('buses', true), list: new Map(), shapes: new Map(), routes: new Map(), ops: new Map(), queue: [], qBusy: false, stops: new Map(), retryAt: new Map(), urgent: new Set(),
   live: false, status: '', loadAt: 0, gen: 0, follow: null, paused: false, view: store.get('busView', 'chase'), noSelect: false };
 const BUS_DEMO = /[?&]busdemo\b/.test(location.search);
 
 /* ---------- 讀取 ---------- */
 const busCred = () => store.get('tdx', {});
 const zh = v => (v && typeof v === 'object' ? v.Zh_tw || v.En || '' : String(v || ''));
-async function busFetch(path) { return TDX.get(path, busCred()); }
+async function busFetch(path, pri = 1) { return TDX.get(path, busCred(), pri); }
 
 async function loadBuses() {
   if (BUS_DEMO) return demoBuses();
@@ -22,7 +22,7 @@ async function loadBuses() {
   const sel = '$select=PlateNumb,OperatorID,RouteUID,RouteName,SubRouteUID,SubRouteName,Direction,BusPosition,Speed,Azimuth,GPSTime';
   let j;
   BUS.loading = true;
-  try { j = await busFetch('v2/Bus/RealTimeByFrequency/InterCity?' + (BUS.noSelect ? '' : sel)); }
+  try { j = await busFetch('v2/Bus/RealTimeByFrequency/InterCity?' + (BUS.noSelect ? '' : sel), 3); }
   catch (e) {
     BUS.loading = false;
     // 欄位名稱不合時 TDX 會回 400：改成不指定欄位再試一次
@@ -68,6 +68,7 @@ async function loadOperators() {
 // urgent：使用者點選的車，插到最前面並立刻讀，不等間隔
 function wantRoute(uid, urgent) {
   if (!uid || BUS_DEMO) return;
+  if (urgent) BUS.urgent.add(uid);
   if (urgent && BUS.queue.includes(uid)) { BUS.queue.splice(BUS.queue.indexOf(uid), 1); BUS.queue.unshift(uid); }
   // 形狀已有且站序也有（或正在讀）就不再排；站序上次沒讀到的，稍後會再排一次
   else if ((BUS.shapes.has(uid) && (BUS.stops.has(uid) || BUS.shapes.get(uid) === null)) || BUS.queue.includes(uid)) return;
@@ -118,12 +119,15 @@ async function pumpQueue() {
     if (c && Date.now() - c.t < BUS_CACHE_MS) applyRouteData(uid, c); else need.push(uid);
   }
   if (!need.length) { BUS.qBusy = false; return pumpQueue(); }
+  // 使用者點的車優先；其他路線是背景慢慢讀，排在所有即時資料後面
+  const pri = need.some(u => BUS.urgent.has(u)) ? 2 : 0;
+  for (const u of need) BUS.urgent.delete(u);
   const f = encodeURIComponent(need.map(u => `RouteUID eq '${u.replace(/'/g, '')}'`).join(' or '));
   try {
     // $select 欄位名稱不合時 TDX 回 400：改成不指定欄位
     const get = async (path, sel, key) => {
-      if (!BUS[key]) try { return await busFetch(`${path}?$filter=${f}&$select=${sel}`); } catch (e) { if (!/400/.test(e.message)) throw e; BUS[key] = true; }
-      return busFetch(`${path}?$filter=${f}`);
+      if (!BUS[key]) try { return await busFetch(`${path}?$filter=${f}&$select=${sel}`, pri); } catch (e) { if (!/400/.test(e.message)) throw e; BUS[key] = true; }
+      return busFetch(`${path}?$filter=${f}`, pri);
     };
     let tOk = true;
     const sj = await get('v2/Bus/Shape/InterCity', 'RouteUID,SubRouteUID,Direction,Geometry', 'shapeNoSel');
