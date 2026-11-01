@@ -183,19 +183,21 @@ function initMap() {
     map.addLayer({ id: 'focus-cars2', type: 'fill-extrusion', source: 'focus2', minzoom: CAR_ZOOM, paint: { ...focusPaint, 'fill-extrusion-opacity': 0 } });
     map.addSource('near', { type: 'geojson', data: EMPTY });
     map.addLayer({ id: 'near-cars', type: 'fill-extrusion', source: 'near', minzoom: CAR_ZOOM, paint: carPaint });
-    // 車頭燈（暖白）與尾燈（紅）
+    // 車頭燈（暖白）與尾燈（紅）：照在地上的光暈，放在車廂與建築這些 3D 圖層底下，
+    // 被車身、建築擋住的部分就看不到，不會浮在整個畫面最上層
     map.addLayer({ id: 'light-glow', type: 'circle', source: 'lights', minzoom: 11,
       paint: { 'circle-color': ['get', 'c'], 'circle-blur': 1, 'circle-pitch-alignment': 'map',
         'circle-radius': ['interpolate', ['exponential', 1.6], ['zoom'], 11, ['*', 4, ['get', 'k']], 15, ['*', 12, ['get', 'k']], 19, ['*', 60, ['get', 'k']]],
-        'circle-opacity': ['interpolate', ['linear'], ['zoom'], 11, 0, 12, 0.9] } });
-    map.addLayer({ id: 'light-core', type: 'circle', source: 'lights', minzoom: 12,
+        'circle-opacity': ['interpolate', ['linear'], ['zoom'], 11, 0, 12, 0.9] } }, 'cars');
+    // 亮點只在遠看（車廂還是圓點）時畫；近看時車頭本身就有燈
+    map.addLayer({ id: 'light-core', type: 'circle', source: 'lights', minzoom: 12, maxzoom: CAR_ZOOM,
       paint: { 'circle-color': '#FFFFFF', 'circle-pitch-alignment': 'map', 'circle-blur': 0.4,
-        'circle-radius': ['interpolate', ['exponential', 1.6], ['zoom'], 12, ['*', 1, ['get', 'k']], 16, ['*', 3, ['get', 'k']], 19, ['*', 10, ['get', 'k']]] } });
+        'circle-radius': ['interpolate', ['exponential', 1.6], ['zoom'], 12, ['*', 1, ['get', 'k']], 16, ['*', 3, ['get', 'k']], 19, ['*', 10, ['get', 'k']]] } }, 'cars');
     // 半透明建築要畫在車廂之後：先畫的 3D 圖層會擋住後畫的，這樣隔著建築也看得到列車
-    try { map.moveLayer('buildings', 'light-glow'); } catch {}
+    try { map.moveLayer('buildings'); } catch {}
     map.addSource('facade', { type: 'geojson', data: EMPTY });
     map.addLayer({ id: 'facade', type: 'fill-extrusion', source: 'facade', minzoom: FACADE_ZOOM,
-      paint: { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 't'], 'fill-extrusion-base': ['get', 'b'], 'fill-extrusion-opacity': 0.8, 'fill-extrusion-vertical-gradient': false } }, 'light-glow');
+      paint: { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 't'], 'fill-extrusion-base': ['get', 'b'], 'fill-extrusion-opacity': 0.8, 'fill-extrusion-vertical-gradient': false } });
     const solid = { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 't'], 'fill-extrusion-base': ['get', 'b'], 'fill-extrusion-opacity': 1, 'fill-extrusion-vertical-gradient': false };
     map.addSource('platforms', { type: 'geojson', data: EMPTY });
     map.addLayer({ id: 'platforms', type: 'fill-extrusion', source: 'platforms', minzoom: FACADE_ZOOM, paint: solid }, 'focus-cars');
@@ -245,7 +247,10 @@ function syncTerrain(force) {
   if (!map) return;
   const z = map.getZoom();
   // 手機上只要還在跟車（就算手動拉遠）就不開地形：地形加上斜角大範圍視野會把手機 GPU 拖垮
-  const want = S.terrain && !(S.follow && (COARSE || !S.followPaused)) && (terrainOn ? z < 12.5 : z < 11.5);
+  // 手機的地形只留給看全台、看整個縣市的大範圍：拉近到十多公里寬時，斜看的山區要把很多地形圖磚畫到離屏畫面，
+  // 加上進出地形時重新編譯著色器，手機 GPU 會整個卡住（電腦可以放寬到更近）
+  const [zOn, zOff] = COARSE ? [9.6, 10.4] : [11.5, 12.5];
+  const want = S.terrain && !(S.follow && (COARSE || !S.followPaused)) && (terrainOn ? z < zOff : z < zOn);
   if (want === terrainOn && !force) return;
   terrainOn = want;
   try { map.setTerrain(want ? { source: 'dem', exaggeration: 1.5 } : null); } catch {}
