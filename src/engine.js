@@ -353,6 +353,18 @@ const PERF = /[?&]perf\b/.test(location.search) ? { marks: [], tdx: [] } : null;
 function perfMark(name) { if (PERF && !PERF.marks.some(m => m[0] === name)) PERF.marks.push([name, performance.now()]); }
 
 /* ---------- TDX 即時資料（部署於自有網域時可用） ---------- */
+// TDX 偶爾不回應：超過時間就放棄，不要讓「連線中」一直掛著（下載大檔的時間也算在內）
+async function tdxFetch(url, ms, what, opt) {
+  const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), ms);
+  try {
+    const r = await fetch(url, { ...opt, signal: ctl.signal });
+    const body = r.ok ? await r.json() : null;
+    return { ok: r.ok, status: r.status, headers: r.headers, json: async () => body };
+  } catch (e) {
+    if (e && e.name === 'AbortError') throw new Error(`TDX ${what}逾時（${ms / 1000} 秒沒回應）`);
+    throw e;
+  } finally { clearTimeout(tm); }
+}
 const TDX = {
   token: null, exp: 0, status: '未連線', ok: false, lastDelay: null,
   async auth(id, secret) {
@@ -363,7 +375,7 @@ const TDX = {
     return this.authing;
   },
   async auth2(id, secret) {
-    const r = await fetch('https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token', {
+    const r = await tdxFetch('https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token', 20e3, '金鑰驗證', {
       method:'POST', headers:{ 'content-type':'application/x-www-form-urlencoded' },
       body:new URLSearchParams({ grant_type:'client_credentials', client_id:id, client_secret:secret })
     });
@@ -395,7 +407,7 @@ const TDX = {
       const c = this.q[0].cred;
       this.qAuth = true;
       this.auth(c.id, c.secret)
-        .catch(e => { for (const j of this.q.splice(0)) j.rej(e); })
+        .catch(e => { for (const j of this.q.splice(0)) { if (j.perf) { j.perf.done = performance.now(); j.perf.err = String(e.message || e).slice(0, 40); } j.rej(e); } })
         .finally(() => { this.qAuth = false; this.pump(); });
       return;
     }
@@ -408,7 +420,7 @@ const TDX = {
     try {
       const tk = await this.auth(job.cred.id, job.cred.secret);
       if (job.perf) job.perf.sent = performance.now();
-      const r = await fetch('https://tdx.transportdata.tw/api/basic/' + job.path + (job.path.includes('?') ? '&' : '?') + '$format=JSON', {
+      const r = await tdxFetch('https://tdx.transportdata.tw/api/basic/' + job.path + (job.path.includes('?') ? '&' : '?') + '$format=JSON', 45e3, '讀取資料', {
         headers:{ authorization:'Bearer ' + tk } });
       if (r.status === 429 && job.tries < 4) {
         job.tries++;

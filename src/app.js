@@ -1247,6 +1247,7 @@ async function connectTDX(cred, quiet) {
     TDX.ok = true; TDX.date = twDate(Date.now());
     perfMark('台鐵高鐵當日時刻表套用');
     afterTripsChanged(); // 官方時刻表一到就換上，不等捷運
+    tdxStatus(`已載入 ${trips.length} 班台鐵與高鐵當日時刻，正在讀即時誤點與捷運資料…`);
     let d = 0; try { d = await TDX.loadDelays(cred, isCurrent); } catch {}
     if (!isCurrent()) return;
     perfMark('台鐵即時誤點套用');
@@ -1348,21 +1349,39 @@ function frame(now) {
 /* ---------- ?perf：載入計時面板 ----------
    列出開頁後每個東西在第幾秒就緒，以及每個 TDX 請求的排隊、下載時間，方便在自己的手機或電腦上找出哪裡慢 */
 if (PERF) {
-  const el = document.createElement('pre');
-  el.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:99;max-width:min(560px,calc(100% - 16px));max-height:60vh;overflow:auto;margin:0;padding:8px 10px;border-radius:10px;background:rgba(0,0,0,.78);color:#E8F0F2;font:10.5px/1.4 ui-monospace,Menlo,monospace;white-space:pre-wrap;pointer-events:none;opacity:.92';
-  document.body.appendChild(el);
+  // 精簡摘要：連線狀態一行、各項就緒秒數、TDX 請求只列沒完成、失敗與最慢的幾個；「複製」可把完整紀錄貼給別人
+  const box = document.createElement('div');
+  box.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:99;max-width:min(420px,calc(100% - 16px));border-radius:10px;background:rgba(0,0,0,.8);color:#E8F0F2;font:11px/1.45 ui-monospace,Menlo,monospace;opacity:.94';
+  box.innerHTML = '<div style="display:flex;gap:6px;padding:6px 8px 0"><b style="flex:1">載入計時</b><button data-a="copy">複製</button><button data-a="fold">收合</button></div><pre style="margin:0;padding:4px 10px 8px;white-space:pre-wrap;max-height:40vh;overflow:auto"></pre>';
+  for (const b of box.querySelectorAll('button')) b.style.cssText = 'font:inherit;color:inherit;background:rgba(255,255,255,.15);border:0;border-radius:6px;padding:2px 8px;cursor:pointer';
+  document.body.appendChild(box);
+  const el = box.querySelector('pre');
   if (document.fonts) document.fonts.ready.then(() => perfMark('字型載入完成'));
-  const sec = ms => (ms / 1000).toFixed(1).padStart(5) + 's';
-  const draw = () => {
-    const rows = ['載入計時（從開頁算起）'];
-    for (const [n, t] of PERF.marks.slice().sort((a, b) => a[1] - b[1])) rows.push(sec(t) + '  ' + n);
-    if (PERF.tdx.length) {
-      rows.push('', 'TDX 請求：排入 → 送出 → 完成（排隊／下載）');
-      for (const j of PERF.tdx) rows.push(sec(j.q) + ' ' + (j.sent ? sec(j.sent) : '  等待') + ' ' + (j.done ? sec(j.done) : (j.sent ? '  下載中' : '')) +
-        (j.sent ? '  (' + ((j.sent - j.q) / 1000).toFixed(1) + '/' + (j.done ? ((j.done - j.sent) / 1000).toFixed(1) : '…') + ')' : '') + '  ' + j.path.replace(/^v\d\//, '') + (j.n !== undefined && j.n !== '' ? ' ×' + j.n : '') + (j.err ? ' ✗' + j.err : ''));
+  const sec = ms => (ms / 1000).toFixed(1) + 's';
+  const name = j => j.path.replace(/^v\d\//, '').replace(/^(Rail|Bus|Air)\//, '');
+  const line = j => (j.done ? sec(j.done - j.q) : j.sent ? '下載中 ' + sec(performance.now() - j.sent) : '排隊 ' + sec(performance.now() - j.q)) + '  ' + name(j) + (j.n !== undefined && j.n !== '' ? ' ×' + j.n : '') + (j.err ? ' ✗' + j.err : '');
+  const text = full => {
+    const rows = ['TDX 狀態：' + ($('#tdxstatus') ? $('#tdxstatus').textContent.trim().slice(0, 60) : '')];
+    for (const [n, t] of PERF.marks.slice().sort((a, b) => a[1] - b[1])) rows.push(sec(t).padStart(6) + '  ' + n);
+    const T = PERF.tdx;
+    if (T.length) {
+      const wait = T.filter(j => !j.sent && !j.done), dl = T.filter(j => j.sent && !j.done), err = T.filter(j => j.err), ok = T.filter(j => j.done && !j.err);
+      rows.push('', `TDX 請求 ${T.length} 個：完成 ${ok.length}、下載中 ${dl.length}、排隊 ${wait.length}、失敗 ${err.length}`);
+      const pick = full ? T : [...dl, ...err, ...wait.slice(0, 3), ...ok.slice().sort((a, b) => (b.done - b.q) - (a.done - a.q)).slice(0, 5)];
+      for (const j of pick) rows.push('  ' + line(j));
     }
-    el.textContent = rows.join('\n');
+    return rows.join('\n');
   };
+  let fold = false;
+  box.addEventListener('click', e => {
+    const a = e.target.dataset && e.target.dataset.a; if (!a) return;
+    if (a === 'fold') { fold = !fold; el.hidden = fold; e.target.textContent = fold ? '展開' : '收合'; }
+    if (a === 'copy') {
+      const t = text(true), done = () => { e.target.textContent = '已複製'; setTimeout(() => { e.target.textContent = '複製'; }, 1500); };
+      if (navigator.clipboard) navigator.clipboard.writeText(t).then(done, () => prompt('請手動複製', t)); else prompt('請手動複製', t);
+    }
+  });
+  const draw = () => { if (!fold) el.textContent = text(false); };
   setInterval(draw, 1000); draw();
 }
 
