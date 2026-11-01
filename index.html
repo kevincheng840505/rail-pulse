@@ -1238,9 +1238,18 @@ const TDX = {
     });
   },
   pump() {
-    if (this.qTimer || !this.q.length) return;
+    if (this.qTimer || this.qAuth || !this.q.length) return;
     const wait = Math.max(this.nextAt, this.holdUntil) - Date.now();
     if (wait > 0) { this.qTimer = setTimeout(() => { this.qTimer = 0; this.pump(); }, wait); return; }
+    // 金鑰還沒拿到（開頁、過期）：先驗證完再放行，不然驗證期間排出去的請求會在驗證完同一瞬間一起送出
+    if (!this.token || Date.now() >= this.exp) {
+      const c = this.q[0].cred;
+      this.qAuth = true;
+      this.auth(c.id, c.secret)
+        .catch(e => { for (const j of this.q.splice(0)) j.rej(e); })
+        .finally(() => { this.qAuth = false; this.pump(); });
+      return;
+    }
     const job = this.q.shift();
     this.nextAt = Date.now() + 260;
     this.send(job);
