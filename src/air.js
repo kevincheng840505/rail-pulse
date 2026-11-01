@@ -630,7 +630,8 @@ function exitWatch() {
   try { map.getSource('plane-focus').setData(EMPTY); } catch {}
   renderAirCap(true);
 }
-// 選列車或漫遊時離開觀察起降
+// 選列車、漫遊或回到全台時離開觀察起降
+$('#overview').addEventListener('click', () => exitWatch(), { capture: true });
 const _follow = follow;
 follow = function () { exitWatch(); return _follow.apply(this, arguments); };
 
@@ -670,7 +671,7 @@ function stepWatch(now) {
   // 換下一架：目前這架離開機場範圍，或還沒有對象
   if (!W.f || !watchPhase(W.f, W.ap, m)) {
     const nf = pickWatchFlight(W.ap, m, W.f);
-    if (nf !== W.f) { W.f = nf; W.sticky = false; AIR.shown = null; AIR.pend = null; W.blend = { t0: now, from: { c: map.getCenter(), zoom: map.getZoom(), pitch: map.getPitch(), bearing: map.getBearing() } }; renderAirCap(true); }
+    if (nf !== W.f) { W.f = nf; W.sticky = false; AIR.shown = null; AIR.pend = null; if (!nf) try { map.getSource('plane-focus').setData(EMPTY); } catch {} W.blend = { t0: now, from: { c: map.getCenter(), zoom: map.getZoom(), pitch: map.getPitch(), bearing: map.getBearing() } }; renderAirCap(true); }
   }
   let cam;
   if (W.f) {
