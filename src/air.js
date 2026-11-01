@@ -214,7 +214,7 @@ async function loadFlights() {
   // 八份航班表一起排進 TDX 佇列（以前一份讀完才排下一份）
   const jobs = [];
   for (const ap of ['TPE', 'TSA', 'KHH', 'RMQ']) for (const kind of ['Departure', 'Arrival'])
-    jobs.push(TDX.get(`v2/Air/FIDS/Airport/${kind}/${ap}`, cred).then(j => Array.isArray(j) ? [ap, kind, j] : null, () => null)); // 單一機場失敗就略過
+    jobs.push(TDX.get(`v2/Air/FIDS/Airport/${kind}/${ap}`, cred, 2).then(j => Array.isArray(j) ? [ap, kind, j] : null, () => null)); // 單一機場失敗就略過
   for (const r of await Promise.all(jobs)) if (r) res.push(r); // 維持原本的機場順序（同一航班出現兩次時先到先用）
   perfMark('TDX 航班套用');
   if (gen !== AIR.gen) return; // 讀取途中金鑰被清除或又重新讀取
@@ -1001,7 +1001,8 @@ document.addEventListener('keydown', e => {
   b.setAttribute('aria-pressed', String(AIR.on));
   b.addEventListener('click', () => { AIR.on = !AIR.on; store.set('planes', AIR.on); b.setAttribute('aria-pressed', String(AIR.on)); setPlaneVis(); });
 })();
-function reloadFlights() { loadFlights().catch(e => { console.warn(e); AIR.flights = estimateFlights(); }); }
+// 上一次還在讀就不重複排（開頁和按下連線都會觸發）
+function reloadFlights() { if (AIR.loading) return; AIR.loading = true; loadFlights().catch(e => { console.warn(e); AIR.flights = estimateFlights(); }).finally(() => { AIR.loading = false; }); }
 AIR.flights = estimateFlights();
 // TDX 佇列會控制請求頻率，不必等太久；時刻表先排進佇列，航班隨後
 setTimeout(reloadFlights, 1500);

@@ -1265,7 +1265,7 @@ const TDX = {
      - 每 260 毫秒最多送出一個（約每秒 4 次）
      - pri 大的先送：使用者正在看的（客運即時位置、點選的車）排在背景讀路線形狀之前
      - 遇到 429 整個佇列暫停一下再重送，最多重試 4 次，呼叫端多半不會看到失敗 */
-  q: [], qTimer: 0, nextAt: 0, holdUntil: 0, hold: 0,
+  q: [], qTimer: 0, nextAt: 0, holdUntil: 0, hold: 0, gap: 260, gapAt: 0,
   get(path, cred, pri = 1) {
     return new Promise((res, rej) => {
       const job = { path, cred, pri, res, rej, tries: 0, q0: performance.now() };
@@ -1289,7 +1289,9 @@ const TDX = {
       return;
     }
     const job = this.q.shift();
-    this.nextAt = Date.now() + 260;
+    // 收到 429 後把間隔拉長（最多 1 秒一個），30 秒沒再遇到就慢慢縮回 260 毫秒
+    if (this.gap > 260 && Date.now() - this.gapAt > 30e3) { this.gap = Math.max(260, this.gap * 0.8); this.gapAt = Date.now(); }
+    this.nextAt = Date.now() + this.gap;
     this.send(job);
     this.pump();
   },
@@ -1302,6 +1304,7 @@ const TDX = {
       if (r.status === 429 && job.tries < 4) {
         job.tries++;
         const ra = +r.headers.get('retry-after');
+        this.gap = Math.min(1000, this.gap * 1.5); this.gapAt = Date.now();
         this.hold = Math.min(8000, Math.max(1500, this.hold * 2));
         this.holdUntil = Math.max(this.holdUntil, Date.now() + (ra > 0 ? ra * 1000 : this.hold));
         this.q.unshift(job); this.pump();
@@ -1354,7 +1357,7 @@ const TDX = {
   },
   async loadTimetables(cred) {
     // 台鐵與高鐵同時讀：以前要等台鐵整份（好幾 MB）下載完才開始讀高鐵
-    const [tra, thsr] = await Promise.all([this.get('v3/Rail/TRA/DailyTrainTimetable/Today', cred), this.get('v2/Rail/THSR/DailyTimetable/Today', cred)]);
+    const [tra, thsr] = await Promise.all([this.get('v3/Rail/TRA/DailyTrainTimetable/Today', cred, 4), this.get('v2/Rail/THSR/DailyTimetable/Today', cred, 4)]);
     const trips = [];
     for (const t of (tra.TrainTimetables || [])) {
       const info = t.TrainInfo;
@@ -1380,7 +1383,7 @@ const TDX = {
   METRO_OPS: [['TRTC', 'TRTC'], ['TYMC', 'TYMC'], ['TMRT', 'TMRT'], ['KRTC', 'KRTC'], ['KLRT', 'KRTC']],
   async loadMetro(cred) {
     const all = await Promise.all(this.METRO_OPS.map(async ([op, sys]) => {
-      const get = path => this.get(`v2/Rail/Metro/${path}/${op}`, cred).catch(() => null);
+      const get = path => this.get(`v2/Rail/Metro/${path}/${op}`, cred, 2).catch(() => null);
       const [s2s, freq, fl] = await Promise.all([get('S2STravelTime'), get('Frequency'), get('FirstLastTimetable')]);
       return { op, sys, s2s: Array.isArray(s2s) ? s2s : [], freq: Array.isArray(freq) ? freq : [], fl: Array.isArray(fl) ? fl : [] };
     }));
@@ -1479,8 +1482,9 @@ const TDX = {
     resetTrips(t => !t.tdxMetro && !(t.line && covered.has(t.line)));
     trips.forEach(registerTrip);
   },
-  async loadDelays(cred, isCurrent = () => true) {
-    const j = await this.get('v2/Rail/TRA/LiveTrainDelay', cred);
+  // pre：已經先排進佇列的請求（開頁時誤點和時刻表一起排，不等捷運）
+  async loadDelays(cred, isCurrent = () => true, pre) {
+    const j = await (pre || this.get('v2/Rail/TRA/LiveTrainDelay', cred, 3));
     if (!isCurrent()) return 0;
     const map = new Map();
     for (const d of j) map.set(String(d.TrainNo), d.DelayTime);
@@ -3828,6 +3832,7 @@ async function connectTDX(cred, quiet) {
   try {
     // 時刻表先排進 TDX 佇列，捷運資料緊接著排（以前要等時刻表、誤點都讀完才開始讀捷運）
     const ttP = TDX.loadTimetables(cred);
+    const delayP = TDX.get('v2/Rail/TRA/LiveTrainDelay', cred, 4); delayP.catch(() => {});
     const metroP = TDX.loadMetro(cred).catch(e => { console.warn(e); return null; });
     const trips = await ttP;
     if (!isCurrent()) return;
@@ -3836,7 +3841,7 @@ async function connectTDX(cred, quiet) {
     perfMark('台鐵高鐵當日時刻表套用');
     afterTripsChanged(); // 官方時刻表一到就換上，不等捷運
     tdxStatus(`已載入 ${trips.length} 班台鐵與高鐵當日時刻，正在讀即時誤點與捷運資料…`);
-    let d = 0; try { d = await TDX.loadDelays(cred, isCurrent); } catch {}
+    let d = 0; try { d = await TDX.loadDelays(cred, isCurrent, delayP); } catch {}
     if (!isCurrent()) return;
     perfMark('台鐵即時誤點套用');
     const metro = await metroP;
@@ -4155,8 +4160,9 @@ async function loadAlerts() {
   if (!Extras.alerts || Extras.demo) return;
   const cred = store.get('tdx', {});
   if (!cred.id || !cred.secret) { setAlerts([]); return; }
+  if (Extras.alertBusy) return; Extras.alertBusy = true; // 開頁和按下連線都會觸發，不要重複排
   Extras.alertLoad = Date.now();
-  const res = await Promise.allSettled(ALERT_SOURCES.map(([label, path]) => TDX.get(path, cred).then(j => parseAlerts(label, j))));
+  const res = await Promise.allSettled(ALERT_SOURCES.map(([label, path]) => TDX.get(path, cred, 0).then(j => parseAlerts(label, j)))).finally(() => { Extras.alertBusy = false; });
   const seen = new Set(), list = [];
   for (const r of res) if (r.status === 'fulfilled') for (const a of r.value) {
     const k = a.label + a.text; if (seen.has(k)) continue; seen.add(k); list.push(a);
@@ -4440,7 +4446,7 @@ async function loadFlights() {
   // 八份航班表一起排進 TDX 佇列（以前一份讀完才排下一份）
   const jobs = [];
   for (const ap of ['TPE', 'TSA', 'KHH', 'RMQ']) for (const kind of ['Departure', 'Arrival'])
-    jobs.push(TDX.get(`v2/Air/FIDS/Airport/${kind}/${ap}`, cred).then(j => Array.isArray(j) ? [ap, kind, j] : null, () => null)); // 單一機場失敗就略過
+    jobs.push(TDX.get(`v2/Air/FIDS/Airport/${kind}/${ap}`, cred, 2).then(j => Array.isArray(j) ? [ap, kind, j] : null, () => null)); // 單一機場失敗就略過
   for (const r of await Promise.all(jobs)) if (r) res.push(r); // 維持原本的機場順序（同一航班出現兩次時先到先用）
   perfMark('TDX 航班套用');
   if (gen !== AIR.gen) return; // 讀取途中金鑰被清除或又重新讀取
@@ -5227,7 +5233,8 @@ document.addEventListener('keydown', e => {
   b.setAttribute('aria-pressed', String(AIR.on));
   b.addEventListener('click', () => { AIR.on = !AIR.on; store.set('planes', AIR.on); b.setAttribute('aria-pressed', String(AIR.on)); setPlaneVis(); });
 })();
-function reloadFlights() { loadFlights().catch(e => { console.warn(e); AIR.flights = estimateFlights(); }); }
+// 上一次還在讀就不重複排（開頁和按下連線都會觸發）
+function reloadFlights() { if (AIR.loading) return; AIR.loading = true; loadFlights().catch(e => { console.warn(e); AIR.flights = estimateFlights(); }).finally(() => { AIR.loading = false; }); }
 AIR.flights = estimateFlights();
 // TDX 佇列會控制請求頻率，不必等太久；時刻表先排進佇列，航班隨後
 setTimeout(reloadFlights, 1500);
@@ -5629,7 +5636,7 @@ async function loadBuses() {
 }
 async function loadOperators() {
   try {
-    const j = await busFetch('v2/Bus/Operator/InterCity?$select=OperatorID,OperatorName');
+    const j = await busFetch('v2/Bus/Operator/InterCity?$select=OperatorID,OperatorName', 0);
     if (Array.isArray(j)) for (const o of j) BUS.ops.set(o.OperatorID, zh(o.OperatorName));
   } catch {}
 }
@@ -5650,7 +5657,7 @@ function wantRoute(uid, urgent) {
 async function loadAllRoutes() {
   if (BUS.routesAll) return; BUS.routesAll = true;
   try {
-    const j = await busFetch('v2/Bus/Route/InterCity?$select=RouteUID,DepartureStopNameZh,DestinationStopNameZh,Operators');
+    const j = await busFetch('v2/Bus/Route/InterCity?$select=RouteUID,DepartureStopNameZh,DestinationStopNameZh,Operators', 0);
     if (Array.isArray(j)) for (const r of j) if (r.RouteUID) BUS.routes.set(r.RouteUID, { from: r.DepartureStopNameZh || '', to: r.DestinationStopNameZh || '', op: r.Operators && r.Operators[0] ? zh(r.Operators[0].OperatorName) : '' });
   } catch { BUS.routesAll = false; }
 }
@@ -6278,7 +6285,7 @@ setInterval(() => { if (S.pickGroup === 'bus' && !$('#picker').hidden) renderBus
     b.addEventListener('click', () => { BUS.on = !BUS.on; store.set('buses', BUS.on); b.setAttribute('aria-pressed', String(BUS.on)); if (BUS.on) loadBuses(); else exitBusFollow(); });
   }
 }
-function reloadBuses() { loadBuses().catch(e => console.warn(e)); }
+function reloadBuses() { loadBuses().catch(e => console.warn(e)); } // loadBuses 自己用 BUS.loading 擋重複
 setTimeout(reloadBuses, 1000); // TDX 佇列會控制請求頻率；客運即時位置優先權較高
 setInterval(reloadBuses, 30e3);
 document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - BUS.loadAt > 30e3) reloadBuses(); });

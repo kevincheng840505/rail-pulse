@@ -157,8 +157,9 @@ async function loadAlerts() {
   if (!Extras.alerts || Extras.demo) return;
   const cred = store.get('tdx', {});
   if (!cred.id || !cred.secret) { setAlerts([]); return; }
+  if (Extras.alertBusy) return; Extras.alertBusy = true; // 開頁和按下連線都會觸發，不要重複排
   Extras.alertLoad = Date.now();
-  const res = await Promise.allSettled(ALERT_SOURCES.map(([label, path]) => TDX.get(path, cred).then(j => parseAlerts(label, j))));
+  const res = await Promise.allSettled(ALERT_SOURCES.map(([label, path]) => TDX.get(path, cred, 0).then(j => parseAlerts(label, j)))).finally(() => { Extras.alertBusy = false; });
   const seen = new Set(), list = [];
   for (const r of res) if (r.status === 'fulfilled') for (const a of r.value) {
     const k = a.label + a.text; if (seen.has(k)) continue; seen.add(k); list.push(a);

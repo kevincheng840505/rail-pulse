@@ -60,7 +60,7 @@ async function loadBuses() {
 }
 async function loadOperators() {
   try {
-    const j = await busFetch('v2/Bus/Operator/InterCity?$select=OperatorID,OperatorName');
+    const j = await busFetch('v2/Bus/Operator/InterCity?$select=OperatorID,OperatorName', 0);
     if (Array.isArray(j)) for (const o of j) BUS.ops.set(o.OperatorID, zh(o.OperatorName));
   } catch {}
 }
@@ -81,7 +81,7 @@ function wantRoute(uid, urgent) {
 async function loadAllRoutes() {
   if (BUS.routesAll) return; BUS.routesAll = true;
   try {
-    const j = await busFetch('v2/Bus/Route/InterCity?$select=RouteUID,DepartureStopNameZh,DestinationStopNameZh,Operators');
+    const j = await busFetch('v2/Bus/Route/InterCity?$select=RouteUID,DepartureStopNameZh,DestinationStopNameZh,Operators', 0);
     if (Array.isArray(j)) for (const r of j) if (r.RouteUID) BUS.routes.set(r.RouteUID, { from: r.DepartureStopNameZh || '', to: r.DestinationStopNameZh || '', op: r.Operators && r.Operators[0] ? zh(r.Operators[0].OperatorName) : '' });
   } catch { BUS.routesAll = false; }
 }
@@ -709,7 +709,7 @@ setInterval(() => { if (S.pickGroup === 'bus' && !$('#picker').hidden) renderBus
     b.addEventListener('click', () => { BUS.on = !BUS.on; store.set('buses', BUS.on); b.setAttribute('aria-pressed', String(BUS.on)); if (BUS.on) loadBuses(); else exitBusFollow(); });
   }
 }
-function reloadBuses() { loadBuses().catch(e => console.warn(e)); }
+function reloadBuses() { loadBuses().catch(e => console.warn(e)); } // loadBuses 自己用 BUS.loading 擋重複
 setTimeout(reloadBuses, 1000); // TDX 佇列會控制請求頻率；客運即時位置優先權較高
 setInterval(reloadBuses, 30e3);
 document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - BUS.loadAt > 30e3) reloadBuses(); });
