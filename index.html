@@ -235,7 +235,7 @@ body.clean #aircap { display:none !important; }
 
 <div id="dock">
   <button class="pillbtn primary" id="pickbtn">選一列車</button>
-  <button class="pillbtn" id="roambtn" aria-pressed="false" title="每隔一段時間自動換一列車">漫遊</button>
+  <button class="pillbtn" id="roambtn" aria-pressed="false" title="每隔一段時間自動換一列車，偶爾去機場看飛機起降">漫遊</button>
   <button class="pillbtn small" id="viewbtn" title="切換跟車視角（V）" disabled>視角・追車</button>
 </div>
 
@@ -3528,7 +3528,7 @@ function renderViewBtn() {
   const b = $('#viewbtn'); b.textContent = S.follow && S.followPaused ? '◉ 回到' + viewName() : '視角・' + viewName(); b.disabled = !S.follow;
 }
 
-/* 漫遊：每隔一段時間換一列車，偏好行駛中、不同系統的列車，並換個視角 */
+/* 漫遊：每隔一段時間換一列車（偶爾換成機場起降的飛機），偏好行駛中、不同系統的列車，並換個視角 */
 const ROAM_SEC = 60;
 function pickRoamTrip() {
   const pool = S.positions.filter(p => !p.pos.atStation && p.trip !== S.follow);
@@ -3540,15 +3540,26 @@ function pickRoamTrip() {
   for (const p of pool) { r -= weight(p); if (r <= 0) return p.trip; }
   return pool[0].trip;
 }
+// 漫遊也會去機場看飛機起降：大約每四次換一次飛機，剛看完飛機就換回列車
+function pickRoamFlight() {
+  if (typeof AIR === 'undefined' || !AIR.on || AIR.watch || !S.mapReady || Math.random() > 0.28) return null;
+  const m = curMin(), c = [];
+  for (const ap of WATCH_APS) { const f = pickWatchFlight(ap, m); if (f) c.push(f); }
+  return c.length ? c[Math.floor(Math.random() * c.length)] : null;
+}
 function roamNext() {
+  const f = pickRoamFlight();
+  // 看飛機會先關掉漫遊，這裡要讓漫遊繼續計時
+  if (f) { S.roamKeep = true; try { watchFlight(f); } finally { S.roamKeep = false; } return; }
   const t = pickRoamTrip(); if (!t) return;
   const views = VIEWS.map(v => v.id).filter(v => v !== S.view);
   S.view = views[Math.floor(Math.random() * views.length)];
   follow(t);
 }
 function setRoam(on) {
-  S.roam = on; const rb = $('#roambtn'); rb.setAttribute('aria-pressed', String(on)); rb.textContent = on ? '換一列 ›' : '漫遊';
-  rb.title = on ? '漫遊中：按一下換下一列車' : '每隔一段時間自動換一列車';
+  if (!on && S.roamKeep) return;
+  S.roam = on; const rb = $('#roambtn'); rb.setAttribute('aria-pressed', String(on)); rb.textContent = on ? '換下一個 ›' : '漫遊';
+  rb.title = on ? '漫遊中：按一下換下一列車或飛機' : '每隔一段時間自動換一列車，偶爾去機場看飛機起降';
   if (on) { S.roamAt = performance.now() + ROAM_SEC * 1000; if (!S.follow || S.followPaused) roamNext(); }
 }
 
@@ -3699,6 +3710,9 @@ function renderClock() {
 /* ---------- 工具列 ---------- */
 // 漫遊中再按一下就直接換下一列車；按「離開」或自己選車才會停止漫遊
 $('#roambtn').addEventListener('click', () => { if (S.roam) { S.roamAt = performance.now() + ROAM_SEC * 1000; roamNext(); } else setRoam(true); });
+// 漫遊時正在看飛機：按飛機字卡的「離開」或 Esc 也一併停止漫遊
+window.addEventListener('click', e => { if (S.roam && e.target.closest && e.target.closest('#airexit, #airexit2')) setRoam(false); }, true);
+window.addEventListener('keydown', e => { if (S.roam && e.key === 'Escape' && typeof AIR !== 'undefined' && AIR.watch && !e.target.matches('input, textarea')) setRoam(false); }, true);
 $('#overview').addEventListener('click', () => { setRoam(false); unfollow(); if (map) map.flyTo({ ...TAIWAN, duration: 2500 }); });
 // 隱藏介面：手機瀏覽器多半不支援全螢幕 API，改成把畫面上的按鈕全部收起來；支援的瀏覽器順便進入全螢幕
 function toggleClean(on = !document.body.classList.contains('clean')) {
