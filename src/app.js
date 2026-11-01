@@ -41,8 +41,8 @@ const P0 = S.P;
 const NAME = ['coalesce', ['get', 'name:zh-Hant'], ['get', 'name:zh'], ['get', 'name']];
 const DEM = { type: 'raster-dem', tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'], tileSize: 256, maxzoom: 13, encoding: 'terrarium' };
 // 地形與山影只用在大範圍視野：手機上把每張高程圖當成 512 像素，同一個畫面只抓約四分之一張數（每張約 100 KB）
-// 山影同理，只在手機或省電畫質時這樣做；電腦維持原本的精細度
-const DEM_LITE = matchMedia('(pointer: coarse)').matches || store.get('quality', 'auto') === 'low';
+// 山影同理；只有電腦開「高」畫質時維持原本的精細度
+const DEM_LITE = matchMedia('(pointer: coarse)').matches || store.get('quality', 'low') !== 'high';
 const DEM_TERRAIN = { ...DEM, tileSize: DEM_LITE ? 512 : 256 };
 const railColor = P => ['case', ['==', ['get', 'color'], ''], P.tra, ['get', 'color']];
 const STYLE = {
@@ -139,17 +139,15 @@ const TAIWAN = { center: [120.95, 23.65], zoom: 6.7, pitch: 35, bearing: -8 };
 const EMPTY = { type: 'FeatureCollection', features: [] };
 const CAR_ZOOM = 14.5;
 const COARSE = matchMedia('(pointer: coarse)').matches;
-/* ---------- 畫質：自動／省電／高 ----------
-   高：維持完整效果、不限幀率。
-   自動：電腦等於高；手機的動畫限每秒 30 格（120Hz 手機原本會畫到每秒 120 次），
-         持續掉格或電量低於 20% 且沒在充電時自動降到省電。
-   省電：每秒 30 格、像素比 1、不開地形與山影、背景車廂列數減半、不畫建築立面與月台旅客。 */
+/* ---------- 畫質：省電（預設）／高 ----------
+   省電：動畫每秒 30 格（120Hz 手機原本會畫到每秒 120 次）、像素比 1、不開地形與山影、
+         背景車廂列數減半、不畫建築立面與月台旅客。
+   高：完整效果、不限幀率，想看完整畫面的人自己在 ⚙ 打開。 */
 const Quality = {
-  pref: store.get('quality', 'auto'), // 使用者的選擇
-  auto: 'mid',                         // 自動模式目前的等級：mid 或 low
-  get level() { return this.pref === 'high' ? 'high' : this.pref === 'low' ? 'low' : !COARSE && this.auto === 'mid' ? 'high' : this.auto; },
-  get low() { return this.level === 'low'; },
-  get fps() { return this.level === 'high' ? 0 : 30; },
+  pref: store.get('quality', 'low') === 'high' ? 'high' : 'low',
+  get level() { return this.pref; },
+  get low() { return this.pref === 'low'; },
+  get fps() { return this.low ? 30 : 0; },
   get pixelRatio() { return Math.min(window.devicePixelRatio || 1, this.low ? 1 : COARSE ? 1.5 : 2); },
 };
 const maxCarTrains = () => (COARSE ? 8 : 18) / (Quality.low ? 2 : 1); // 同時畫成車廂的列車上限（跟拍的列車另計）
@@ -296,31 +294,8 @@ function applyQuality() {
 }
 function renderQualityBtns() {
   for (const b of document.querySelectorAll('#qualityrow button')) b.setAttribute('aria-pressed', String(b.dataset.v === Quality.pref));
-  const n = $('#qualitynote');
-  if (n) n.textContent = Quality.pref === 'auto' ? (Quality.level === 'low' ? '目前：省電（自動降低）' : Quality.level === 'high' ? '目前：高' : '目前：每秒 30 格') : '';
 }
-function setQuality(v) { Quality.pref = v; if (v === 'auto') Quality.auto = 'mid'; store.set('quality', v); renderQualityBtns(); applyQuality(); }
-// 自動模式：跟拍或漫遊時連續幾秒畫面每秒不到 20 格，或電量低於 20% 且沒在充電，就降到省電（只降不升，避免來回切換）
-const AutoQ = { ema: 16.7, slowSince: 0, armAt: 0 };
-function autoDowngrade(why) {
-  if (Quality.pref !== 'auto' || Quality.auto === 'low') return;
-  Quality.auto = 'low'; renderQualityBtns(); applyQuality();
-  if (typeof showSpot === 'function') showSpot('已切換到省電畫質', why + '；可在 ⚙ 設定改回', '畫質');
-}
-function watchFrameRate(now, rawDt) {
-  if (Quality.pref !== 'auto' || Quality.auto === 'low' || !S.mapReady || document.hidden) { AutoQ.slowSince = 0; return; }
-  if (!AutoQ.armAt) AutoQ.armAt = now + 10000; // 開頁前 10 秒在載入圖磚，不算
-  if (now < AutoQ.armAt || rawDt > 400) return; // 單次長停頓（切分頁、載入）不算
-  AutoQ.ema += (rawDt - AutoQ.ema) * 0.05;
-  if (S.follow && !S.followPaused && AutoQ.ema > 50) {
-    if (!AutoQ.slowSince) AutoQ.slowSince = now;
-    else if (now - AutoQ.slowSince > 6000) autoDowngrade('畫面持續不流暢，已自動降低畫質');
-  } else AutoQ.slowSince = 0;
-}
-if (navigator.getBattery) navigator.getBattery().then(bat => {
-  const check = () => { if (!bat.charging && bat.level <= 0.2) autoDowngrade('電量偏低，已改用省電畫質'); };
-  check(); bat.addEventListener('levelchange', check); bat.addEventListener('chargingchange', check);
-}).catch(() => {});
+function setQuality(v) { Quality.pref = v === 'high' ? 'high' : 'low'; store.set('quality', Quality.pref); renderQualityBtns(); applyQuality(); }
 
 /* ---------- 建築立面：近看時在附近建築外面貼上一層層窗帶與屋頂邊緣 ----------
    向量圖磚的建築只有外框與高度，這裡把鏡頭附近的建築外框往外推一點點，
@@ -685,7 +660,7 @@ function pushFocus() {
   if (near.length || S.hadNear) { map.getSource('near').setData({ type: 'FeatureCollection', features: near }); S.hadNear = near.length > 0; }
   // 畫面附近車站月台上的旅客：候車、上車、下車
   const ppl = [];
-  if (map.getZoom() >= 16) {
+  if (map.getZoom() >= 16 && !Quality.low) { // 省電畫質不畫旅客，也不計算（切到省電時下面送一次空資料清掉）
     const now = performance.now();
     if (!S.pplSt || now - S.pplSt.at > 1000) { const c = map.getCenter(), [cx, cy] = proj(c.lat, c.lng); S.pplSt = { at: now, list: NODES.filter(n => Math.hypot(n.x - cx, n.y - cy) < 0.5).sort((a, b) => Math.hypot(a.x - cx, a.y - cy) - Math.hypot(b.x - cx, b.y - cy)) }; }
     const cap = (COARSE ? 140 : 260) * 6;
@@ -1245,11 +1220,9 @@ document.addEventListener('keydown', e => {
 
 /* ---------- 主迴圈 ---------- */
 let last = performance.now(), lastPush = 0, lastUi = 0;
-let lastRaw = performance.now();
 function frame(now) {
   // 先排下一格：要排在地圖自己的重繪之前，下一格才會先輪到這裡
   requestAnimationFrame(frame);
-  watchFrameRate(now, now - lastRaw); lastRaw = now;
   if (!paceOk(now)) return; // 畫質限幀：這一格跳過
   const dt = Math.min(1000, now - last); last = now;
   if (S.playing) { if (S.live && S.speed === 1) S.simMs = Date.now(); else S.simMs += dt * S.speed; }
