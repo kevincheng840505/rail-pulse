@@ -295,7 +295,7 @@ body.clean #aircap, body.clean #buscap { display:none !important; }
   <section>
     <h4>畫質</h4>
     <div class="row" id="qualityrow">
-      <button data-v="low" aria-pressed="true" title="每秒 30 格、較低解析度、不畫地形與山影、少畫一些細節；最省電、最不燙">省電</button>
+      <button data-v="low" aria-pressed="true" title="手機每秒 30 格、電腦 60 格、較低解析度、不畫地形與山影、少畫一些細節；最省電、最不燙">省電</button>
       <button data-v="high" aria-pressed="false" title="完整效果：3D 地形、山影、建築立面、月台旅客，不限幀率">高</button>
     </div>
     <div class="note">預設為省電。想看 3D 地形與完整細節可以改成「高」，手機會比較耗電、發熱。</div>
@@ -2709,14 +2709,15 @@ const EMPTY = { type: 'FeatureCollection', features: [] };
 const CAR_ZOOM = 14.5;
 const COARSE = matchMedia('(pointer: coarse)').matches;
 /* ---------- 畫質：省電（預設）／高 ----------
-   省電：動畫每秒 30 格（120Hz 手機原本會畫到每秒 120 次）、像素比 1、不開地形與山影、
+   省電：動畫手機每秒 30 格、電腦 60 格（120Hz 手機原本會畫到每秒 120 次）、像素比 1、不開地形與山影、
          背景車廂列數減半、不畫建築立面與月台旅客。
    高：完整效果、不限幀率，想看完整畫面的人自己在 ⚙ 打開。 */
 const Quality = {
   pref: store.get('quality', 'low') === 'high' ? 'high' : 'low',
   get level() { return this.pref; },
   get low() { return this.pref === 'low'; },
-  get fps() { return this.low ? 30 : 0; },
+  // 手機省電限每秒 30 格；電腦螢幕大、靠滑鼠操作，30 格看起來一頓一頓，所以電腦省電只限 60 格（擋掉 120／144Hz 螢幕多畫的格數）
+  get fps() { return this.low ? (COARSE ? 30 : 60) : 0; },
   get pixelRatio() { return Math.min(window.devicePixelRatio || 1, this.low ? 1 : COARSE ? 1.5 : 2); },
 };
 const maxCarTrains = () => (COARSE ? 8 : 18) / (Quality.low ? 2 : 1); // 同時畫成車廂的列車上限（跟拍的列車另計）
@@ -2949,7 +2950,8 @@ function initMap() {
       map.on('mouseleave', l, () => map.getCanvas().style.cursor = '');
     }
     // 車廂畫在自訂圖層上，滑鼠游標改用 TrainGL.pick 判斷
-    if (!COARSE) map.on('mousemove', e => { if (map.getZoom() < CAR_ZOOM) return; const hit = !!TrainGL.pick(e.point); if (hit !== TrainGL.hover) { TrainGL.hover = hit; map.getCanvas().style.cursor = hit ? 'pointer' : ''; } });
+    let pickAt = 0;
+    if (!COARSE) map.on('mousemove', e => { if (map.getZoom() < CAR_ZOOM || performance.now() - pickAt < 100) return; pickAt = performance.now(); const hit = !!TrainGL.pick(e.point); if (hit !== TrainGL.hover) { TrainGL.hover = hit; map.getCanvas().style.cursor = hit ? 'pointer' : ''; } });
   });
   // 使用者自己拖曳、旋轉或縮放時，暫停跟車
   for (const ev of ['dragstart', 'rotatestart', 'pitchstart', 'zoomstart']) {
