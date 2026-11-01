@@ -890,6 +890,7 @@ const TYPE_ORDER = { '普悠瑪': 0, '太魯閣': 1, '自強': 2, '莒光': 3, '
 function openPicker() { settings.hidden = true; sky.hidden = true; musicPanel.hidden = true; picker.hidden = false; scrim.hidden = false; renderPicker(); setTimeout(() => pq.focus({ preventScroll: true }), 50); }
 function closePicker() { picker.hidden = true; scrim.hidden = true; }
 function renderPicker() {
+  if (S.pickGroup === 'air' && typeof renderAirPick === 'function') return renderAirPick(); // 飛機分頁在 air.js
   const q = normName(pq.value.trim());
   let rows = S.positions.filter(p => S.pickGroup === 'all' || sysGroup(p.trip.sys) === S.pickGroup);
   if (q) {
