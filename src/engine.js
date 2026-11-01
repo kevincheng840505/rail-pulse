@@ -345,6 +345,12 @@ const TDX = {
   token: null, exp: 0, status: '未連線', ok: false, lastDelay: null,
   async auth(id, secret) {
     if (this.token && Date.now() < this.exp) return this.token;
+    // 同時有好幾個請求要金鑰時共用同一次驗證，不要一次送好幾個（驗證端也有頻率限制）
+    if (this.authing) return this.authing;
+    this.authing = this.auth2(id, secret).finally(() => { this.authing = null; });
+    return this.authing;
+  },
+  async auth2(id, secret) {
     const r = await fetch('https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token', {
       method:'POST', headers:{ 'content-type':'application/x-www-form-urlencoded' },
       body:new URLSearchParams({ grant_type:'client_credentials', client_id:id, client_secret:secret })

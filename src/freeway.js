@@ -20,12 +20,9 @@ function decodeFreeway(j) {
     const xy = ll.map(([lo, la]) => bxy(lo, la)), cum = [0];
     for (let i = 1; i < xy.length; i++) cum.push(cum[i - 1] + Math.hypot(xy[i][0] - xy[i - 1][0], xy[i][1] - xy[i - 1][1]));
     const link = !!(flags & 1), tunnel = !!(flags & 4);
-    // 短橋（過河、跨路）實際上和路面同高，只有長橋或多層高架才畫成架高
-    let len = 0; for (let i = 1; i < ll.length; i++) len += Math.hypot((ll[i][0] - ll[i - 1][0]) * BKX, (ll[i][1] - ll[i - 1][1]) * BKY);
-    const bridge = !!(flags & 2) && (len >= 300 || (layer || 0) >= 2);
     const nl = Math.max(1, Math.min(6, lanes || (link ? 1 : 2)));
-    ways.push({ ref, link, bridge, tunnel, layer: Math.max(1, layer || 1), lanes: nl, a, z, ll, xy, cum, len: cum[cum.length - 1],
-      W: nl * 3.6 + (link ? 1.8 : 3.4), H: bridge ? FWY_DECK * Math.max(1, layer || 1) : 0, rampA: 0, rampZ: 0 });
+    ways.push({ ref, link, br: !!(flags & 2), bridge: false, tunnel, layer: Math.max(1, layer || 1), lanes: nl, a, z, ll, xy, cum, len: cum[cum.length - 1],
+      W: nl * 3.6 + (link ? 1.8 : 3.4), H: 0, hA: 0, hZ: 0, rA: 0, rZ: 0 });
   }
   return ways;
 }
@@ -43,25 +40,48 @@ function indexFreeway(ways) {
       }
     }
   });
-  // 高架接到地面路段（或沒接任何路段）的那一端做引道坡
-  const ends = new Map();
-  for (const w of ways) for (const n of [w.a, w.z]) if (n >= 0) { if (!ends.has(n)) ends.set(n, []); ends.get(n).push(w); }
+  fwyHeights(ways);
+}
+/* 高度：
+   - OSM 常把一條高架切成很多短段，所以把相連的橋段併成一組；整組夠長（300 公尺以上）或有多層才架高，
+     過河、跨路的短橋和路面同高。
+   - 每個端點的高度取接在那裡的主線最低者（沒有主線才看匝道），路段兩端往端點高度做平滑的坡，
+     高架起訖、上下層交會、匝道上下高架都是連續的斜坡，不會一階一階。 */
+function fwyHeights(ways) {
+  const ends = new Map(), add = (n, w) => { if (n < 0) return; if (!ends.has(n)) ends.set(n, []); ends.get(n).push(w); };
+  for (const w of ways) { add(w.a, w); add(w.z, w); }
+  const seen = new Set();
+  for (const w0 of ways) {
+    if (!w0.br || seen.has(w0)) continue;
+    const comp = [], stack = [w0]; seen.add(w0);
+    while (stack.length) {
+      const w = stack.pop(); comp.push(w);
+      for (const n of [w.a, w.z]) for (const o of ends.get(n) || []) if (o.br && !seen.has(o)) { seen.add(o); stack.push(o); }
+    }
+    const len = comp.reduce((t, w) => t + w.len, 0), multi = comp.some(w => w.layer >= 2);
+    if (len >= 300 || multi) for (const w of comp) { w.bridge = true; w.H = FWY_DECK * w.layer; }
+  }
+  const nodeH = (n, w) => {
+    const list = ends.get(n) || [];
+    if (list.length < 2) return w.H;              // 資料邊界：不做坡
+    const main = list.filter(o => !o.link), use = main.length ? main : list;
+    return Math.min(...use.map(o => o.H));
+  };
   for (const w of ways) {
-    if (!w.bridge) continue;
-    const R = Math.min(240, w.len / 2.2);
-    const groundAt = n => !(ends.get(n) || []).some(o => o !== w && o.bridge);
-    if (groundAt(w.a)) w.rampA = R;
-    if (groundAt(w.z)) w.rampZ = R;
+    w.hA = nodeH(w.a, w); w.hZ = nodeH(w.z, w);
+    const R = dh => Math.min(w.len / 2.2, Math.max(60, Math.abs(dh) * 38));
+    w.rA = w.hA !== w.H ? R(w.H - w.hA) : 0; w.rZ = w.hZ !== w.H ? R(w.H - w.hZ) : 0;
+    w.flat = !w.H && !w.hA && !w.hZ;
   }
 }
 // 路段上距起點 s 公尺處的橋面高度
 function fwyAlt(w, s) {
-  if (!w.bridge) return 0;
-  let k = 1;
-  if (w.rampA) k = Math.min(k, s / w.rampA);
-  if (w.rampZ) k = Math.min(k, (w.len - s) / w.rampZ);
-  k = Math.max(0, Math.min(1, k));
-  return w.H * (k * k * (3 - 2 * k));
+  if (w.flat) return 0;
+  const ss = k => { k = Math.max(0, Math.min(1, k)); return k * k * (3 - 2 * k); };
+  let h = w.H;
+  if (w.rA && s < w.rA) h = w.hA + (w.H - w.hA) * ss(s / w.rA);
+  else if (w.rZ && s > w.len - w.rZ) h = w.hZ + (w.H - w.hZ) * ss((w.len - s) / w.rZ);
+  return h;
 }
 function fwyPoint(w, s) {
   s = Math.max(0, Math.min(w.len, s));
@@ -120,56 +140,125 @@ function fwyOffset(xy, off) {
   }
   return out;
 }
-function fwySlice(w, s0, s1) {
-  const pts = [fwyPoint(w, s0)];
-  for (let i = 1; i < w.cum.length - 1; i++) if (w.cum[i] > s0 && w.cum[i] < s1) pts.push({ x: w.xy[i][0], y: w.xy[i][1] });
-  pts.push(fwyPoint(w, s1));
-  return pts.map(p => [p.x, p.y]);
+// 地面路段（整段都在地面）用地圖的線圖層畫
+function fwyGround(ways) {
+  const features = [];
+  for (const w of ways) if (w.flat && !w.tunnel) features.push({ type: 'Feature', properties: { w: w.W, lanes: w.lanes }, geometry: { type: 'LineString', coordinates: w.ll } });
+  return { type: 'FeatureCollection', features };
 }
-function fwyGeo(ways) {
-  const ground = [], solid = [];
-  const strip = (xy, l, r, base, top, kind) => {
-    if (xy.length < 2 || top - base < 0.01) return;
-    const A = fwyOffset(xy, l), B = fwyOffset(xy, r).reverse(), ring = A.concat(B, [A[0]]).map(([x, y]) => bll(x, y));
-    solid.push({ type: 'Feature', properties: { kind, base, top }, geometry: { type: 'Polygon', coordinates: [ring] } });
+/* ---------- 高架與引道：WebGL 網格 ----------
+   地圖的 fill-extrusion 只能畫平頂的柱體，坡道只能切成一階一階。這裡自己算三角形：
+   橋面隨高度連續傾斜，兩側有橋面版側邊、護欄、白線、車道虛線，下方有橋墩與帽梁。
+   全台的高架依 4 公里的格子分組，只建、只畫鏡頭附近的格子（和飛機、客運共用 planes3d 圖層）。 */
+const FWY_CELL3D = 4000;
+const FWY_COL = { top: '#666C73', side: '#AEB3B8', under: '#8C9196', rail: '#D7DADD', railIn: '#C4C8CC', mark: '#F3F4F5', pier: '#B8BCC0', cap: '#A9AEB3' };
+function fwyCells() {
+  const cells = new Map();
+  for (const w of FWY.ways) {
+    if (w.flat || w.tunnel) continue;
+    const [x, y] = w.xy[0], key = Math.floor(x / FWY_CELL3D) + ',' + Math.floor(y / FWY_CELL3D);
+    if (!cells.has(key)) cells.set(key, { key, ways: [], x0: (Math.floor(x / FWY_CELL3D) + 0.5) * FWY_CELL3D, y0: (Math.floor(y / FWY_CELL3D) + 0.5) * FWY_CELL3D });
+    cells.get(key).ways.push(w);
+  }
+  for (const c of cells.values()) {
+    c.ll = bll(c.x0, c.y0);
+    let r = 0; for (const w of c.ways) for (const [x, y] of w.xy) r = Math.max(r, Math.hypot(x - c.x0, y - c.y0));
+    c.r = r + 50;
+  }
+  return [...cells.values()];
+}
+function fwyCellMesh(cell) {
+  const P = [], N = [], C = [], hex = {};
+  for (const k in FWY_COL) hex[k] = PlaneGL.hex(FWY_COL[k]);
+  // bxy（北為 +y）換成網格的本地座標：x 往東、y 往南（公尺，以格子中心的經緯度為準）
+  const [lon0, lat0] = cell.ll, cx = 111320 * Math.cos(lat0 / DEG);
+  const loc = (x, y, z) => [(x / BKX + 121 - lon0) * cx, -(y / BKY + 23.7 - lat0) * 111320, z];
+  const tri = (a, b, c, col, nz) => {
+    const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+    const l = Math.hypot(n[0], n[1], n[2]) || 1; n = n.map(q => q / l);
+    if (nz && n[2] * nz < 0) n = n.map(q => -q);
+    for (const p of [a, b, c]) { P.push(p[0], p[1], p[2]); N.push(n[0], n[1], n[2]); C.push(col[0], col[1], col[2]); }
   };
-  for (const w of ways) {
-    if (w.tunnel) continue;
-    if (!w.bridge) { ground.push({ type: 'Feature', properties: { w: w.W, lanes: w.lanes, link: w.link ? 1 : 0 }, geometry: { type: 'LineString', coordinates: w.ll } }); continue; }
-    // 橋面切段：引道坡每 25 公尺一段（高度不同），中段一整條
-    const cuts = [0];
-    const step = 25;
-    for (let s = step; s < w.rampA; s += step) cuts.push(s);
-    if (w.rampA < w.len - w.rampZ) cuts.push(Math.max(w.rampA, 0.01));
-    for (let s = Math.max(w.rampA, w.len - w.rampZ); s < w.len; s += step) if (s > cuts[cuts.length - 1] + 1) cuts.push(s);
-    if (cuts[cuts.length - 1] < w.len) cuts.push(w.len);
-    const hw = w.W / 2;
-    for (let i = 0; i + 1 < cuts.length; i++) {
-      const s0 = cuts[i], s1 = cuts[i + 1]; if (s1 - s0 < 0.5) continue;
-      const h = (fwyAlt(w, s0) + fwyAlt(w, s1)) / 2, xy = fwySlice(w, s0, s1);
-      if (h < 0.4) { ground.push({ type: 'Feature', properties: { w: w.W, lanes: w.lanes, link: w.link ? 1 : 0 }, geometry: { type: 'LineString', coordinates: xy.map(([x, y]) => bll(x, y)) } }); continue; }
-      strip(xy, -hw, hw, Math.max(0, h - 1.5), h, 'deck');
-      strip(xy, -hw, -hw + 0.4, h, h + 1.0, 'rail');
-      strip(xy, hw - 0.4, hw, h, h + 1.0, 'rail');
-      strip(xy, -hw + 0.55, -hw + 0.7, h, h + 0.03, 'mark');
-      strip(xy, hw - 0.7, hw - 0.55, h, h + 0.03, 'mark');
+  const quad = (a, b, c, d, col, nz) => { tri(a, b, c, col, nz); tri(a, c, d, col, nz); };
+  for (const w of cell.ways) {
+    // 取樣：原有的折點，加上坡道內每 8 公尺一點
+    const ss = new Set(w.cum.map(v => +v.toFixed(2)));
+    for (let t = 0; t < w.rA; t += 8) ss.add(t);
+    for (let t = w.len - w.rZ; t < w.len; t += 8) if (t > 0) ss.add(+t.toFixed(2));
+    const S = [...ss].filter(v => v >= 0 && v <= w.len).sort((p, q) => p - q);
+    const pts = S.map(s => { const p = fwyPoint(w, s); return { s, x: p.x, y: p.y, h: fwyAlt(w, s) }; });
+    // 每個取樣點的左右法向量（轉角取平均）
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[Math.max(0, i - 1)], q = pts[Math.min(pts.length - 1, i + 1)];
+      let dx = q.x - p.x, dy = q.y - p.y; const L = Math.hypot(dx, dy) || 1; dx /= L; dy /= L;
+      pts[i].rx = dy; pts[i].ry = -dx; pts[i].fx = dx; pts[i].fy = dy;
     }
-    // 橋墩：每 34 公尺一支，夠高才畫
+    const hw = w.W / 2;
+    const at = (p, off, dz) => loc(p.x + p.rx * off, p.y + p.ry * off, p.h + dz);
+    const thick = p => Math.min(1.6, Math.max(0.05, p.h));
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const p = pts[i], q = pts[i + 1];
+      if (p.h < 0.03 && q.h < 0.03) {
+        // 貼地的一小段：只畫路面
+        quad(at(p, -hw, 0.02), at(p, hw, 0.02), at(q, hw, 0.02), at(q, -hw, 0.02), hex.top, 1);
+        continue;
+      }
+      quad(at(p, -hw, 0), at(p, hw, 0), at(q, hw, 0), at(q, -hw, 0), hex.top, 1);                         // 橋面
+      quad(at(p, -hw, -thick(p)), at(q, -hw, -thick(q)), at(q, hw, -thick(q)), at(p, hw, -thick(p)), hex.under, -1); // 底面
+      for (const sd of [-1, 1]) {
+        const o = sd * hw, oi = sd * (hw - 0.35);
+        quad(at(p, o, -thick(p)), at(q, o, -thick(q)), at(q, o, 0), at(p, o, 0), hex.side);              // 橋面版側邊
+        quad(at(p, o, 0), at(q, o, 0), at(q, o, 1.0), at(p, o, 1.0), hex.rail);                          // 護欄外側
+        quad(at(p, oi, 0), at(q, oi, 0), at(q, oi, 1.0), at(p, oi, 1.0), hex.railIn);                    // 護欄內側
+        quad(at(p, oi, 1.0), at(q, oi, 1.0), at(q, o, 1.0), at(p, o, 1.0), hex.rail, 1);                // 護欄頂
+        const m0 = sd * (hw - 0.75), m1 = sd * (hw - 0.6);
+        quad(at(p, m0, 0.03), at(q, m0, 0.03), at(q, m1, 0.03), at(p, m1, 0.03), hex.mark, 1);           // 路肩白線
+      }
+      // 車道虛線：4 公尺線、6 公尺空
+      const segL = q.s - p.s;
+      if (w.lanes > 1 && segL > 0.1) for (let k = 1; k < w.lanes; k++) {
+        const off = -hw + 0.75 + (w.W - 1.5) * k / w.lanes;
+        for (let d = Math.ceil(p.s / 10) * 10; d < q.s; d += 10) {
+          const t0 = (d - p.s) / segL, t1 = Math.min(1, (d + 4 - p.s) / segL);
+          const lp = t => ({ x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t, h: p.h + (q.h - p.h) * t, rx: p.rx, ry: p.ry });
+          const A = lp(t0), B = lp(t1);
+          quad(at(A, off - 0.08, 0.03), at(B, off - 0.08, 0.03), at(B, off + 0.08, 0.03), at(A, off + 0.08, 0.03), hex.mark, 1);
+        }
+      }
+    }
+    // 橋墩與帽梁：每 34 公尺一組，夠高才畫
     for (let s = 17; s < w.len; s += 34) {
-      const p = fwyPoint(w, s); if (p.alt < 3) continue;
-      const r = Math.min(1.4, hw * 0.3), xy = [[p.x - Math.sin(p.h / DEG) * r, p.y - Math.cos(p.h / DEG) * r], [p.x + Math.sin(p.h / DEG) * r, p.y + Math.cos(p.h / DEG) * r]];
-      strip(xy, -Math.min(hw * 0.55, 3), Math.min(hw * 0.55, 3), 0, p.alt - 1.5, 'pier');
+      const fp = fwyPoint(w, s), h = fwyAlt(w, s); if (h < 3) continue;
+      const fx = Math.sin(fp.h / DEG), fy = Math.cos(fp.h / DEG), rx = fy, ry = -fx;
+      const box = (along, across, z0, z1, col) => {
+        const c = (a, b, z) => loc(fp.x + fx * a + rx * b, fp.y + fy * a + ry * b, z);
+        const A = along / 2, B = across / 2;
+        const ring = [[-A, -B], [A, -B], [A, B], [-A, B]];
+        for (let i = 0; i < 4; i++) { const [a1, b1] = ring[i], [a2, b2] = ring[(i + 1) % 4]; quad(c(a1, b1, z0), c(a2, b2, z0), c(a2, b2, z1), c(a1, b1, z1), col); }
+        quad(c(-A, -B, z1), c(A, -B, z1), c(A, B, z1), c(-A, B, z1), col, 1);
+      };
+      const T = Math.min(1.6, h);
+      box(1.6, Math.min(w.W * 0.3, 3.2), 0, h - T - 0.9, hex.pier);
+      box(2.0, w.W * 0.78, h - T - 0.9, h - T, hex.cap);
     }
   }
-  return { ground: { type: 'FeatureCollection', features: ground }, solid: { type: 'FeatureCollection', features: solid } };
+  return { P: new Float32Array(P), N: new Float32Array(N), C: new Float32Array(C), n: P.length / 3 };
+}
+// 依鏡頭位置挑出附近的格子交給 planes3d 圖層；靜態網格不需要每格重畫
+function fwyPickCells() {
+  if (!FWY.cells || !S.mapReady) return;
+  const z = map.getZoom();
+  if (z < 11.5) { PlaneGL.stat = []; return; }
+  const c = map.getCenter(), [x, y] = bxy(c.lng, c.lat), R = 2500 * Math.pow(2, 16 - Math.min(16, z)) + 4000 * Math.min(1, map.getPitch() / 60) * Math.pow(2, 15.5 - Math.min(15.5, z));
+  PlaneGL.stat = FWY.cells.filter(cl => Math.hypot(cl.x0 - x, cl.y0 - y) < R + cl.r)
+    .map(cl => ({ p: { alt: 0, h: 90, pitch: 0 }, ll: cl.ll, mesh: () => PlaneGL.meshFor('fwy|' + cl.key, () => fwyCellMesh(cl)) }));
 }
 // 公尺換成像素寬（緯度 23.7 度附近）
 const fwyPx = m => ['interpolate', ['exponential', 2], ['zoom'], 8, ['*', m, 256 / (40075016.686 * Math.cos(23.7 / DEG) / 2 ** 8) * 2], 22, ['*', m, 256 / (40075016.686 * Math.cos(23.7 / DEG) / 2 ** 22) * 2]];
 function addFreewayLayers() {
   if (!FWY.ready || !S.mapReady || map.getSource('fwy-ground')) return;
-  const g = fwyGeo(FWY.ways);
-  map.addSource('fwy-ground', { type: 'geojson', data: g.ground, tolerance: 0.2 });
-  map.addSource('fwy-3d', { type: 'geojson', data: g.solid, tolerance: 0.1 });
+  map.addSource('fwy-ground', { type: 'geojson', data: fwyGround(FWY.ways), tolerance: 0.2 });
   const before = map.getLayer('buildings') ? 'buildings' : undefined;
   map.addLayer({ id: 'fwy-road', type: 'line', source: 'fwy-ground', minzoom: 8, layout: { 'line-cap': 'butt', 'line-join': 'round' },
     paint: { 'line-color': '#5E646B', 'line-width': fwyPx(['get', 'w']), 'line-opacity': ['interpolate', ['linear'], ['zoom'], 8, 0.55, 12, 0.95] } }, before);
@@ -177,11 +266,10 @@ function addFreewayLayers() {
     paint: { 'line-color': '#EDEFF1', 'line-width': fwyPx(0.18), 'line-gap-width': fwyPx(['-', ['get', 'w'], 1.4]), 'line-opacity': 0.9 } }, before);
   map.addLayer({ id: 'fwy-lane', type: 'line', source: 'fwy-ground', minzoom: 14, filter: ['>=', ['get', 'lanes'], 2],
     paint: { 'line-color': '#F4F5F6', 'line-width': fwyPx(0.15), 'line-dasharray': [20, 30], 'line-opacity': 0.85 } }, before);
-  const solidBefore = map.getLayer('light-glow') ? 'light-glow' : undefined;
-  map.addLayer({ id: 'fwy-3d', type: 'fill-extrusion', source: 'fwy-3d', minzoom: 11.5,
-    paint: { 'fill-extrusion-color': ['match', ['get', 'kind'], 'deck', '#6E757C', 'rail', '#D4D7DA', 'mark', '#F6F7F8', 'pier', '#B9BDC1', '#888'],
-      'fill-extrusion-base': ['get', 'base'], 'fill-extrusion-height': ['get', 'top'], 'fill-extrusion-vertical-gradient': false,
-      'fill-extrusion-opacity': ['interpolate', ['linear'], ['zoom'], 11.5, 0, 12.5, 1] } }, solidBefore);
+  FWY.cells = fwyCells();
+  map.on('moveend', fwyPickCells); map.on('zoomend', fwyPickCells);
+  let t = 0; map.on('move', () => { const n = performance.now(); if (n - t > 400) { t = n; fwyPickCells(); } });
+  fwyPickCells(); map.triggerRepaint();
 }
 // 示範資料：沿國道客運示範路線（台北—台中）兩個方向各一條，中間一段做成高架
 function demoFreeway() {
