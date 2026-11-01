@@ -1991,8 +1991,8 @@ function carFeatures(trip, pos, P, out, detail) {
     if (L.stripe2) band(iw + 0.00002, h * 0.33, h * 0.37, L.stripe2);
     band(w * 0.36, h, h * 1.07, L.roof);
     if (!L.stripe && trip.color) band(iw + 0.00002, h * 0.42, h * 0.52, trip.color);
-    if (lead && nose) { const e = E(front - nose / 2); noseFeatures(trip, L, cp(front - nose), cp(front), nose, w, h, detail, (g, b, t, c) => add(g, b, t, c, e), winColor, trip.color); }
-    if (tail && nose && L.n > 1) { const e = E(back + nose / 2); noseFeatures(trip, L, cp(back + nose), cp(back), nose, w, h, detail, (g, b, t, c) => add(g, b, t, c, e), winColor, trip.color); }
+    if (lead && nose) { const e = E(front - nose / 2); noseFeatures(trip, L, cp(front - nose), cp(front), nose, w, h, detail, (g, b, t, c) => add(g, b, t, c, e), winColor, trip.color, P.lit ? '#FFF6DC' : '#E9E4D2'); }
+    if (tail && nose && L.n > 1) { const e = E(back + nose / 2); noseFeatures(trip, L, cp(back + nose), cp(back), nose, w, h, detail, (g, b, t, c) => add(g, b, t, c, e), winColor, trip.color, P.lit ? '#FF2D2D' : '#B3262A'); }
   }
 }
 
@@ -2314,7 +2314,7 @@ function stationPeople(node, R, idx, m, out, cap) {
 
 /* 車頭：以平滑的俯視輪廓一層層往上疊。每一層的頂面高度越高、往前伸得越短，
    疊起來就是一個往前下斜的圓弧車鼻；腰帶、窗帶的顏色也跟著繞過車頭 */
-function noseFeatures(trip, L, root, tip, nose, w, h, detail, add, winColor, lineColor) {
+function noseFeatures(trip, L, root, tip, nose, w, h, detail, add, winColor, lineColor, lamp) {
   const key = Object.keys(LIVERY).find(k => LIVERY[k] === L);
   const S = NOSE_SHAPE[key] || NOSE_SHAPE.EMU900;
   const len = Math.hypot(tip.x - root.x, tip.y - root.y) || nose;
@@ -2349,6 +2349,15 @@ function noseFeatures(trip, L, root, tip, nose, w, h, detail, add, winColor, lin
     for (let j = nSide; j >= 0; j--) { const s = sk * j / nSide; ring.push(pt(s, -halfW(s))); }
     ring.push(ring[0]);
     add([ring], h * b0, h * b1, colorAt(m));
+  }
+  // 車燈：車頭兩側各一顆小燈（車頭暖白、車尾紅），是車身的一部分，會被前面的東西擋住
+  if (lamp) {
+    const W = halfW(1), lo = 0.15, hi = Math.min(S.tipH, 0.34) - 0.03;
+    const s0 = 1 - 0.3 / 1000 / len, s1 = 1 + (W * 0.22 + 0.00005) / len;
+    for (const sd of [-1, 1]) {
+      const y0 = sd * W * 0.4, y1 = sd * W * 0.72;
+      add([[pt(s0, y0), pt(s1, y0), pt(s1, y1), pt(s0, y1), pt(s0, y0)]], h * lo, h * Math.max(lo + 0.05, hi), lamp);
+    }
   }
 }
 
@@ -2670,19 +2679,21 @@ function initMap() {
     map.addLayer({ id: 'focus-cars2', type: 'fill-extrusion', source: 'focus2', minzoom: CAR_ZOOM, paint: { ...focusPaint, 'fill-extrusion-opacity': 0 } });
     map.addSource('near', { type: 'geojson', data: EMPTY });
     map.addLayer({ id: 'near-cars', type: 'fill-extrusion', source: 'near', minzoom: CAR_ZOOM, paint: carPaint });
-    // 車頭燈（暖白）與尾燈（紅）
+    // 車頭燈（暖白）與尾燈（紅）：照在地上的光暈，放在車廂與建築這些 3D 圖層底下，
+    // 被車身、建築擋住的部分就看不到，不會浮在整個畫面最上層
     map.addLayer({ id: 'light-glow', type: 'circle', source: 'lights', minzoom: 11,
       paint: { 'circle-color': ['get', 'c'], 'circle-blur': 1, 'circle-pitch-alignment': 'map',
         'circle-radius': ['interpolate', ['exponential', 1.6], ['zoom'], 11, ['*', 4, ['get', 'k']], 15, ['*', 12, ['get', 'k']], 19, ['*', 60, ['get', 'k']]],
-        'circle-opacity': ['interpolate', ['linear'], ['zoom'], 11, 0, 12, 0.9] } });
-    map.addLayer({ id: 'light-core', type: 'circle', source: 'lights', minzoom: 12,
+        'circle-opacity': ['interpolate', ['linear'], ['zoom'], 11, 0, 12, 0.9] } }, 'cars');
+    // 亮點只在遠看（車廂還是圓點）時畫；近看時車頭本身就有燈
+    map.addLayer({ id: 'light-core', type: 'circle', source: 'lights', minzoom: 12, maxzoom: CAR_ZOOM,
       paint: { 'circle-color': '#FFFFFF', 'circle-pitch-alignment': 'map', 'circle-blur': 0.4,
-        'circle-radius': ['interpolate', ['exponential', 1.6], ['zoom'], 12, ['*', 1, ['get', 'k']], 16, ['*', 3, ['get', 'k']], 19, ['*', 10, ['get', 'k']]] } });
+        'circle-radius': ['interpolate', ['exponential', 1.6], ['zoom'], 12, ['*', 1, ['get', 'k']], 16, ['*', 3, ['get', 'k']], 19, ['*', 10, ['get', 'k']]] } }, 'cars');
     // 半透明建築要畫在車廂之後：先畫的 3D 圖層會擋住後畫的，這樣隔著建築也看得到列車
-    try { map.moveLayer('buildings', 'light-glow'); } catch {}
+    try { map.moveLayer('buildings'); } catch {}
     map.addSource('facade', { type: 'geojson', data: EMPTY });
     map.addLayer({ id: 'facade', type: 'fill-extrusion', source: 'facade', minzoom: FACADE_ZOOM,
-      paint: { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 't'], 'fill-extrusion-base': ['get', 'b'], 'fill-extrusion-opacity': 0.8, 'fill-extrusion-vertical-gradient': false } }, 'light-glow');
+      paint: { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 't'], 'fill-extrusion-base': ['get', 'b'], 'fill-extrusion-opacity': 0.8, 'fill-extrusion-vertical-gradient': false } });
     const solid = { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 't'], 'fill-extrusion-base': ['get', 'b'], 'fill-extrusion-opacity': 1, 'fill-extrusion-vertical-gradient': false };
     map.addSource('platforms', { type: 'geojson', data: EMPTY });
     map.addLayer({ id: 'platforms', type: 'fill-extrusion', source: 'platforms', minzoom: FACADE_ZOOM, paint: solid }, 'focus-cars');
@@ -2732,7 +2743,10 @@ function syncTerrain(force) {
   if (!map) return;
   const z = map.getZoom();
   // 手機上只要還在跟車（就算手動拉遠）就不開地形：地形加上斜角大範圍視野會把手機 GPU 拖垮
-  const want = S.terrain && !(S.follow && (COARSE || !S.followPaused)) && (terrainOn ? z < 12.5 : z < 11.5);
+  // 手機的地形只留給看全台、看整個縣市的大範圍：拉近到十多公里寬時，斜看的山區要把很多地形圖磚畫到離屏畫面，
+  // 加上進出地形時重新編譯著色器，手機 GPU 會整個卡住（電腦可以放寬到更近）
+  const [zOn, zOff] = COARSE ? [9.6, 10.4] : [11.5, 12.5];
+  const want = S.terrain && !(S.follow && (COARSE || !S.followPaused)) && (terrainOn ? z < zOff : z < zOn);
   if (want === terrainOn && !force) return;
   terrainOn = want;
   try { map.setTerrain(want ? { source: 'dem', exaggeration: 1.5 } : null); } catch {}
@@ -4220,23 +4234,29 @@ function stepPlanes(now) {
   if (!AIR.layers) { ensureLayers(); return; }
   if (!AIR.on) return;
   const z = map.getZoom();
-  // 拉近時每格更新，遠景兩秒一次就夠
+  // 只有畫面裡真的有飛機時才每格更新；其他時候一秒一次。
+  // GeoJSON 每次 setData 都要重新切圖磚、整張地圖重畫，空的資料一秒送三十次就足以讓手機一直卡頓
   const near = z >= 11;
   if (AIR.watch) stepWatch(now);
-  if (now - AIR.last < (near ? 33 : 1000)) return;
+  if (now - AIR.last < (near && AIR.inView ? 33 : 1000)) return;
   AIR.last = now;
   const m = curMin(), pts = [], polys = [];
-  const b = map.getBounds(), pad = 0.3;
+  const b = map.getBounds();
   for (const f of AIR.flights) {
     const p = flightPos(f, m); if (!p) continue;
     const [lon, lat] = toLL(p.x, p.y);
     pts.push({ type: 'Feature', properties: { alt: p.alt, fade: p.fade }, geometry: { type: 'Point', coordinates: [lon, lat] } });
-    if (AIR.watch && f === AIR.watch.f) { f._pos = p; f._ll = [lon, lat]; pts.push({ type: 'Feature', properties: { alt: p.alt, fade: 1 }, geometry: { type: 'Point', coordinates: [lon, lat] } }); continue; }
+    if (AIR.watch && f === AIR.watch.f) { f._pos = p; f._ll = [lon, lat]; continue; }
+    // 地圖範圍是地面上的範圍；高空的飛機斜看時會偏離它在地面的位置，所以飛得越高留越大的邊
+    const pad = 0.05 + Math.min(1, p.alt / 9500) * 0.3;
     if (near && lon > b.getWest() - pad && lon < b.getEast() + pad && lat > b.getSouth() - pad && lat < b.getNorth() + pad) planeFeatures(f, p, polys);
     f._pos = p; f._ll = [lon, lat];
   }
-  map.getSource('plane-pts').setData({ type: 'FeatureCollection', features: pts });
-  map.getSource('planes').setData({ type: 'FeatureCollection', features: polys });
+  AIR.inView = polys.length > 0;
+  // 遠景的飛機圓點只在拉遠時看得到；拉近又沒有飛機在畫面裡時就不用一直送
+  if (!near || AIR.inView || AIR.ptsAt === undefined || now - AIR.ptsAt > 5000) { map.getSource('plane-pts').setData({ type: 'FeatureCollection', features: pts }); AIR.ptsAt = now; }
+  if (polys.length || AIR.hadPolys) map.getSource('planes').setData({ type: 'FeatureCollection', features: polys });
+  AIR.hadPolys = polys.length > 0;
 }
 requestAnimationFrame(stepPlanes);
 
