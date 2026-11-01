@@ -18,7 +18,9 @@
   if (F.day !== today()) { F.day = today(); F.done = 0; F.mins = 0; }
   const save = () => store.set('focus', F);
   const durOf = ph => (PRESETS[F.preset] || PRESETS.classic)[ph === 'focus' ? 0 : ph === 'short' ? 1 : 2] * 60;
-  const remaining = () => F.running ? Math.max(0, Math.round((F.endAt - Date.now()) / 1000)) : (F.left ?? durOf(F.phase));
+  // 這一段的長度在開始時就固定（F.len），中途換節奏只影響下一段，倒數與累計的分鐘數才會一致
+  const total = () => F.len || durOf(F.phase);
+  const remaining = () => F.running ? Math.max(0, Math.round((F.endAt - Date.now()) / 1000)) : (F.left ?? total());
   const mmss = s => String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
 
   const panel = $('#focus'), chip = $('#focuschip'), btn = $('#focusbtn');
@@ -51,6 +53,7 @@
 
   /* ---------- 計時 ---------- */
   function start() {
+    if (!F.len) F.len = durOf(F.phase);
     F.endAt = Date.now() + remaining() * 1000; F.running = true; F.left = null; save();
     if (F.phase === 'focus') {
       if (F.music && !Music.playing) setMusic(true);
@@ -60,15 +63,15 @@
     loop(); render();
   }
   function pause() { F.left = remaining(); F.running = false; save(); stopLoop(); render(); }
-  function reset() { F.running = false; F.left = null; F.phase = 'focus'; F.cycle = 0; save(); stopLoop(); render(); }
+  function reset() { F.running = false; F.left = null; F.len = 0; F.phase = 'focus'; F.cycle = 0; save(); stopLoop(); render(); }
   function finish(skipped) {
     const was = F.phase;
     if (was === 'focus') {
-      if (!skipped) { F.done++; F.mins += durOf('focus') / 60; }
+      if (!skipped) { F.done++; F.mins += Math.round(total() / 60); }
       F.cycle++;
       F.phase = F.cycle % LONG_EVERY === 0 ? 'long' : 'short';
     } else F.phase = 'focus';
-    F.running = false; F.left = null; stopLoop();
+    F.running = false; F.left = null; F.len = 0; stopLoop();
     if (!skipped) {
       chime(F.phase === 'focus');
       notify(was === 'focus' ? `完成一段專注，${PHASE[F.phase].name} ${durOf(F.phase) / 60} 分鐘` : '休息結束，準備下一段專注');
@@ -86,22 +89,22 @@
 
   /* ---------- 畫面 ---------- */
   function render() {
-    const left = remaining(), total = durOf(F.phase), P = PHASE[F.phase];
-    const active = F.running || left < total || F.cycle > 0;
+    const left = remaining(), len = total(), P = PHASE[F.phase];
+    const active = F.running || left < len || F.cycle > 0;
     btn.setAttribute('aria-pressed', String(F.running));
     chip.hidden = !active;
     chip.style.setProperty('--fc', P.color);
     chip.classList.toggle('paused', !F.running);
     chip.querySelector('.t').textContent = mmss(left);
-    chip.querySelector('.k').textContent = F.running ? P.name : (left < total ? '暫停' : P.name + '・待發');
+    chip.querySelector('.k').textContent = F.running ? P.name : (left < len ? '暫停' : P.name + '・待發');
     chip.setAttribute('aria-label', `${P.name} 剩 ${mmss(left)}，點一下打開專注面板`);
     document.title = F.running ? `${mmss(left)} ${P.name}・${baseTitle}` : baseTitle;
     if (panel.hidden) return;
     panel.style.setProperty('--fc', P.color);
     $('#fphase').textContent = P.name; $('#fsub').textContent = P.sub;
     $('#ftime').textContent = mmss(left);
-    $('#fring').style.strokeDashoffset = String(RING * (1 - left / total));
-    const go = $('#fgo'); go.textContent = F.running ? '暫停' : left < total ? '繼續' : F.phase === 'focus' ? '開始專注' : '開始休息';
+    $('#fring').style.strokeDashoffset = String(RING * (1 - left / len));
+    const go = $('#fgo'); go.textContent = F.running ? '暫停' : left < len ? '繼續' : F.phase === 'focus' ? '開始專注' : '開始休息';
     // 這一輪的四格：已完成實心、進行中半透明
     const inRound = F.cycle % LONG_EVERY, cur = F.phase === 'focus' ? inRound : -1;
     $('#fdots').innerHTML = Array.from({ length: LONG_EVERY }, (_, i) => `<i class="${i < inRound || (F.phase === 'long' && F.cycle > 0) ? 'on' : i === cur ? 'cur' : ''}"></i>`).join('');
@@ -127,7 +130,7 @@
   $('#freset').addEventListener('click', reset);
   $('#fpreset').addEventListener('click', e => {
     const b = e.target.closest('button[data-v]'); if (!b || b.dataset.v === F.preset) return;
-    F.preset = b.dataset.v; if (!F.running) F.left = null; save(); render();
+    F.preset = b.dataset.v; save(); render(); // 進行中或暫停中的這一段維持原長度，下一段才用新節奏
   });
   for (const [id, key] of [['#fmusic', 'music'], ['#fclean', 'clean'], ['#fauto', 'auto'], ['#fchime', 'chime']])
     $(id).addEventListener('click', () => { F[key] = !F[key]; save(); render(); });
