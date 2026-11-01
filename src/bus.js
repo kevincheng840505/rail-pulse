@@ -510,6 +510,7 @@ const busVisible = () => BUS.on && (BUS_DEMO || Math.abs(S.simMs - Date.now()) <
 let busLast = performance.now();
 function stepBuses(now) {
   requestAnimationFrame(stepBuses);
+  if (!paceOk(now)) return; // 畫質限幀，與主迴圈同一格判斷
   const dt = Math.min(0.5, (now - busLast) / 1000); busLast = now;
   if (!S.mapReady || !AIR.layers) return;
   const extra = [];

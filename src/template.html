@@ -1,7 +1,12 @@
 <title>鐵道脈動</title>
 <meta name="description" content="全台鐵道 3D 即時動態：選一列車，跟著它穿過山海與城市。">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&family=Noto+Serif+TC:wght@600;900&family=JetBrains+Mono:wght@500;700&display=swap">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://tiles.openfreemap.org" crossorigin>
+<link rel="preconnect" href="https://s3.amazonaws.com" crossorigin>
+<link rel="preload" href="data/rail.json" as="fetch" crossorigin>
+<!-- 字型只載入用到的粗細（黑體 400／700、宋體 900），而且不擋住畫面：先用系統字型顯示，字型到了再換上 -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&family=Noto+Serif+TC:wght@900&family=JetBrains+Mono:wght@500;700&display=swap" media="print" onload="this.media='all'">
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <style>
@@ -114,7 +119,7 @@ body.clean #aircap, body.clean #buscap { display:none !important; }
 #picker h3 { margin:0; font-family:var(--font-display); font-size:20px; letter-spacing:.08em; flex:1; }
 #pq { width:100%; box-sizing:border-box; margin-top:12px; border:1px solid var(--line); background:rgba(255,255,255,.06); border-radius:12px; padding:10px 12px; font-size:15px; }
 .tabs { display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; }
-.tabs button, .panel .row button { border-radius:999px; height:32px; padding:0 10px; font-size:13px; font-weight:500; }
+.tabs button, .panel .row button { border-radius:999px; height:32px; padding:0 10px; font-size:13px; font-weight:400; }
 #plist { overflow:auto; margin-top:10px; min-height:0; flex:1; -webkit-overflow-scrolling:touch; }
 #plist button { display:grid; grid-template-columns:12px auto 1fr auto; gap:10px; align-items:center; width:100%; text-align:left; border:0; background:transparent; padding:11px 8px; border-radius:12px; border-bottom:1px solid var(--line); }
 #plist button:hover { background:rgba(255,255,255,.06); }
@@ -284,6 +289,15 @@ body.clean #aircap, body.clean #buscap { display:none !important; }
 </section>
 
 <section id="settings" class="panel" hidden aria-label="設定">
+  <section>
+    <h4>畫質</h4>
+    <div class="row" id="qualityrow">
+      <button data-v="auto" aria-pressed="true" title="電腦用高畫質；手機每秒 30 格，持續不流暢或電量低時自動改省電">自動</button>
+      <button data-v="low" aria-pressed="false" title="每秒 30 格、較低解析度、不畫地形與山影、少畫一些細節；最省電、最不燙">省電</button>
+      <button data-v="high" aria-pressed="false" title="完整效果、不限幀率">高</button>
+    </div>
+    <div class="note" id="qualitynote"></div>
+  </section>
   <section>
     <h4>畫面</h4>
     <div class="row">

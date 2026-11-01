@@ -27,11 +27,18 @@ const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 /* ---------- 真實軌道線形（data/rail.json，由 tools/fetch_rail.py 產生） ---------- */
 const SEG = new Map(); // `${sys}:${a}|${b}` -> {pts:[[x,y]], cum:[km], len}
 const unproj = (x, y) => [x / KX + LON0, -y / KY + LAT0];
+let SEG_GEN = 0; // 線形重新載入時加一，讓各站記住的查表結果失效
+// 每格要對每列車查好幾次：結果記在起點站物件上，不用每次組字串查表
 function segGeom(a, b) {
+  let c = a._sg;
+  if (!c || c.gen !== SEG_GEN) c = a._sg = { gen: SEG_GEN, m: new Map() };
+  let v = c.m.get(b);
+  if (v !== undefined) return v;
   const g = SEG.get(a.sys + ':' + a.name + '|' + b.name);
-  if (g) return { g, rev: false };
-  const r = SEG.get(a.sys + ':' + b.name + '|' + a.name);
-  return r ? { g: r, rev: true } : null;
+  if (g) v = { g, rev: false };
+  else { const r = SEG.get(a.sys + ':' + b.name + '|' + a.name); v = r ? { g: r, rev: true } : null; }
+  c.m.set(b, v);
+  return v;
 }
 /* 兩站之間的軌道長度（公里）；沒有線形時用直線乘上彎曲係數 */
 function segLen(a, b, curve = 1.12) {
@@ -58,7 +65,7 @@ function applyRailData(data) {
     if (!n) continue;
     n.lon = lon; n.lat = lat; [n.x, n.y] = proj(lat, lon);
   }
-  SEG.clear();
+  SEG.clear(); SEG_GEN++;
   for (let [key, coords] of Object.entries(data.segments || {})) {
     // 資料裡的線形已被簡化成稀疏折線，轉角很尖：用 Chaikin 切角法修圓滑兩次，車廂過彎才不會折成 Z 字
     let pts = coords.map(([lon, lat]) => proj(lat, lon));
@@ -76,6 +83,7 @@ function applyRailData(data) {
     for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
     SEG.set(key, { pts, cum, len: cum[cum.length - 1] || 0.001, coords });
   }
+  SEG_GEN++;
   for (const [id, edges] of ADJ) for (const e of edges) e.d = segLen(NODES[id], NODES[e.to]);
   pathCache.clear();
   if (typeof LINES !== 'undefined') for (const L of LINES) delete L._pp;
