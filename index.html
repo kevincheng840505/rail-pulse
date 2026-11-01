@@ -4442,7 +4442,7 @@ const PlaneGL = {
   mul(a, b) { const o = new Float64Array(16); for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) { let v = 0; for (let k = 0; k < 4; k++) v += a[k * 4 + j] * b[i * 4 + k]; o[i * 4 + j] = v; } return o; },
   // 點選：用上一格的投影矩陣把每架飛機的中心投到螢幕上
   pick(pt) {
-    const M = PlaneGL.last; if (!M) return null;
+    const M = PlaneGL.last; if (!M || !AIR.on) return null; // 飛機關掉時不能點到看不見的飛機
     const cv = map.getCanvas(), w = cv.clientWidth, h = cv.clientHeight;
     let best = null, bd = 1e9;
     for (const d of PlaneGL.draw) {
@@ -4536,7 +4536,7 @@ let airRaf = 0;
 function stepPlanes(now) {
   airRaf = requestAnimationFrame(stepPlanes);
   if (!AIR.layers) { ensureLayers(); return; }
-  if (!AIR.on) return;
+  if (!AIR.on) { PlaneGL.draw = []; return; }
   const z = map.getZoom(), near = z >= 11, m = curMin();
   // 3D 飛機每格都算位置，交給 WebGL 圖層直接畫：不經過 GeoJSON，鏡頭和飛機用同一個時間點，不會抖
   const draw = [], b = map.getBounds();
