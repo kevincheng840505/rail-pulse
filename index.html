@@ -158,6 +158,34 @@ body.clean #aircap { display:none !important; }
 #precip { position:fixed; inset:0; width:100%; height:100%; pointer-events:none; z-index:2; }
 #fogveil { position:fixed; inset:0; pointer-events:none; z-index:1; opacity:0; transition:opacity 2s ease; }
 
+/* 專注時刻（番茄鐘） */
+#focus { position:fixed; top:calc(env(safe-area-inset-top,0px) + 64px); right:max(14px, env(safe-area-inset-right,0px)); z-index:21; width:min(340px, calc(100% - 28px)); box-sizing:border-box; border-radius:18px; padding:16px; background:var(--glass-strong); backdrop-filter:blur(22px); -webkit-backdrop-filter:blur(22px); border:1px solid var(--line); max-height:calc(100% - 100px); overflow:auto; --fc:var(--accent); }
+.fdial { position:relative; width:180px; height:180px; margin:4px auto 0; }
+.fdial svg { width:100%; height:100%; transform:rotate(-90deg); }
+.fdial circle { fill:none; stroke-width:6; }
+.fdial .bg { stroke:var(--line); }
+#fring { stroke:var(--fc); stroke-linecap:round; stroke-dasharray:339.29; transition:stroke-dashoffset 1s linear, stroke .4s; }
+.fdial .mid { position:absolute; inset:0; display:grid; place-content:center; text-align:center; }
+#fphase { font-family:var(--font-display); font-weight:900; font-size:15px; letter-spacing:.3em; padding-left:.3em; color:var(--fc); }
+#ftime { font-family:var(--font-mono); font-weight:700; font-size:44px; letter-spacing:.02em; font-variant-numeric:tabular-nums; line-height:1.1; }
+#fsub { font-size:12px; color:var(--muted); letter-spacing:.12em; }
+#fdots { display:flex; justify-content:center; gap:8px; margin:10px 0 2px; }
+#fdots i { width:8px; height:8px; border-radius:50%; border:1.5px solid var(--fc); box-sizing:border-box; }
+#fdots i.on { background:var(--fc); }
+#fdots i.cur { background:var(--fc); opacity:.45; }
+#fstat { text-align:center; font-size:12px; color:var(--muted); }
+.fctl { display:flex; justify-content:center; gap:8px; margin-top:12px; }
+.fctl .pillbtn { height:40px; }
+#focuschip { position:fixed; top:calc(env(safe-area-inset-top,0px) + 58px); left:max(16px, env(safe-area-inset-left,0px)); z-index:5; display:flex; align-items:center; gap:8px; height:30px; padding:0 12px 0 10px; border-radius:999px; font-size:12.5px; --fc:var(--accent); }
+#focuschip::before { content:""; width:8px; height:8px; border-radius:50%; background:var(--fc); box-shadow:0 0 10px var(--fc); }
+#focuschip.paused::before { box-shadow:none; opacity:.5; }
+#focuschip .k { color:var(--muted); letter-spacing:.08em; }
+#focuschip .t { font-family:var(--font-mono); font-weight:700; font-variant-numeric:tabular-nums; }
+body.clean #focuschip { opacity:.55; }
+body.clean #focuschip:hover { opacity:1; }
+body.clean #focus { display:none !important; }
+@media (max-width: 430px) { #tools { gap:6px; } #tools .ib { width:36px; height:36px; } }
+
 /* 開場 */
 #intro { position:fixed; inset:0; z-index:30; display:grid; place-items:center; background:radial-gradient(ellipse at 50% 60%, rgba(7,12,18,.35), rgba(7,12,18,.88)); transition:opacity 1.2s ease; padding:24px; box-sizing:border-box; }
 #intro.out { opacity:0; pointer-events:none; }
@@ -218,7 +246,10 @@ body.clean #aircap { display:none !important; }
 
 <div id="brand"><div class="clock"><b id="clock">--:--</b></div></div>
 
+<button id="focuschip" class="glass" hidden><span class="k"></span><span class="t"></span></button>
+
 <div id="tools">
+  <button class="ib" id="focusbtn" aria-pressed="false" title="專注時刻（P 開始／暫停）" aria-label="專注時刻"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="13.5" r="7.5"/><path d="M12 9.5v4l2.5 2M9.5 2.5h5M12 2.5V6"/></svg></button>
   <button class="ib" id="musicbtn" aria-pressed="false" title="音樂" aria-label="音樂"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/></svg></button>
   <button class="ib" id="skybtn" title="光線與天氣" aria-label="光線與天氣"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></svg></button>
   <button class="ib" id="overview" title="回到全台" aria-label="回到全台"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button>
@@ -275,6 +306,39 @@ body.clean #aircap { display:none !important; }
   </section>
 </section>
 
+<section id="focus" class="panel" hidden aria-label="專注時刻">
+  <section>
+    <div class="fdial">
+      <svg viewBox="0 0 120 120" aria-hidden="true"><circle class="bg" cx="60" cy="60" r="54"/><circle id="fring" cx="60" cy="60" r="54"/></svg>
+      <div class="mid"><div id="fphase"></div><div id="ftime" aria-live="off"></div><div id="fsub"></div></div>
+    </div>
+    <div id="fdots" aria-hidden="true"></div>
+    <div id="fstat"></div>
+    <div class="fctl">
+      <button class="pillbtn primary" id="fgo">開始專注</button>
+      <button class="pillbtn small" id="fskip" title="直接進到下一段（不算完成）">跳過</button>
+      <button class="pillbtn small" id="freset" title="回到第一段專注">重來</button>
+    </div>
+  </section>
+  <section>
+    <h4>節奏</h4>
+    <div class="row" id="fpreset">
+      <button data-v="classic">25／5 分</button><button data-v="deep">50／10 分</button><button data-v="short">15／3 分</button>
+    </div>
+    <div class="note">每完成 4 段專注，休息會拉長一次。</div>
+  </section>
+  <section>
+    <h4>專注時</h4>
+    <div class="row">
+      <button id="fmusic" title="開始專注時自動播放背景音樂">播放音樂</button>
+      <button id="fclean" title="開始專注時隱藏按鈕與字卡，只留倒數；專注結束自動回來">隱藏介面</button>
+      <button id="fauto" title="一段結束後自動開始下一段">自動接續</button>
+      <button id="fchime" title="每段結束時響兩聲柔和的鐘聲">結束鐘聲</button>
+    </div>
+    <div class="note">倒數存在這台裝置，重新整理也會接著算。隱藏介面時點左上角的倒數可以暫停。快捷鍵 P 開始／暫停。</div>
+  </section>
+</section>
+
 <section id="sky" class="panel" hidden aria-label="光線與天氣">
   <section>
     <h4>時段</h4>
@@ -326,7 +390,7 @@ body.clean #aircap { display:none !important; }
   </section>
   <section>
     <h4>說明</h4>
-    <div class="note">R 漫遊、V 切換視角、M 播放／暫停音樂、F 隱藏介面、Esc 離開跟車。軌道與底圖 © OpenStreetMap 貢獻者，地形 © Mapzen／AWS Terrain Tiles，音樂由瀏覽器即時合成。</div>
+    <div class="note">R 漫遊、V 切換視角、M 播放／暫停音樂、P 番茄鐘開始／暫停、F 隱藏介面、Esc 離開跟車。軌道與底圖 © OpenStreetMap 貢獻者，地形 © Mapzen／AWS Terrain Tiles，音樂由瀏覽器即時合成。</div>
   </section>
 </section>
 
@@ -5248,6 +5312,153 @@ setTimeout(reloadFlights, 1500);
 setInterval(() => { if (!document.hidden && Date.now() - AIR.loadAt > 10 * 60e3 && store.get('tdx', {}).id) reloadFlights(); }, 60e3);
 $('#tdxgo').addEventListener('click', () => setTimeout(reloadFlights, 2500));
 $('#tdxclear').addEventListener('click', () => { AIR.gen++; AIR.flights = estimateFlights(); AIR.live = false; });
+</script>
+<script>/* ===== 專注時刻：番茄鐘 =====
+   一段專注（行駛）→ 一段休息（停靠）；每完成 4 段專注，休息拉長。
+   時間以「結束的時間點」記錄並存在這台裝置，重新整理或分頁在背景也不會走偏。
+   只在計時中每秒更新一次畫面，不碰地圖的繪製迴圈，省電模式下也幾乎不耗電。 */
+(() => {
+  const PRESETS = { classic: [25, 5, 15], deep: [50, 10, 20], short: [15, 3, 10] };
+  const PHASE = {
+    focus: { name: '專注', sub: '行駛中', color: 'var(--accent)' },
+    short: { name: '休息', sub: '停靠一下', color: 'var(--ok)' },
+    long: { name: '長休息', sub: '大站停靠', color: 'var(--ok)' },
+  };
+  const LONG_EVERY = 4;
+  const today = () => { const d = new Date(Date.now() + 8 * 3600e3); return d.toISOString().slice(0, 10); }; // 台灣日期
+
+  // 狀態：phase、是否在跑、結束時間點（跑的時候）或剩餘秒數（暫停時）、本輪已完成幾段
+  const F = Object.assign({ preset: 'classic', phase: 'focus', running: false, endAt: 0, left: null, cycle: 0,
+    music: true, clean: false, auto: false, chime: true, day: today(), done: 0, mins: 0 }, store.get('focus', {}));
+  if (F.day !== today()) { F.day = today(); F.done = 0; F.mins = 0; }
+  const save = () => store.set('focus', F);
+  const durOf = ph => (PRESETS[F.preset] || PRESETS.classic)[ph === 'focus' ? 0 : ph === 'short' ? 1 : 2] * 60;
+  const remaining = () => F.running ? Math.max(0, Math.round((F.endAt - Date.now()) / 1000)) : (F.left ?? durOf(F.phase));
+  const mmss = s => String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+
+  const panel = $('#focus'), chip = $('#focuschip'), btn = $('#focusbtn');
+  const RING = 2 * Math.PI * 54;
+  const baseTitle = document.title;
+  let tickTimer = 0, actx = null;
+
+  /* ---------- 提示音：兩聲柔和的鐘聲（自己合成，不用音檔） ---------- */
+  function chime(up) {
+    if (!F.chime) return;
+    try {
+      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+      if (actx.state === 'suspended') actx.resume();
+      const now = actx.currentTime, notes = up ? [659.25, 987.77] : [987.77, 659.25];
+      notes.forEach((f, i) => {
+        const t = now + i * 0.42;
+        [1, 2.76].forEach((h, k) => {
+          const o = actx.createOscillator(), g = actx.createGain();
+          o.type = 'sine'; o.frequency.value = f * h;
+          g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(k ? 0.04 : 0.18, t + 0.015); g.gain.exponentialRampToValueAtTime(0.0001, t + (k ? 0.6 : 1.8));
+          o.connect(g); g.connect(actx.destination); o.start(t); o.stop(t + 1.9);
+        });
+      });
+      setTimeout(() => { if (actx && !F.running) { actx.close().catch(() => {}); actx = null; } }, 3000);
+    } catch {}
+  }
+  function notify(text) {
+    try { if (document.hidden && 'Notification' in window && Notification.permission === 'granted') new Notification('鐵道脈動・專注時刻', { body: text, silent: true }); } catch {}
+  }
+
+  /* ---------- 計時 ---------- */
+  function start() {
+    F.endAt = Date.now() + remaining() * 1000; F.running = true; F.left = null; save();
+    if (F.phase === 'focus') {
+      if (F.music && !Music.playing) setMusic(true);
+      if (F.clean && !document.body.classList.contains('clean')) { panel.hidden = true; toggleClean(true); }
+      try { if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {}); } catch {}
+    }
+    loop(); render();
+  }
+  function pause() { F.left = remaining(); F.running = false; save(); stopLoop(); render(); }
+  function reset() { F.running = false; F.left = null; F.phase = 'focus'; F.cycle = 0; save(); stopLoop(); render(); }
+  function finish(skipped) {
+    const was = F.phase;
+    if (was === 'focus') {
+      if (!skipped) { F.done++; F.mins += durOf('focus') / 60; }
+      F.cycle++;
+      F.phase = F.cycle % LONG_EVERY === 0 ? 'long' : 'short';
+    } else F.phase = 'focus';
+    F.running = false; F.left = null; stopLoop();
+    if (!skipped) {
+      chime(F.phase === 'focus');
+      notify(was === 'focus' ? `完成一段專注，${PHASE[F.phase].name} ${durOf(F.phase) / 60} 分鐘` : '休息結束，準備下一段專注');
+      if (was === 'focus' && document.body.classList.contains('clean')) toggleClean(false);
+    }
+    save();
+    if (F.auto && !skipped) start(); else render();
+  }
+  function loop() { stopLoop(); tickTimer = setInterval(tick, 1000); }
+  function stopLoop() { clearInterval(tickTimer); tickTimer = 0; }
+  function tick() {
+    if (F.day !== today()) { F.day = today(); F.done = 0; F.mins = 0; save(); }
+    if (F.running && remaining() <= 0) finish(false); else render();
+  }
+
+  /* ---------- 畫面 ---------- */
+  function render() {
+    const left = remaining(), total = durOf(F.phase), P = PHASE[F.phase];
+    const active = F.running || left < total || F.cycle > 0;
+    btn.setAttribute('aria-pressed', String(F.running));
+    chip.hidden = !active;
+    chip.style.setProperty('--fc', P.color);
+    chip.classList.toggle('paused', !F.running);
+    chip.querySelector('.t').textContent = mmss(left);
+    chip.querySelector('.k').textContent = F.running ? P.name : (left < total ? '暫停' : P.name + '・待發');
+    chip.setAttribute('aria-label', `${P.name} 剩 ${mmss(left)}，點一下打開專注面板`);
+    document.title = F.running ? `${mmss(left)} ${P.name}・${baseTitle}` : baseTitle;
+    if (panel.hidden) return;
+    panel.style.setProperty('--fc', P.color);
+    $('#fphase').textContent = P.name; $('#fsub').textContent = P.sub;
+    $('#ftime').textContent = mmss(left);
+    $('#fring').style.strokeDashoffset = String(RING * (1 - left / total));
+    const go = $('#fgo'); go.textContent = F.running ? '暫停' : left < total ? '繼續' : F.phase === 'focus' ? '開始專注' : '開始休息';
+    // 這一輪的四格：已完成實心、進行中半透明
+    const inRound = F.cycle % LONG_EVERY, cur = F.phase === 'focus' ? inRound : -1;
+    $('#fdots').innerHTML = Array.from({ length: LONG_EVERY }, (_, i) => `<i class="${i < inRound || (F.phase === 'long' && F.cycle > 0) ? 'on' : i === cur ? 'cur' : ''}"></i>`).join('');
+    $('#fstat').textContent = F.done ? `今天完成 ${F.done} 段・專注 ${F.mins >= 60 ? Math.floor(F.mins / 60) + ' 小時 ' : ''}${F.mins % 60 ? F.mins % 60 + ' 分' : ''}` : '今天還沒開始';
+    for (const b of $('#fpreset').children) b.setAttribute('aria-pressed', String(b.dataset.v === F.preset));
+    $('#fmusic').setAttribute('aria-pressed', String(F.music));
+    $('#fclean').setAttribute('aria-pressed', String(F.clean));
+    $('#fauto').setAttribute('aria-pressed', String(F.auto));
+    $('#fchime').setAttribute('aria-pressed', String(F.chime));
+  }
+
+  /* ---------- 操作 ---------- */
+  function open(on = panel.hidden) {
+    panel.hidden = !on;
+    if (on) { settings.hidden = true; sky.hidden = true; musicPanel.hidden = true; closePicker(); render(); }
+  }
+  btn.addEventListener('click', () => open());
+  chip.addEventListener('click', () => { if (document.body.classList.contains('clean')) { F.running ? pause() : start(); } else open(true); });
+  // 其他面板打開時收起這個面板
+  ['#musicbtn', '#skybtn', '#setbtn', '#pickbtn'].forEach(id => $(id).addEventListener('click', () => { panel.hidden = true; }));
+  $('#fgo').addEventListener('click', () => F.running ? pause() : start());
+  $('#fskip').addEventListener('click', () => finish(true));
+  $('#freset').addEventListener('click', reset);
+  $('#fpreset').addEventListener('click', e => {
+    const b = e.target.closest('button[data-v]'); if (!b || b.dataset.v === F.preset) return;
+    F.preset = b.dataset.v; if (!F.running) F.left = null; save(); render();
+  });
+  for (const [id, key] of [['#fmusic', 'music'], ['#fclean', 'clean'], ['#fauto', 'auto'], ['#fchime', 'chime']])
+    $(id).addEventListener('click', () => { F[key] = !F[key]; save(); render(); });
+  // P：開始／暫停；Esc 先關掉這個面板（搶在主程式之前，免得順便離開跟車）
+  window.addEventListener('keydown', e => {
+    if (e.target.matches('input, textarea')) return;
+    if (e.key === 'Escape' && !panel.hidden && !document.body.classList.contains('clean')) { panel.hidden = true; e.stopImmediatePropagation(); }
+    else if ((e.key === 'p' || e.key === 'P') && !e.metaKey && !e.ctrlKey) { F.running ? pause() : start(); }
+  }, true);
+  // 分頁切回來時立刻校正一次（背景分頁的計時器會被瀏覽器放慢）
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && F.running) tick(); });
+
+  // 重新整理後接續：如果在離開期間已經結束，直接進到下一段
+  if (F.running) { if (remaining() <= 0) finish(false); else loop(); }
+  render();
+})();
 </script>
 
 </body></html>
