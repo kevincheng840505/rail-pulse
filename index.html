@@ -1225,6 +1225,10 @@ function tripPos(trip, min) {
   return p;
 }
 
+/* ---------- 載入計時（網址加 ?perf 時在畫面左下角列出每個東西花多久） ---------- */
+const PERF = /[?&]perf\b/.test(location.search) ? { marks: [], tdx: [] } : null;
+function perfMark(name) { if (PERF && !PERF.marks.some(m => m[0] === name)) PERF.marks.push([name, performance.now()]); }
+
 /* ---------- TDX 即時資料（部署於自有網域時可用） ---------- */
 const TDX = {
   token: null, exp: 0, status: '未連線', ok: false, lastDelay: null,
@@ -1252,7 +1256,8 @@ const TDX = {
   q: [], qTimer: 0, nextAt: 0, holdUntil: 0, hold: 0,
   get(path, cred, pri = 1) {
     return new Promise((res, rej) => {
-      const job = { path, cred, pri, res, rej, tries: 0 };
+      const job = { path, cred, pri, res, rej, tries: 0, q0: performance.now() };
+      if (PERF) { job.perf = { path: path.split('?')[0], q: job.q0 }; PERF.tdx.push(job.perf); }
       let i = this.q.length; while (i > 0 && this.q[i - 1].pri < pri) i--;
       this.q.splice(i, 0, job);
       this.pump();
@@ -1279,6 +1284,7 @@ const TDX = {
   async send(job) {
     try {
       const tk = await this.auth(job.cred.id, job.cred.secret);
+      if (job.perf) job.perf.sent = performance.now();
       const r = await fetch('https://tdx.transportdata.tw/api/basic/' + job.path + (job.path.includes('?') ? '&' : '?') + '$format=JSON', {
         headers:{ authorization:'Bearer ' + tk } });
       if (r.status === 429 && job.tries < 4) {
@@ -1291,8 +1297,10 @@ const TDX = {
       }
       if (!r.ok) throw new Error('TDX 回應 HTTP ' + r.status);
       if (Date.now() > this.holdUntil + 10e3) this.hold = 0;
-      job.res(await r.json());
-    } catch (e) { job.rej(e); }
+      const body = await r.json();
+      if (job.perf) { job.perf.done = performance.now(); job.perf.n = Array.isArray(body) ? body.length : body && body.TrainTimetables ? body.TrainTimetables.length : ''; }
+      job.res(body);
+    } catch (e) { if (job.perf) { job.perf.done = performance.now(); job.perf.err = String(e.message || e).slice(0, 40); } job.rej(e); }
   },
   /* 把官方時刻表的停靠站補上中間通過站，轉成引擎用的車次 */
   toTrip(sys, no, typeName, stops) {
@@ -1333,8 +1341,8 @@ const TDX = {
       delay:0, live:true, liveDelay:null };
   },
   async loadTimetables(cred) {
-    const tra = await this.get('v3/Rail/TRA/DailyTrainTimetable/Today', cred);
-    const thsr = await this.get('v2/Rail/THSR/DailyTimetable/Today', cred);
+    // 台鐵與高鐵同時讀：以前要等台鐵整份（好幾 MB）下載完才開始讀高鐵
+    const [tra, thsr] = await Promise.all([this.get('v3/Rail/TRA/DailyTrainTimetable/Today', cred), this.get('v2/Rail/THSR/DailyTimetable/Today', cred)]);
     const trips = [];
     for (const t of (tra.TrainTimetables || [])) {
       const info = t.TrainInfo;
@@ -2936,13 +2944,15 @@ function initMap() {
     let glLost = null;
     map.on('webglcontextlost', () => { clearTimeout(glLost); glLost = setTimeout(() => location.reload(), 3000); });
     map.on('webglcontextrestored', () => { clearTimeout(glLost); glLost = null; });
-    map.on('sourcedata', e => { if (e.sourceId === 'omt' && e.isSourceLoaded) Facade.soon(true); });
+    map.on('sourcedata', e => { if (e.sourceId === 'omt' && e.isSourceLoaded) { perfMark('底圖圖磚（OpenFreeMap）'); Facade.soon(true); } });
+    map.once('idle', () => perfMark('地圖第一次全部畫完（idle）'));
     map.addLayer({ id: 'train', type: 'circle', source: 'trains', maxzoom: CAR_ZOOM + 0.5,
       paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, ['case', ['get', 'sel'], 6, ['==', ['get', 'g'], 'mrt'], 2.4 * DOT, 3 * DOT], 12, ['case', ['get', 'sel'], 9, 5.5]],
         'circle-color': ['get', 'color'], 'circle-stroke-color': '#FFFFFF', 'circle-stroke-width': ['case', ['get', 'sel'], 2, 0.6], 'circle-pitch-alignment': 'map' } });
     map.setLayoutProperty('buildings', 'visibility', S.buildings ? 'visible' : 'none');
     for (const l of ['facade', 'lamp-glow']) map.setLayoutProperty(l, 'visibility', S.buildings ? 'visible' : 'none');
     S.mapReady = true;
+    perfMark('地圖樣式就緒');
     applyQuality();
     applyLook(true); pushTrains(true);
     map.on('click', onMapClick);
@@ -3804,15 +3814,22 @@ async function connectTDX(cred, quiet) {
   clearInterval(delayTimer);
   tdxStatus('連線中…');
   try {
-    const trips = await TDX.loadTimetables(cred);
+    // 時刻表先排進 TDX 佇列，捷運資料緊接著排（以前要等時刻表、誤點都讀完才開始讀捷運）
+    const ttP = TDX.loadTimetables(cred);
+    const metroP = TDX.loadMetro(cred).catch(e => { console.warn(e); return null; });
+    const trips = await ttP;
     if (!isCurrent()) return;
     TDX.applyTimetables(trips);
     TDX.ok = true; TDX.date = twDate(Date.now());
+    perfMark('台鐵高鐵當日時刻表套用');
+    afterTripsChanged(); // 官方時刻表一到就換上，不等捷運
     let d = 0; try { d = await TDX.loadDelays(cred, isCurrent); } catch {}
     if (!isCurrent()) return;
-    let metro = null; try { metro = await TDX.loadMetro(cred); } catch (e) { console.warn(e); }
+    perfMark('台鐵即時誤點套用');
+    const metro = await metroP;
     if (!isCurrent()) return;
     if (metro && metro.trips.length) TDX.applyMetro(metro);
+    perfMark('捷運官方資料套用');
     const ml = metro ? metro.covered.size : 0;
     tdxStatus(`已載入 ${trips.length} 班台鐵與高鐵當日時刻，${d} 列台鐵即時誤點` + (ml ? `；${ml} 條捷運／輕軌改用官方行駛時間與班距（${metro.trips.length} 班）。` : metro && metro.trips.length ? `；捷運依官方資料加開 ${metro.trips.length} 班區間車，全線仍用班表推估。` : '；捷運與輕軌沿用班表推估。'));
     delayTimer = setInterval(() => {
@@ -3904,20 +3921,44 @@ function frame(now) {
   if (S.mapReady && S.follow && !S.followPaused && !S.flying) map.redraw();
 }
 
+/* ---------- ?perf：載入計時面板 ----------
+   列出開頁後每個東西在第幾秒就緒，以及每個 TDX 請求的排隊、下載時間，方便在自己的手機或電腦上找出哪裡慢 */
+if (PERF) {
+  const el = document.createElement('pre');
+  el.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:99;max-width:min(560px,calc(100% - 16px));max-height:60vh;overflow:auto;margin:0;padding:8px 10px;border-radius:10px;background:rgba(0,0,0,.78);color:#E8F0F2;font:10.5px/1.4 ui-monospace,Menlo,monospace;white-space:pre-wrap;pointer-events:none;opacity:.92';
+  document.body.appendChild(el);
+  if (document.fonts) document.fonts.ready.then(() => perfMark('字型載入完成'));
+  const sec = ms => (ms / 1000).toFixed(1).padStart(5) + 's';
+  const draw = () => {
+    const rows = ['載入計時（從開頁算起）'];
+    for (const [n, t] of PERF.marks.slice().sort((a, b) => a[1] - b[1])) rows.push(sec(t) + '  ' + n);
+    if (PERF.tdx.length) {
+      rows.push('', 'TDX 請求：排入 → 送出 → 完成（排隊／下載）');
+      for (const j of PERF.tdx) rows.push(sec(j.q) + ' ' + (j.sent ? sec(j.sent) : '  等待') + ' ' + (j.done ? sec(j.done) : (j.sent ? '  下載中' : '')) +
+        (j.sent ? '  (' + ((j.sent - j.q) / 1000).toFixed(1) + '/' + (j.done ? ((j.done - j.sent) / 1000).toFixed(1) : '…') + ')' : '') + '  ' + j.path.replace(/^v\d\//, '') + (j.n !== undefined && j.n !== '' ? ' ×' + j.n : '') + (j.err ? ' ✗' + j.err : ''));
+    }
+    el.textContent = rows.join('\n');
+  };
+  setInterval(draw, 1000); draw();
+}
+
 /* ---------- 啟動 ---------- */
 async function boot() {
+  perfMark('程式開始執行（地圖元件已下載）');
   try {
     const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 15000);
     const r = await fetch('data/rail.json', { signal: ctl.signal });
     clearTimeout(tm);
     if (r.ok) applyRailData(await r.json());
   } catch (e) { console.warn('軌道線形載入失敗，改用站間直線', e); }
+  perfMark('軌道線形 rail.json');
   generateAll();
   Precip.init();
   initMap();
   renderViewBtn(); renderSkyPanel();
   updatePositions(); renderClock();
   startBtns.forEach(b => { b.disabled = false; });
+  perfMark('開場按鈕可按');
   requestAnimationFrame(t => { last = t; frame(t); });
   const cred = store.get('tdx', {});
   if (cred.id && cred.secret) connectTDX(cred, true);
@@ -4141,7 +4182,7 @@ $('#tdxclear').addEventListener('click', () => setAlerts([]));
 setInterval(checkSpots, 1000);
 // 分頁在背景時不讀；回到前景後 30 秒內補讀
 setInterval(() => { if (!document.hidden && Date.now() - Extras.alertLoad > 5 * 60e3) loadAlerts().catch(() => {}); }, 30e3);
-setTimeout(() => loadAlerts().catch(() => {}), 4000);
+setTimeout(() => loadAlerts().catch(() => {}), 2000);
 
 // 網址加上 ?alertdemo 可以預覽跑馬燈的樣子
 if (/[?&]alertdemo\b/.test(location.search)) {
@@ -4365,9 +4406,12 @@ async function loadFlights() {
   const d0 = dayStart(Date.now());
   const toMin = s => { const t = Date.parse(String(s).length <= 16 ? s + ':00+08:00' : s); return isNaN(t) ? null : (t - d0) / 60000; };
   const res = [];
-  for (const ap of ['TPE', 'TSA', 'KHH', 'RMQ']) for (const kind of ['Departure', 'Arrival']) {
-    try { const j = await TDX.get(`v2/Air/FIDS/Airport/${kind}/${ap}`, cred); if (Array.isArray(j)) res.push([ap, kind, j]); } catch (e) { /* 單一機場失敗就略過 */ }
-  }
+  // 八份航班表一起排進 TDX 佇列（以前一份讀完才排下一份）
+  const jobs = [];
+  for (const ap of ['TPE', 'TSA', 'KHH', 'RMQ']) for (const kind of ['Departure', 'Arrival'])
+    jobs.push(TDX.get(`v2/Air/FIDS/Airport/${kind}/${ap}`, cred).then(j => Array.isArray(j) ? [ap, kind, j] : null, () => null)); // 單一機場失敗就略過
+  for (const r of await Promise.all(jobs)) if (r) res.push(r); // 維持原本的機場順序（同一航班出現兩次時先到先用）
+  perfMark('TDX 航班套用');
   if (gen !== AIR.gen) return; // 讀取途中金鑰被清除或又重新讀取
   if (!res.length) { AIR.flights = estimateFlights(); AIR.live = false; AIR.status = 'TDX 航班讀取失敗，改用推估'; return; }
   const out = [], seen = new Set();
@@ -5154,7 +5198,8 @@ document.addEventListener('keydown', e => {
 })();
 function reloadFlights() { loadFlights().catch(e => { console.warn(e); AIR.flights = estimateFlights(); }); }
 AIR.flights = estimateFlights();
-setTimeout(reloadFlights, 5000);
+// TDX 佇列會控制請求頻率，不必等太久；時刻表先排進佇列，航班隨後
+setTimeout(reloadFlights, 1500);
 // 航班時間會隨延誤更新：有金鑰時每 10 分鐘重新讀一次
 // 分頁在背景時不讀，回到前景後一分鐘內補讀
 setInterval(() => { if (!document.hidden && Date.now() - AIR.loadAt > 10 * 60e3 && store.get('tdx', {}).id) reloadFlights(); }, 60e3);
@@ -5478,7 +5523,7 @@ async function loadFreeway() {
   FWY.done = true;
   if (!j) return;
   indexFreeway(decodeFreeway(j));
-  FWY.ready = true;
+  FWY.ready = true; perfMark('國道資料 freeway.json');
   addFreewayLayers();
 }
 // 國道資料（約 160 KB）延後到需要時才讀：拉近到 zoom 9.5 以上、跟拍國道客運，或 ?busdemo。
@@ -5528,7 +5573,7 @@ async function loadBuses() {
   }
   BUS.loading = false; BUS.fails = 0;
   if (gen !== BUS.gen || !Array.isArray(j)) return;
-  BUS.loadAt = Date.now();
+  BUS.loadAt = Date.now(); perfMark('TDX 客運即時位置');
   // 起訖站、客運公司名稱接著依序讀，不同時打（避免 429 擋到使用者點的車）
   if (!BUS.extraLoading) { BUS.extraLoading = true; (async () => { await loadAllRoutes(); if (!BUS.ops.size) await loadOperators(); BUS.extraLoading = false; })(); }
   setTimeout(wantAllRoutes, 1500);
@@ -6203,7 +6248,7 @@ setInterval(() => { if (S.pickGroup === 'bus' && !$('#picker').hidden) renderBus
   }
 }
 function reloadBuses() { loadBuses().catch(e => console.warn(e)); }
-setTimeout(reloadBuses, 3000);
+setTimeout(reloadBuses, 1000); // TDX 佇列會控制請求頻率；客運即時位置優先權較高
 setInterval(reloadBuses, 30e3);
 document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - BUS.loadAt > 30e3) reloadBuses(); });
 $('#tdxgo').addEventListener('click', () => setTimeout(reloadBuses, 3000));

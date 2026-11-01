@@ -35,7 +35,7 @@ async function loadBuses() {
   }
   BUS.loading = false; BUS.fails = 0;
   if (gen !== BUS.gen || !Array.isArray(j)) return;
-  BUS.loadAt = Date.now();
+  BUS.loadAt = Date.now(); perfMark('TDX 客運即時位置');
   // 起訖站、客運公司名稱接著依序讀，不同時打（避免 429 擋到使用者點的車）
   if (!BUS.extraLoading) { BUS.extraLoading = true; (async () => { await loadAllRoutes(); if (!BUS.ops.size) await loadOperators(); BUS.extraLoading = false; })(); }
   setTimeout(wantAllRoutes, 1500);
@@ -710,7 +710,7 @@ setInterval(() => { if (S.pickGroup === 'bus' && !$('#picker').hidden) renderBus
   }
 }
 function reloadBuses() { loadBuses().catch(e => console.warn(e)); }
-setTimeout(reloadBuses, 3000);
+setTimeout(reloadBuses, 1000); // TDX 佇列會控制請求頻率；客運即時位置優先權較高
 setInterval(reloadBuses, 30e3);
 document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - BUS.loadAt > 30e3) reloadBuses(); });
 $('#tdxgo').addEventListener('click', () => setTimeout(reloadBuses, 3000));

@@ -211,9 +211,12 @@ async function loadFlights() {
   const d0 = dayStart(Date.now());
   const toMin = s => { const t = Date.parse(String(s).length <= 16 ? s + ':00+08:00' : s); return isNaN(t) ? null : (t - d0) / 60000; };
   const res = [];
-  for (const ap of ['TPE', 'TSA', 'KHH', 'RMQ']) for (const kind of ['Departure', 'Arrival']) {
-    try { const j = await TDX.get(`v2/Air/FIDS/Airport/${kind}/${ap}`, cred); if (Array.isArray(j)) res.push([ap, kind, j]); } catch (e) { /* 單一機場失敗就略過 */ }
-  }
+  // 八份航班表一起排進 TDX 佇列（以前一份讀完才排下一份）
+  const jobs = [];
+  for (const ap of ['TPE', 'TSA', 'KHH', 'RMQ']) for (const kind of ['Departure', 'Arrival'])
+    jobs.push(TDX.get(`v2/Air/FIDS/Airport/${kind}/${ap}`, cred).then(j => Array.isArray(j) ? [ap, kind, j] : null, () => null)); // 單一機場失敗就略過
+  for (const r of await Promise.all(jobs)) if (r) res.push(r); // 維持原本的機場順序（同一航班出現兩次時先到先用）
+  perfMark('TDX 航班套用');
   if (gen !== AIR.gen) return; // 讀取途中金鑰被清除或又重新讀取
   if (!res.length) { AIR.flights = estimateFlights(); AIR.live = false; AIR.status = 'TDX 航班讀取失敗，改用推估'; return; }
   const out = [], seen = new Set();
@@ -1000,7 +1003,8 @@ document.addEventListener('keydown', e => {
 })();
 function reloadFlights() { loadFlights().catch(e => { console.warn(e); AIR.flights = estimateFlights(); }); }
 AIR.flights = estimateFlights();
-setTimeout(reloadFlights, 5000);
+// TDX 佇列會控制請求頻率，不必等太久；時刻表先排進佇列，航班隨後
+setTimeout(reloadFlights, 1500);
 // 航班時間會隨延誤更新：有金鑰時每 10 分鐘重新讀一次
 // 分頁在背景時不讀，回到前景後一分鐘內補讀
 setInterval(() => { if (!document.hidden && Date.now() - AIR.loadAt > 10 * 60e3 && store.get('tdx', {}).id) reloadFlights(); }, 60e3);
