@@ -172,7 +172,13 @@ function busPos(b, now, dt) {
   // 路線形狀的方向和車的行進方向相反時（TDX 去回程對不上），改用反向的形狀，不然推算值會一直落後、車停住
   if (sh && b.shFix !== f) {
     b.shFix = f; const pr = project(sh, x0, y0, null);
-    b.shRev = !!(pr && az && f.speed > 5 && angGap(along(sh, pr.s).h, az) > 110);
+    // 車速太低或沒有方位角時判斷不出方向，沿用原本的判斷
+    if (pr && az && f.speed > 5) {
+      const rev = angGap(along(sh, pr.s).h, az) > 110;
+      // 方向改變時，畫出的位置換到另一個方向的座標（反向形狀的 s = 全長 − s）
+      if (rev !== !!b.shRev && b.s != null) b.s = sh.len - b.s;
+      b.shRev = rev;
+    }
   }
   if (sh && b.shRev) sh = sh.rev || (sh.rev = revShape(sh));
   if (sh) {
@@ -192,7 +198,9 @@ function busPos(b, now, dt) {
       let d = b.fd ? fwyPoint(FWY.ways[b.fd.w], b.fd.s) : null;
       if (!d || Math.hypot(e.x - d.x, e.y - d.y) > 1500) { b.fd = { w: e.w, s: e.s }; b.vd = v; }
       else {
-        const gap = (e.x - d.x) * Math.sin(d.h / DEG) + (e.y - d.y) * Math.cos(d.h / DEG);
+        // 沿路網量距離（交流道的環形匝道用切線投影會變成負的，車就卡住）；接不上才退回切線投影
+        let gap = fwyGap(b.fd.w, b.fd.s, e.w, e.s, 3000);
+        if (gap == null) { const back = fwyGap(e.w, e.s, b.fd.w, b.fd.s, 3000); gap = back != null ? -back : (e.x - d.x) * Math.sin(d.h / DEG) + (e.y - d.y) * Math.cos(d.h / DEG); }
         const n = fwyAdvance(b.fd.w, b.fd.s, busChase(b, gap, v, dt)); b.fd = { w: n.w, s: n.s };
       }
       const p = fwyPoint(FWY.ways[b.fd.w], b.fd.s); want = { x: p.x, y: p.y, h: p.h }; b.xy = null;

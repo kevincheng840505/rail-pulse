@@ -115,18 +115,34 @@ function fwySnap(x, y, h, maxD, prefer) {
   return { w: best.w, s: best.s, d: best.d, ...fwyPoint(FWY.ways[best.w], best.s) };
 }
 // 沿路網往前走 dist 公尺；路段走完就接同一個端點出發、方向最順的下一段（優先主線）
+function fwyNext(w) {
+  const nexts = (FWY.starts.get(w.z) || []).map(i => FWY.ways[i]).filter(o => o !== w);
+  if (!nexts.length) return null;
+  const endH = fwyPoint(w, w.len).h;
+  const cost = o => o.link * 50 + (o.ref !== w.ref) * 20 + angGap(fwyPoint(o, 0).h, endH);
+  nexts.sort((p, q) => cost(p) - cost(q));
+  return nexts[0];
+}
 function fwyAdvance(k, s, dist) {
   let w = FWY.ways[k], guard = 0;
   s += dist;
   while (s > w.len && guard++ < 40) {
-    const nexts = (FWY.starts.get(w.z) || []).map(i => FWY.ways[i]).filter(o => o !== w);
-    if (!nexts.length) { s = w.len; break; }
-    const endH = fwyPoint(w, w.len).h;
-    const cost = o => o.link * 50 + (o.ref !== w.ref) * 20 + angGap(fwyPoint(o, 0).h, endH);
-    nexts.sort((p, q) => cost(p) - cost(q));
-    s -= w.len; w = nexts[0]; k = FWY.ways.indexOf(w);
+    const n = fwyNext(w);
+    if (!n) { s = w.len; break; }
+    s -= w.len; w = n; k = FWY.ways.indexOf(w);
   }
   return { w: k, s, ...fwyPoint(w, s) };
+}
+// 沿路網從 (k0, s0) 走到 (k1, s1) 的距離；同一路段在後面時為負；max 公尺內接不到就回傳 null
+function fwyGap(k0, s0, k1, s1, max) {
+  if (k0 === k1) return s1 - s0;
+  let w = FWY.ways[k0], d = w.len - s0, guard = 0;
+  while (d < max && guard++ < 40) {
+    const n = fwyNext(w); if (!n) return null;
+    if (FWY.ways.indexOf(n) === k1) return d + s1;
+    d += n.len; w = n;
+  }
+  return null;
 }
 
 /* ---------- 畫出國道 ---------- */
