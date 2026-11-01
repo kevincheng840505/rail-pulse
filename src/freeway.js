@@ -314,7 +314,7 @@ async function loadFreeway() {
   FWY.done = true;
   if (!j) return;
   indexFreeway(decodeFreeway(j));
-  FWY.ready = true;
+  FWY.ready = true; perfMark('國道資料 freeway.json');
   addFreewayLayers();
 }
 // 國道資料（約 160 KB）延後到需要時才讀：拉近到 zoom 9.5 以上、跟拍國道客運，或 ?busdemo。

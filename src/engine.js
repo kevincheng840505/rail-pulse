@@ -348,6 +348,10 @@ function tripPos(trip, min) {
   return p;
 }
 
+/* ---------- 載入計時（網址加 ?perf 時在畫面左下角列出每個東西花多久） ---------- */
+const PERF = /[?&]perf\b/.test(location.search) ? { marks: [], tdx: [] } : null;
+function perfMark(name) { if (PERF && !PERF.marks.some(m => m[0] === name)) PERF.marks.push([name, performance.now()]); }
+
 /* ---------- TDX 即時資料（部署於自有網域時可用） ---------- */
 const TDX = {
   token: null, exp: 0, status: '未連線', ok: false, lastDelay: null,
@@ -375,7 +379,8 @@ const TDX = {
   q: [], qTimer: 0, nextAt: 0, holdUntil: 0, hold: 0,
   get(path, cred, pri = 1) {
     return new Promise((res, rej) => {
-      const job = { path, cred, pri, res, rej, tries: 0 };
+      const job = { path, cred, pri, res, rej, tries: 0, q0: performance.now() };
+      if (PERF) { job.perf = { path: path.split('?')[0], q: job.q0 }; PERF.tdx.push(job.perf); }
       let i = this.q.length; while (i > 0 && this.q[i - 1].pri < pri) i--;
       this.q.splice(i, 0, job);
       this.pump();
@@ -402,6 +407,7 @@ const TDX = {
   async send(job) {
     try {
       const tk = await this.auth(job.cred.id, job.cred.secret);
+      if (job.perf) job.perf.sent = performance.now();
       const r = await fetch('https://tdx.transportdata.tw/api/basic/' + job.path + (job.path.includes('?') ? '&' : '?') + '$format=JSON', {
         headers:{ authorization:'Bearer ' + tk } });
       if (r.status === 429 && job.tries < 4) {
@@ -414,8 +420,10 @@ const TDX = {
       }
       if (!r.ok) throw new Error('TDX 回應 HTTP ' + r.status);
       if (Date.now() > this.holdUntil + 10e3) this.hold = 0;
-      job.res(await r.json());
-    } catch (e) { job.rej(e); }
+      const body = await r.json();
+      if (job.perf) { job.perf.done = performance.now(); job.perf.n = Array.isArray(body) ? body.length : body && body.TrainTimetables ? body.TrainTimetables.length : ''; }
+      job.res(body);
+    } catch (e) { if (job.perf) { job.perf.done = performance.now(); job.perf.err = String(e.message || e).slice(0, 40); } job.rej(e); }
   },
   /* 把官方時刻表的停靠站補上中間通過站，轉成引擎用的車次 */
   toTrip(sys, no, typeName, stops) {
@@ -456,8 +464,8 @@ const TDX = {
       delay:0, live:true, liveDelay:null };
   },
   async loadTimetables(cred) {
-    const tra = await this.get('v3/Rail/TRA/DailyTrainTimetable/Today', cred);
-    const thsr = await this.get('v2/Rail/THSR/DailyTimetable/Today', cred);
+    // 台鐵與高鐵同時讀：以前要等台鐵整份（好幾 MB）下載完才開始讀高鐵
+    const [tra, thsr] = await Promise.all([this.get('v3/Rail/TRA/DailyTrainTimetable/Today', cred), this.get('v2/Rail/THSR/DailyTimetable/Today', cred)]);
     const trips = [];
     for (const t of (tra.TrainTimetables || [])) {
       const info = t.TrainInfo;

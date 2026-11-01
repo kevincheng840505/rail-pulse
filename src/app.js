@@ -366,13 +366,15 @@ function initMap() {
     let glLost = null;
     map.on('webglcontextlost', () => { clearTimeout(glLost); glLost = setTimeout(() => location.reload(), 3000); });
     map.on('webglcontextrestored', () => { clearTimeout(glLost); glLost = null; });
-    map.on('sourcedata', e => { if (e.sourceId === 'omt' && e.isSourceLoaded) Facade.soon(true); });
+    map.on('sourcedata', e => { if (e.sourceId === 'omt' && e.isSourceLoaded) { perfMark('底圖圖磚（OpenFreeMap）'); Facade.soon(true); } });
+    map.once('idle', () => perfMark('地圖第一次全部畫完（idle）'));
     map.addLayer({ id: 'train', type: 'circle', source: 'trains', maxzoom: CAR_ZOOM + 0.5,
       paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, ['case', ['get', 'sel'], 6, ['==', ['get', 'g'], 'mrt'], 2.4 * DOT, 3 * DOT], 12, ['case', ['get', 'sel'], 9, 5.5]],
         'circle-color': ['get', 'color'], 'circle-stroke-color': '#FFFFFF', 'circle-stroke-width': ['case', ['get', 'sel'], 2, 0.6], 'circle-pitch-alignment': 'map' } });
     map.setLayoutProperty('buildings', 'visibility', S.buildings ? 'visible' : 'none');
     for (const l of ['facade', 'lamp-glow']) map.setLayoutProperty(l, 'visibility', S.buildings ? 'visible' : 'none');
     S.mapReady = true;
+    perfMark('地圖樣式就緒');
     applyQuality();
     applyLook(true); pushTrains(true);
     map.on('click', onMapClick);
@@ -1239,15 +1241,22 @@ async function connectTDX(cred, quiet) {
   clearInterval(delayTimer);
   tdxStatus('連線中…');
   try {
-    const trips = await TDX.loadTimetables(cred);
+    // 時刻表先排進 TDX 佇列，捷運資料緊接著排（以前要等時刻表、誤點都讀完才開始讀捷運）
+    const ttP = TDX.loadTimetables(cred);
+    const metroP = TDX.loadMetro(cred).catch(e => { console.warn(e); return null; });
+    const trips = await ttP;
     if (!isCurrent()) return;
     TDX.applyTimetables(trips);
     TDX.ok = true; TDX.date = twDate(Date.now());
+    perfMark('台鐵高鐵當日時刻表套用');
+    afterTripsChanged(); // 官方時刻表一到就換上，不等捷運
     let d = 0; try { d = await TDX.loadDelays(cred, isCurrent); } catch {}
     if (!isCurrent()) return;
-    let metro = null; try { metro = await TDX.loadMetro(cred); } catch (e) { console.warn(e); }
+    perfMark('台鐵即時誤點套用');
+    const metro = await metroP;
     if (!isCurrent()) return;
     if (metro && metro.trips.length) TDX.applyMetro(metro);
+    perfMark('捷運官方資料套用');
     const ml = metro ? metro.covered.size : 0;
     tdxStatus(`已載入 ${trips.length} 班台鐵與高鐵當日時刻，${d} 列台鐵即時誤點` + (ml ? `；${ml} 條捷運／輕軌改用官方行駛時間與班距（${metro.trips.length} 班）。` : metro && metro.trips.length ? `；捷運依官方資料加開 ${metro.trips.length} 班區間車，全線仍用班表推估。` : '；捷運與輕軌沿用班表推估。'));
     delayTimer = setInterval(() => {
@@ -1339,20 +1348,44 @@ function frame(now) {
   if (S.mapReady && S.follow && !S.followPaused && !S.flying) map.redraw();
 }
 
+/* ---------- ?perf：載入計時面板 ----------
+   列出開頁後每個東西在第幾秒就緒，以及每個 TDX 請求的排隊、下載時間，方便在自己的手機或電腦上找出哪裡慢 */
+if (PERF) {
+  const el = document.createElement('pre');
+  el.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:99;max-width:min(560px,calc(100% - 16px));max-height:60vh;overflow:auto;margin:0;padding:8px 10px;border-radius:10px;background:rgba(0,0,0,.78);color:#E8F0F2;font:10.5px/1.4 ui-monospace,Menlo,monospace;white-space:pre-wrap;pointer-events:none;opacity:.92';
+  document.body.appendChild(el);
+  if (document.fonts) document.fonts.ready.then(() => perfMark('字型載入完成'));
+  const sec = ms => (ms / 1000).toFixed(1).padStart(5) + 's';
+  const draw = () => {
+    const rows = ['載入計時（從開頁算起）'];
+    for (const [n, t] of PERF.marks.slice().sort((a, b) => a[1] - b[1])) rows.push(sec(t) + '  ' + n);
+    if (PERF.tdx.length) {
+      rows.push('', 'TDX 請求：排入 → 送出 → 完成（排隊／下載）');
+      for (const j of PERF.tdx) rows.push(sec(j.q) + ' ' + (j.sent ? sec(j.sent) : '  等待') + ' ' + (j.done ? sec(j.done) : (j.sent ? '  下載中' : '')) +
+        (j.sent ? '  (' + ((j.sent - j.q) / 1000).toFixed(1) + '/' + (j.done ? ((j.done - j.sent) / 1000).toFixed(1) : '…') + ')' : '') + '  ' + j.path.replace(/^v\d\//, '') + (j.n !== undefined && j.n !== '' ? ' ×' + j.n : '') + (j.err ? ' ✗' + j.err : ''));
+    }
+    el.textContent = rows.join('\n');
+  };
+  setInterval(draw, 1000); draw();
+}
+
 /* ---------- 啟動 ---------- */
 async function boot() {
+  perfMark('程式開始執行（地圖元件已下載）');
   try {
     const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 15000);
     const r = await fetch('data/rail.json', { signal: ctl.signal });
     clearTimeout(tm);
     if (r.ok) applyRailData(await r.json());
   } catch (e) { console.warn('軌道線形載入失敗，改用站間直線', e); }
+  perfMark('軌道線形 rail.json');
   generateAll();
   Precip.init();
   initMap();
   renderViewBtn(); renderSkyPanel();
   updatePositions(); renderClock();
   startBtns.forEach(b => { b.disabled = false; });
+  perfMark('開場按鈕可按');
   requestAnimationFrame(t => { last = t; frame(t); });
   const cred = store.get('tdx', {});
   if (cred.id && cred.secret) connectTDX(cred, true);

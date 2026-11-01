@@ -215,7 +215,7 @@ $('#tdxclear').addEventListener('click', () => setAlerts([]));
 setInterval(checkSpots, 1000);
 // 分頁在背景時不讀；回到前景後 30 秒內補讀
 setInterval(() => { if (!document.hidden && Date.now() - Extras.alertLoad > 5 * 60e3) loadAlerts().catch(() => {}); }, 30e3);
-setTimeout(() => loadAlerts().catch(() => {}), 4000);
+setTimeout(() => loadAlerts().catch(() => {}), 2000);
 
 // 網址加上 ?alertdemo 可以預覽跑馬燈的樣子
 if (/[?&]alertdemo\b/.test(location.search)) {
