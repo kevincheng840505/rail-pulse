@@ -142,30 +142,176 @@ function busPos(b, now, dt) {
   return b.xy;
 }
 
-/* ---------- 3D 模型：遊覽車 ---------- */
-const BUS_COLORS = [['國光', '#1F5FAF'], ['統聯', '#E8742A'], ['和欣', '#6B3FA0'], ['阿羅哈', '#1B76C2'], ['葛瑪蘭', '#2A8C82'], ['首都', '#2E6FB5'],
-  ['大有', '#D33A3A'], ['豪泰', '#C9A227'], ['日統', '#8B1E3F'], ['台西', '#2F7D5A'], ['飛狗', '#C0392B'], ['建明', '#3E7CB1'], ['亞聯', '#D4573B'], ['台聯', '#3A8D5C']];
-function busColor(b) {
-  const name = BUS.ops.get(b.op) || (BUS.routes.get(b.route) || {}).op || '';
-  const hit = BUS_COLORS.find(([k]) => name.includes(k));
-  return hit ? hit[1] : ['#2E6FB5', '#E8742A', '#6B3FA0', '#2A8C82', '#C0392B'][Math.floor(hash(b.op || b.plate) * 5)];
-}
+/* ---------- 3D 模型：國道客運遊覽車 ----------
+   台灣國道客運多是 12 公尺級高地板遊覽車：Scania K 系列底盤配國內車體、
+   統聯的金龍 KL6120、國光的大宇等。車頭擋風玻璃後傾、車頂圓弧、
+   前門在右前方、前方垂掛「兔耳」後照鏡、擋風玻璃上緣有 LED 路線牌、
+   下層是行李艙、引擎在車尾。尺寸取自各車型規格的約略值。 */
+const COACH_TYPES = {
+  // L 車長、W 車寬、H 車高、rake 擋風玻璃後傾量、nose 車頭平面圓角、fa/ra 前軸到車頭、後軸到車尾、win 側窗下緣、rr 車頂圓弧半徑
+  scania:   { L: 12.2, W: 2.5,  H: 3.68, rake: 0.40, nose: 0.30, fa: 2.75, ra: 3.15, win: 1.74, rr: 0.32 },
+  kinglong: { L: 12.0, W: 2.5,  H: 3.72, rake: 0.58, nose: 0.40, fa: 2.60, ra: 3.00, win: 1.70, rr: 0.44 },
+  daewoo:   { L: 12.0, W: 2.49, H: 3.55, rake: 0.30, nose: 0.24, fa: 2.55, ra: 3.10, win: 1.64, rr: 0.28 },
+};
+/* 塗裝：body 車身底色、lower 下緣主色、stripe/stripe2 飾帶、style solid 單色或 wave 斜向色帶。
+   統聯近年為單一青綠色（維基百科「統聯客運」）；其他家依常見外觀概略配色。 */
+const BUS_LIVERY = [
+  ['統聯', { type: 'kinglong', body: '#17A497', lower: '#0D7C73', stripe: '#F4F6F7', stripe2: '#0A5C55', style: 'solid' }],
+  ['國光', { type: 'daewoo', body: '#F4F6F8', lower: '#183F8E', stripe: '#D9252E', stripe2: '#2F6FD6', style: 'wave' }],
+  ['和欣', { type: 'scania', body: '#F1F1F4', lower: '#4A2A80', stripe: '#C9A23A', stripe2: '#7B52C2', style: 'wave' }],
+  ['阿羅哈', { type: 'scania', body: '#F4F4F2', lower: '#C3122F', stripe: '#F29A1F', stripe2: '#7A0C1E', style: 'wave' }],
+  ['葛瑪蘭', { type: 'scania', body: '#F3F6F7', lower: '#0E6C8A', stripe: '#3EC2CB', stripe2: '#F4A425', style: 'wave' }],
+  ['首都', { type: 'scania', body: '#F2B705', lower: '#D9730D', stripe: '#FFFFFF', stripe2: '#9A4F06', style: 'solid' }],
+  ['大有', { type: 'scania', body: '#F4F6F8', lower: '#1C4E9E', stripe: '#E53935', stripe2: '#5B8FE0', style: 'wave' }],
+  ['豪泰', { type: 'scania', body: '#F4F4F4', lower: '#B31F2A', stripe: '#D4AF37', stripe2: '#6E1219', style: 'wave' }],
+  ['飛狗', { type: 'scania', body: '#1F3060', lower: '#131E3E', stripe: '#E63B2E', stripe2: '#F4F6F8', style: 'solid' }],
+  ['台西', { type: 'scania', body: '#F4F6F4', lower: '#2F7D5A', stripe: '#9BCB3B', stripe2: '#1D5A3F', style: 'wave' }],
+  ['日統', { type: 'scania', body: '#F4F4F4', lower: '#8B1E3F', stripe: '#E0B23C', stripe2: '#5A1028', style: 'wave' }],
+  ['建明', { type: 'scania', body: '#F4F6F8', lower: '#3E7CB1', stripe: '#F2C230', stripe2: '#24557F', style: 'wave' }],
+  ['亞聯', { type: 'scania', body: '#F4F4F4', lower: '#D4573B', stripe: '#3A6EA5', stripe2: '#8E3522', style: 'wave' }],
+  ['台聯', { type: 'scania', body: '#F4F6F4', lower: '#3A8D5C', stripe: '#F2C230', stripe2: '#22603C', style: 'wave' }],
+];
+const BUS_FALLBACK = ['#2E6FB5', '#E8742A', '#6B3FA0', '#2A8C82', '#C0392B'];
 const opName = b => BUS.ops.get(b.op) || (BUS.routes.get(b.route) || {}).op || '';
-function busParts(col) {
-  const L = 12.2, W = 2.5, out = [], body = '#EEF1F4', glass = '#26313C', dark = '#1E2329';
-  const box = (f1, f2, r1, r2, b, t, c) => out.push({ c: [[f1, r1], [f2, r1], [f2, r2], [f1, r2]], b, t, col: c });
-  const f = L / 2, w = W / 2;
-  for (const a of [f - 2.6, -f + 3.4, -f + 2.1]) for (const s of [-1, 1]) box(a - 0.5, a + 0.5, s > 0 ? w - 0.3 : -w - 0.05, s > 0 ? w + 0.05 : -w + 0.3, 0, 1.0, dark); // 輪子
-  box(-f, f, -w, w, 0.35, 1.25, body);                 // 車身下半
-  box(-f + 0.2, f - 0.2, -w - 0.02, w + 0.02, 0.95, 1.2, col); // 腰線
-  box(-f, f - 0.15, -w, w, 1.25, 2.95, glass);          // 車窗
-  for (let a = -f + 1.2; a < f - 1; a += 1.6) box(a, a + 0.18, -w - 0.01, w + 0.01, 1.3, 2.9, body); // 窗柱
-  box(f - 0.15, f, -w, w, 0.35, 2.95, glass);            // 擋風玻璃
-  box(-f, f, -w, w, 2.95, 3.45, body);                   // 車頂
-  box(-f + 0.4, f - 0.6, -w + 0.15, w - 0.15, 3.45, 3.6, body);
-  box(-f + 0.3, f - 1.2, -w - 0.02, w + 0.02, 2.95, 3.2, col); // 車頂色帶
-  box(-f, -f + 0.1, -w + 0.2, w - 0.2, 1.4, 3.2, col);   // 車尾
-  for (const s of [-1, 1]) box(f - 0.2, f + 0.15, s * (w + 0.25) - 0.06, s * (w + 0.25) + 0.06, 2.0, 2.7, dark); // 後照鏡
+// 回傳 [快取 key, 塗裝]
+function busLivery(b) {
+  const name = opName(b), hit = BUS_LIVERY.find(([k]) => name.includes(k));
+  if (hit) return hit;
+  const c = BUS_FALLBACK[Math.floor(hash(b.op || b.plate) * BUS_FALLBACK.length)];
+  return ['_' + c, { type: 'scania', body: '#F2F4F6', lower: c, stripe: shade(c, 1.35), stripe2: shade(c, 0.6), style: 'wave' }];
+}
+const busColor = b => { const v = busLivery(b)[1]; return v.style === 'solid' ? v.body : v.lower; };
+function shade(c, k) {
+  const n = parseInt(c.slice(1), 16), f = v => Math.max(0, Math.min(255, Math.round(k > 1 ? v + (255 - v) * (k - 1) : v * k)));
+  return '#' + [n >> 16 & 255, n >> 8 & 255, n & 255].map(v => f(v).toString(16).padStart(2, '0')).join('');
+}
+function busParts(V) {
+  const T = COACH_TYPES[V.type] || COACH_TYPES.scania, { L, H, rake, nose, fa, ra, win, rr } = T;
+  const f = L / 2, w = T.W / 2, zb = 0.42, ws0 = 1.2, ws1 = H - 0.34, out = [];
+  const glass = '#18222C', wsg = '#26394A', mask = '#14181C', trim = '#C8CDD2', tyre = '#141518', ep = 0.014;
+  const quad = (c, b, t, col) => { if (t - b > 1e-3) out.push({ c, b, t, col }); };
+  const box = (x1, x2, y1, y2, b, t, col) => quad([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], b, t, col);
+  const both = (x1, x2, yi, yo, b, t, col) => { box(x1, x2, yi, yo, b, t, col); box(x1, x2, -yo, -yi, b, t, col); };
+  // 側面輪廓：高度 z 時的車頭、車尾位置與半寬
+  const xf = z => { let x = f; if (z > ws0) x -= rake * Math.min(1, (z - ws0) / (ws1 - ws0)); const d = z - (H - rr); if (d > 0) x -= rr - Math.sqrt(Math.max(0, rr * rr - d * d)); return x; };
+  const xr = z => { const d = z - (H - rr * 0.8); return -f + (d > 0 ? rr * 0.8 - Math.sqrt(Math.max(0, rr * rr * 0.64 - d * d)) : 0); };
+  const hw = z => { const d = z - (H - rr); return d > 0 ? w - rr + Math.sqrt(Math.max(0, rr * rr - d * d)) : w; };
+  const axles = [f - fa, -f + ra], AR = 0.62, AZ = 0.5; // 輪拱半徑、圓心高度
+  // 高度切層
+  const cuts = new Set([zb, 0.62, 0.74, ws0, win, H - 0.44, H]);
+  for (let z = zb; z < AZ + AR; z += 0.1) cuts.add(+z.toFixed(3));
+  cuts.add(AZ + AR);
+  for (let z = ws0; z < H - 0.44; z += 0.2) cuts.add(+z.toFixed(3));
+  for (let z = H - rr; z < H; z += 0.06) cuts.add(+z.toFixed(3));
+  const zs = [...cuts].filter(z => z >= zb && z <= H).sort((a, b) => a - b);
+  const paint = z => z < 0.62 ? shade(V.lower, 0.55) : z >= win && z < H - 0.44 ? glass : V.body;
+  for (let i = 0; i + 1 < zs.length; i++) {
+    const z0 = zs[i], z1 = zs[i + 1], zm = (z0 + z1) / 2, a = xf(zm), r = xr(zm), ww = hw(zm);
+    const c = nose * (zm < ws0 ? 0.8 : 1), mid = a - c, rr0 = r + 0.25;
+    const col = paint(zm), front = zm >= ws0 && zm < ws1 ? wsg : zm < 0.74 ? shade(V.lower, 0.45) : zm < ws0 ? mask : V.body;
+    // 車身中段：輪拱處挖空
+    let segs = [[rr0, mid]];
+    if (zm < AZ + AR) for (const ax of axles) {
+      const ha = Math.sqrt(Math.max(0, AR * AR - Math.max(0, zm - AZ) ** 2)), nx = [];
+      for (const [s, e] of segs) { if (e <= ax - ha || s >= ax + ha) nx.push([s, e]); else { if (s < ax - ha) nx.push([s, ax - ha]); if (e > ax + ha) nx.push([ax + ha, e]); } }
+      segs = nx;
+    }
+    for (const [s, e] of segs) box(s, e, -ww, ww, z0, z1, col);
+    // 車頭兩段漸窄（平面圓角），車尾一段
+    const m2 = a - c * 0.35, w1 = ww - c * 0.22, w2 = ww - c * 0.62;
+    quad([[mid, -ww], [m2, -w1], [m2, w1], [mid, ww]], z0, z1, zm >= win && zm < H - 0.44 ? glass : front === wsg ? wsg : col);
+    quad([[m2, -w1], [a, -w2], [a, w2], [m2, w1]], z0, z1, front);
+    quad([[r, -ww + 0.14], [rr0, -ww], [rr0, ww], [r, ww - 0.14]], z0, z1, zm < 0.62 ? col : V.body);
+  }
+  // 車頂冷氣機與逃生口
+  box(-2.2, 1.6, -0.82, 0.82, H - 0.01, H + 0.16, shade(V.body, 0.93));
+  box(-2.0, 1.4, -0.7, 0.7, H + 0.16, H + 0.24, shade(V.body, 0.88));
+  for (const x of [f - 2.6, -f + 2.4]) box(x - 0.4, x + 0.4, -0.38, 0.38, H - 0.01, H + 0.05, '#9AA1A8');
+  // ---------- 側面塗裝與細節（貼在車身外側一點點）----------
+  const sideY = w + ep, inY = w - 0.004;
+  const xMin = -f + 0.28, xMax = f - nose - 0.02;
+  if (V.style === 'wave') {
+    // 下緣主色由車頭低處往車尾斜升，上方兩道平行飾帶
+    const band = (gap, thick, col) => {
+      for (let z = 0.62; z < win - 0.02; z += 0.025) {
+        const t = (z + 0.0125 - 0.62) / (win - 0.62), x0 = xMax - 0.4 - t * L * 0.72;
+        const xs = thick ? Math.max(xMin, x0 + gap) : xMin, x1 = thick ? Math.min(xMax, x0 + gap + thick) : x0;
+        if (x1 > xs) both(xs, x1, inY, sideY, z, Math.min(win - 0.02, z + 0.025), col);
+      }
+    };
+    band(0, 0, V.lower);
+    band(0.2, 0.55, V.stripe);
+    band(0.95, 0.3, V.stripe2);
+    // 車窗以上車尾的延伸色帶
+    both(xMin, xMin + 2.2, inY, sideY, H - 0.44, H - 0.3, V.lower);
+  } else {
+    both(xMin, xMax, inY, sideY, 0.62, 0.8, V.lower);
+    both(xMin, xMax, inY, sideY, win - 0.2, win - 0.08, V.stripe);
+    both(xMin, xMax, inY, sideY, win - 0.08, win - 0.02, V.stripe2);
+  }
+  both(xMin, xMax, inY, sideY + 0.004, win - 0.02, win + 0.03, trim); // 車窗下緣飾條
+  // 窗柱
+  const p0 = -f + 1.0, p1 = f - nose - 1.35;
+  for (let x = p0; x < p1; x += 1.9) both(x, x + 0.1, inY, sideY, win, H - 0.44, '#0B0F13');
+  // 右前門（台灣右駕，門在右側前方）
+  box(f - nose - 1.25, f - nose - 0.25, w - 0.004, w + ep * 2, zb + 0.05, H - 0.46, glass);
+  box(f - nose - 1.25, f - nose - 1.2, w, w + ep * 3, zb + 0.05, H - 0.46, '#0B0F13');
+  box(f - nose - 0.3, f - nose - 0.25, w, w + ep * 3, zb + 0.05, H - 0.46, '#0B0F13');
+  // 駕駛側窗（左前）
+  box(f - nose - 1.3, f - nose - 0.1, -w - ep * 2, -w + 0.004, 1.35, H - 0.46, glass);
+  // 行李艙門縫、側邊方向燈
+  for (const x of [axles[0] - 1.15, -0.9, 0.9, axles[1] + 1.2]) both(x, x + 0.025, inY, sideY + 0.004, 0.66, win - 0.28, '#4A5057');
+  for (const x of [axles[0] - 1.0, 0, axles[1] + 1.0]) both(x - 0.08, x + 0.08, inY, sideY + 0.006, 0.66, 0.74, '#F59A1B');
+  // 車尾引擎散熱格柵
+  both(-f + 0.5, -f + 1.6, inY, sideY + 0.004, 0.75, 1.35, '#24292E');
+  // 輪拱內側與輪胎、輪圈
+  for (const ax of axles) {
+    box(ax - AR, ax + AR, -w + 0.34, w - 0.34, 0.06, AZ + AR - 0.02, '#0E1012');
+    const R = 0.52;
+    for (let k = 0; k < 8; k++) {
+      const z0 = k * R * 2 / 8, z1 = (k + 1) * R * 2 / 8, d = (z0 + z1) / 2 - R, hc = Math.sqrt(R * R - d * d);
+      both(ax - hc, ax + hc, w - 0.32, w - 0.03, z0, z1, tyre);
+      const rr2 = 0.3, d2 = Math.abs(d);
+      if (d2 < rr2) { const hr = Math.sqrt(rr2 * rr2 - d2 * d2); both(ax - hr, ax + hr, w - 0.03, w - 0.01, z0, z1, d2 < 0.09 ? '#6B7278' : '#BCC2C8'); }
+    }
+  }
+  // ---------- 車頭 ----------
+  const fz = z => xf(z), fw = ww => ww - nose * 0.62;
+  // LED 路線牌（擋風玻璃上緣內側）
+  { const z0 = ws1 - 0.3, z1 = ws1 - 0.06, x = fz(z1); box(x - 0.06, x + 0.006, -fw(w) + 0.2, fw(w) - 0.2, z0, z1, '#07090B'); box(x - 0.05, x + 0.012, -fw(w) + 0.45, fw(w) - 0.45, z0 + 0.05, z1 - 0.05, '#FFA51F'); }
+  // 擋風玻璃上緣遮罩、下緣
+  { const x = fz(ws1 + 0.02); box(x - 0.08, x + 0.01, -fw(w), fw(w), ws1, ws1 + 0.05, mask); }
+  box(f - 0.04, f + 0.012, -fw(w), fw(w), ws0 - 0.04, ws0 + 0.04, mask);
+  // 頭燈、霧燈、保險桿、車牌、品牌色飾
+  for (const s of [-1, 1]) {
+    const y1 = s * (fw(w) - 0.05), y2 = s * (fw(w) - 0.62);
+    box(f - 0.02, f + 0.018, Math.min(y1, y2), Math.max(y1, y2), 0.84, 1.02, '#DDE7F0');
+    box(f - 0.02, f + 0.024, Math.min(y1, y2) + (s > 0 ? 0.32 : 0.05), Math.max(y1, y2) - (s > 0 ? 0.05 : 0.32), 0.87, 0.99, '#FFFFFF');
+    box(f - 0.02, f + 0.018, s > 0 ? fw(w) - 0.42 : -fw(w) + 0.12, s > 0 ? fw(w) - 0.12 : -fw(w) + 0.42, 0.52, 0.62, '#F3D27A');
+  }
+  box(f - 0.02, f + 0.02, -fw(w) + 0.05, fw(w) - 0.05, zb, 0.7, shade(V.lower, 0.5));
+  box(f - 0.02, f + 0.03, -0.26, 0.26, 0.5, 0.66, '#F2F2EE');
+  box(f - 0.02, f + 0.016, -0.7, 0.7, 1.06, 1.14, V.style === 'solid' ? V.stripe : V.lower);
+  // 兔耳後照鏡：從車頂前緣伸出，垂在擋風玻璃前方兩側
+  for (const s of [-1, 1]) {
+    const yA = s * (w - 0.2), yO = s * (w + 0.1), xa = fz(H - 0.36);
+    box(xa - 0.1, f + 0.42, Math.min(yA, yA + s * 0.06), Math.max(yA, yA + s * 0.06), H - 0.38, H - 0.32, '#1A1D21');
+    box(f + 0.36, f + 0.42, Math.min(yA, yA + s * 0.06), Math.max(yA, yA + s * 0.06), 2.5, H - 0.32, '#1A1D21');
+    box(f + 0.3, f + 0.46, Math.min(yA - s * 0.12, yO), Math.max(yA - s * 0.12, yO), 1.85, 2.55, '#1A1D21');
+    box(f + 0.29, f + 0.3, Math.min(yA - s * 0.08, yO - s * 0.04), Math.max(yA - s * 0.08, yO - s * 0.04), 1.9, 2.5, '#6F8796');
+  }
+  // ---------- 車尾 ----------
+  const rx = -f - 0.012;
+  box(rx, -f + 0.01, -w + 0.3, w - 0.3, H - 1.15, H - 0.5, glass);         // 後窗
+  box(rx, -f + 0.01, -w + 0.25, w - 0.25, 1.3, 1.9, V.style === 'solid' ? V.stripe : V.lower); // 品牌色帶
+  box(rx, -f + 0.01, -0.9, 0.9, 0.62, 1.2, '#2A2F35');                   // 引擎蓋格柵
+  box(rx - 0.01, -f + 0.01, -0.26, 0.26, 0.45, 0.6, '#F2F2EE');           // 車牌
+  for (const s of [-1, 1]) {
+    const y1 = s * (w - 0.16), y2 = s * (w - 0.34);
+    box(rx, -f + 0.02, Math.min(y1, y2), Math.max(y1, y2), 0.75, 2.3, '#B8141B');
+    box(rx - 0.004, -f + 0.02, Math.min(y1, y2), Math.max(y1, y2), 1.5, 1.7, '#F39A1E');
+  }
+  box(rx, -f + 0.01, -w + 0.05, w - 0.05, zb, 0.6, shade(V.lower, 0.5));   // 後保險桿
   return out;
 }
 
@@ -185,9 +331,9 @@ function stepBuses(now) {
     if (!near) { b.drawn = null; continue; }
     wantRoute(b.route);
     const q = busPos(b, t, dt); if (!q) continue;
-    const ll = bll(q.x, q.y), col = busColor(b);
+    const ll = bll(q.x, q.y), [lk, lv] = busLivery(b);
     b.drawn = { ll, h: q.h };
-    extra.push({ p: { alt: 0, h: q.h, pitch: 0 }, ll, len: 12, mesh: () => PlaneGL.meshFor('bus|' + col, () => busParts(col)), onPick: () => followBus(b) });
+    extra.push({ p: { alt: 0, h: q.h, pitch: 0 }, ll, len: 12, mesh: () => PlaneGL.meshFor('bus|' + lk, () => busParts(lv)), onPick: () => followBus(b) });
   }
   PlaneGL.extra = extra;
   let cam = null;
@@ -377,7 +523,7 @@ function demoBuses() {
     const sh = shapeOf(line);
     BUS.shapes.set('DEMO', [{ sub: 'DEMO', dir: 0, ...sh }, { sub: 'DEMO', dir: 1, ...shapeOf(line.slice().reverse()) }]);
     BUS.routes.set('DEMO', { from: '臺北轉運站', to: '朝馬轉運站', op: '示範客運' });
-    BUS.ops.set('DEMO', '國光客運');
+    ['國光客運', '統聯客運', '和欣客運', '葛瑪蘭客運', '阿羅哈客運', '首都客運'].forEach((n, i) => BUS.ops.set('DEMO' + i, n));
   }
   const now = Date.now(), list = BUS.shapes.get('DEMO');
   for (let i = 0; i < 24; i++) {
@@ -385,7 +531,7 @@ function demoBuses() {
     const speed = 85 + (i % 5) * 4, s = ((i * 0.083 * sh.len) + (now / 1000) * speed / 3.6) % sh.len, q = along(sh, s), [lon, lat] = bll(q.x, q.y);
     let b = BUS.list.get(plate);
     if (!b) { b = { plate, fixes: [] }; BUS.list.set(plate, b); }
-    Object.assign(b, { route: 'DEMO', routeName: '1610', sub: 'DEMO', subName: '', dir, op: 'DEMO', speed, az: q.h, seenAt: now });
+    Object.assign(b, { route: 'DEMO', routeName: '1610', sub: 'DEMO', subName: '', dir, op: 'DEMO' + (i % 6), speed, az: q.h, seenAt: now });
     // 假裝定位延遲 20 秒，測試往前推算
     b.fixes = [{ lon, lat, t: now - 20000, speed, az: q.h }]; b.s0 = null;
     const back = along(sh, s - speed / 3.6 * 20), [l2, a2] = bll(back.x, back.y); b.fixes = [{ lon: l2, lat: a2, t: now - 20000, speed, az: q.h }];
