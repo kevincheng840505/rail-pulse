@@ -40,13 +40,17 @@ S.P = paletteAt(lookHour(), lookWx());
 const P0 = S.P;
 const NAME = ['coalesce', ['get', 'name:zh-Hant'], ['get', 'name:zh'], ['get', 'name']];
 const DEM = { type: 'raster-dem', tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'], tileSize: 256, maxzoom: 13, encoding: 'terrarium' };
+// 地形與山影只用在大範圍視野：手機上把每張高程圖當成 512 像素，同一個畫面只抓約四分之一張數（每張約 100 KB）
+// 山影同理，只在手機或省電畫質時這樣做；電腦維持原本的精細度
+const DEM_LITE = matchMedia('(pointer: coarse)').matches || store.get('quality', 'auto') === 'low';
+const DEM_TERRAIN = { ...DEM, tileSize: DEM_LITE ? 512 : 256 };
 const railColor = P => ['case', ['==', ['get', 'color'], ''], P.tra, ['get', 'color']];
 const STYLE = {
   version: 8,
   glyphs: 'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf',
   sources: {
     omt: { type: 'vector', url: 'https://tiles.openfreemap.org/planet' },
-    dem: DEM, demhs: { ...DEM },
+    dem: DEM_TERRAIN, demhs: { ...DEM, maxzoom: 11, tileSize: DEM_LITE ? 512 : 256 }, // 山影近看幾乎看不到：最多讀到 zoom 11，再近就放大使用，跟拍時不再一路下載高程圖
     land: { type: 'geojson', data: COUNTIES_GEOJSON },
   },
   layers: [
@@ -55,7 +59,7 @@ const STYLE = {
     { id: 'wood', type: 'fill', source: 'omt', 'source-layer': 'landcover', filter: ['in', ['get', 'class'], ['literal', ['wood', 'forest']]], paint: { 'fill-color': P0.wood, 'fill-opacity': 0.6 } },
     { id: 'park', type: 'fill', source: 'omt', 'source-layer': 'park', minzoom: 12, paint: { 'fill-color': P0.wood, 'fill-opacity': 0.55 } },
     { id: 'grass', type: 'fill', source: 'omt', 'source-layer': 'landcover', minzoom: 13, filter: ['in', ['get', 'class'], ['literal', ['grass', 'farmland']]], paint: { 'fill-color': P0.wood, 'fill-opacity': 0.35 } },
-    { id: 'hills', type: 'hillshade', source: 'demhs', paint: { 'hillshade-shadow-color': P0.hsShadow, 'hillshade-highlight-color': P0.hsHigh, 'hillshade-accent-color': P0.hsAccent, 'hillshade-exaggeration': 0.55 } },
+    { id: 'hills', type: 'hillshade', source: 'demhs', maxzoom: 12, paint: { 'hillshade-shadow-color': P0.hsShadow, 'hillshade-highlight-color': P0.hsHigh, 'hillshade-accent-color': P0.hsAccent, 'hillshade-exaggeration': 0.55 } },
     { id: 'water', type: 'fill', source: 'omt', 'source-layer': 'water', paint: { 'fill-color': P0.water } },
     { id: 'county', type: 'line', source: 'land', paint: { 'line-color': P0.edge, 'line-width': 0.8, 'line-opacity': 0.6 } },
     { id: 'roads', type: 'line', source: 'omt', 'source-layer': 'transportation', minzoom: 8,
@@ -135,8 +139,32 @@ const TAIWAN = { center: [120.95, 23.65], zoom: 6.7, pitch: 35, bearing: -8 };
 const EMPTY = { type: 'FeatureCollection', features: [] };
 const CAR_ZOOM = 14.5;
 const COARSE = matchMedia('(pointer: coarse)').matches;
-const MAX_CAR_TRAINS = COARSE ? 8 : 18;
-const LIVE_TRAINS = COARSE ? 5 : 8; // 其中每一格都更新的列數 // 同時畫成車廂的列車上限（跟拍的列車另計）
+/* ---------- 畫質：自動／省電／高 ----------
+   高：維持完整效果、不限幀率。
+   自動：電腦等於高；手機的動畫限每秒 30 格（120Hz 手機原本會畫到每秒 120 次），
+         持續掉格或電量低於 20% 且沒在充電時自動降到省電。
+   省電：每秒 30 格、像素比 1、不開地形與山影、背景車廂列數減半、不畫建築立面與月台旅客。 */
+const Quality = {
+  pref: store.get('quality', 'auto'), // 使用者的選擇
+  auto: 'mid',                         // 自動模式目前的等級：mid 或 low
+  get level() { return this.pref === 'high' ? 'high' : this.pref === 'low' ? 'low' : !COARSE && this.auto === 'mid' ? 'high' : this.auto; },
+  get low() { return this.level === 'low'; },
+  get fps() { return this.level === 'high' ? 0 : 30; },
+  get pixelRatio() { return Math.min(window.devicePixelRatio || 1, this.low ? 1 : COARSE ? 1.5 : 2); },
+};
+const maxCarTrains = () => (COARSE ? 8 : 18) / (Quality.low ? 2 : 1); // 同時畫成車廂的列車上限（跟拍的列車另計）
+const liveTrains = () => Quality.low ? 3 : COARSE ? 5 : 8; // 其中每一格都更新的列數
+// 幀率上限：同一格（同一個時間戳）裡主迴圈、飛機、客運共用一個判斷，被跳過的格什麼都不送給地圖，地圖也就不重畫
+const Pace = { at: -1, ok: true, last: -1e9 };
+function paceOk(now) {
+  if (now !== Pace.at) {
+    Pace.at = now;
+    const fps = Quality.fps;
+    Pace.ok = !fps || now - Pace.last >= 1000 / fps - 4;
+    if (Pace.ok) Pace.last = now;
+  }
+  return Pace.ok;
+}
 const DOT = COARSE ? 1.35 : 1; // 手機上列車圓點放大 // 這個縮放以上把列車畫成一節節車廂
 function initMap() {
   if (!window.maplibregl) { $('#intro p').textContent = '地圖元件載入失敗，請確認網路連線後重新整理。'; return; }
@@ -144,7 +172,7 @@ function initMap() {
     container: 'map', style: STYLE, ...TAIWAN, maxPitch: 85, attributionControl: false,
     localIdeographFontFamily: "'Noto Sans TC','PingFang TC','Microsoft JhengHei',sans-serif",
     fadeDuration: 0,
-    pixelRatio: Math.min(window.devicePixelRatio || 1, COARSE ? 1.5 : 2), // 手機 3 倍像素太耗效能
+    pixelRatio: Quality.pixelRatio, // 手機 3 倍像素太耗效能
   });
   map.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: '© OpenStreetMap 貢獻者 · OpenFreeMap · 地形 Mapzen／AWS · 天氣 Open-Meteo' }), 'bottom-right');
   // 用 style.load 而非 load：外部圖磚失敗時 load 不會觸發，仍要畫出鐵道與列車
@@ -219,6 +247,7 @@ function initMap() {
     map.setLayoutProperty('buildings', 'visibility', S.buildings ? 'visible' : 'none');
     for (const l of ['facade', 'lamp-glow']) map.setLayoutProperty(l, 'visibility', S.buildings ? 'visible' : 'none');
     S.mapReady = true;
+    applyQuality();
     applyLook(true); pushTrains(true);
     map.on('click', onMapClick);
     for (const l of ['train', 'train-halo', 'cars', 'st-dot']) {
@@ -250,11 +279,48 @@ function syncTerrain(force) {
   // 手機的地形只留給看全台、看整個縣市的大範圍：拉近到十多公里寬時，斜看的山區要把很多地形圖磚畫到離屏畫面，
   // 加上進出地形時重新編譯著色器，手機 GPU 會整個卡住（電腦可以放寬到更近）
   const [zOn, zOff] = COARSE ? [9.6, 10.4] : [11.5, 12.5];
-  const want = S.terrain && !(S.follow && (COARSE || !S.followPaused)) && (terrainOn ? z < zOff : z < zOn);
+  const want = S.terrain && S.started && !Quality.low && !(S.follow && (COARSE || !S.followPaused)) && (terrainOn ? z < zOff : z < zOn);
   if (want === terrainOn && !force) return;
   terrainOn = want;
   try { map.setTerrain(want ? { source: 'dem', exaggeration: 1.5 } : null); } catch {}
 }
+/* 套用畫質：像素比、山影、建築立面與月台旅客、地形 */
+function applyQuality() {
+  if (!map || !S.mapReady) return;
+  const low = Quality.low, vis = on => on ? 'visible' : 'none';
+  try { if (map.getPixelRatio() !== Quality.pixelRatio) map.setPixelRatio(Quality.pixelRatio); } catch {}
+  try { map.setLayoutProperty('hills', 'visibility', vis(!low)); } catch {}
+  try { map.setLayoutProperty('people', 'visibility', vis(!low)); } catch {}
+  for (const l of ['facade', 'lamp-glow']) try { map.setLayoutProperty(l, 'visibility', vis(S.buildings && !low)); } catch {}
+  syncTerrain(true); Facade.soon(true); pushTrains(true);
+}
+function renderQualityBtns() {
+  for (const b of document.querySelectorAll('#qualityrow button')) b.setAttribute('aria-pressed', String(b.dataset.v === Quality.pref));
+  const n = $('#qualitynote');
+  if (n) n.textContent = Quality.pref === 'auto' ? (Quality.level === 'low' ? '目前：省電（自動降低）' : Quality.level === 'high' ? '目前：高' : '目前：每秒 30 格') : '';
+}
+function setQuality(v) { Quality.pref = v; if (v === 'auto') Quality.auto = 'mid'; store.set('quality', v); renderQualityBtns(); applyQuality(); }
+// 自動模式：跟拍或漫遊時連續幾秒畫面每秒不到 20 格，或電量低於 20% 且沒在充電，就降到省電（只降不升，避免來回切換）
+const AutoQ = { ema: 16.7, slowSince: 0, armAt: 0 };
+function autoDowngrade(why) {
+  if (Quality.pref !== 'auto' || Quality.auto === 'low') return;
+  Quality.auto = 'low'; renderQualityBtns(); applyQuality();
+  if (typeof showSpot === 'function') showSpot('已切換到省電畫質', why + '；可在 ⚙ 設定改回', '畫質');
+}
+function watchFrameRate(now, rawDt) {
+  if (Quality.pref !== 'auto' || Quality.auto === 'low' || !S.mapReady || document.hidden) { AutoQ.slowSince = 0; return; }
+  if (!AutoQ.armAt) AutoQ.armAt = now + 10000; // 開頁前 10 秒在載入圖磚，不算
+  if (now < AutoQ.armAt || rawDt > 400) return; // 單次長停頓（切分頁、載入）不算
+  AutoQ.ema += (rawDt - AutoQ.ema) * 0.05;
+  if (S.follow && !S.followPaused && AutoQ.ema > 50) {
+    if (!AutoQ.slowSince) AutoQ.slowSince = now;
+    else if (now - AutoQ.slowSince > 6000) autoDowngrade('畫面持續不流暢，已自動降低畫質');
+  } else AutoQ.slowSince = 0;
+}
+if (navigator.getBattery) navigator.getBattery().then(bat => {
+  const check = () => { if (!bat.charging && bat.level <= 0.2) autoDowngrade('電量偏低，已改用省電畫質'); };
+  check(); bat.addEventListener('levelchange', check); bat.addEventListener('chargingchange', check);
+}).catch(() => {});
 
 /* ---------- 建築立面：近看時在附近建築外面貼上一層層窗帶與屋頂邊緣 ----------
    向量圖磚的建築只有外框與高度，這裡把鏡頭附近的建築外框往外推一點點，
@@ -425,7 +491,7 @@ const Facade = (() => {
     if (!map || !S.mapReady || !map.getSource('facade')) return;
     const src = map.getSource('facade');
     platforms();
-    if (!S.buildings || map.getZoom() < FACADE_ZOOM) { if (last) { src.setData(EMPTY); last = null; } return; }
+    if (!S.buildings || Quality.low || map.getZoom() < FACADE_ZOOM) { if (last) { src.setData(EMPTY); last = null; } return; }
     const c = map.getCenter(), [cx, cy] = proj(c.lat, c.lng);
     let tiles = null; try { tiles = nearTiles(c, R); } catch {}
     // 只有附近的圖磚有變（新載入）或移動夠遠才重建；遠方圖磚載入不用重算
@@ -546,11 +612,11 @@ function pushTrains(force) {
   }
   near.sort((p, q) => p.d - q.d);
   // 沒在跟車時，近看畫面中央最近的幾列每一格更新（自由瀏覽時才不會一頓一頓）
-  if (!sel && z >= CAR_ZOOM - 0.3) S.nearby = near.splice(0, LIVE_TRAINS).map(n => n.trip);
+  if (!sel && z >= CAR_ZOOM - 0.3) S.nearby = near.splice(0, liveTrains()).map(n => n.trip);
   if (doLights) for (const { trip, pos } of near) trainLights(trip, pos, bgLights);
   if (doCars) {
     lastCars = performance.now();
-    for (const { trip, pos } of near.slice(0, MAX_CAR_TRAINS)) {
+    for (const { trip, pos } of near.slice(0, maxCarTrains())) {
       const start = cars.length;
       carFeatures(trip, pos, S.P, cars, false); // 窗格細節只畫在跟拍的列車上
       for (let i = start; i < cars.length; i++) cars[i].properties.idx = trip.idx;
@@ -1037,6 +1103,8 @@ function toggleBtn(id, key, apply) {
   b.addEventListener('click', () => { S[key] = !S[key]; store.set(key, S[key]); b.setAttribute('aria-pressed', String(S[key])); if (S.mapReady) apply(S[key]); });
 }
 toggleBtn('#terrainbtn', 'terrain', () => syncTerrain(true));
+$('#qualityrow').addEventListener('click', e => { const b = e.target.closest('button[data-v]'); if (b) setQuality(b.dataset.v); });
+renderQualityBtns();
 toggleBtn('#buildbtn', 'buildings', on => { for (const l of ['buildings', 'facade', 'lamp-glow']) map.setLayoutProperty(l, 'visibility', on ? 'visible' : 'none'); });
 toggleBtn('#labelbtn', 'labels', on => map.setLayoutProperty('st-label', 'visibility', on ? 'visible' : 'none'));
 
@@ -1117,9 +1185,10 @@ async function connectTDX(cred, quiet) {
     const ml = metro ? metro.covered.size : 0;
     tdxStatus(`已載入 ${trips.length} 班台鐵與高鐵當日時刻，${d} 列台鐵即時誤點` + (ml ? `；${ml} 條捷運／輕軌改用官方行駛時間與班距（${metro.trips.length} 班）。` : metro && metro.trips.length ? `；捷運依官方資料加開 ${metro.trips.length} 班區間車，全線仍用班表推估。` : '；捷運與輕軌沿用班表推估。'));
     delayTimer = setInterval(() => {
+      if (document.hidden) return; // 分頁在背景時不讀誤點，回到前景立刻補讀（見下方 visibilitychange）
       const now = Date.now();
       if (twDate(now) !== TDX.date && minOfDay(now) >= 240) { connectTDX(cred, true); return; }
-      TDX.loadDelays(cred, isCurrent).catch(() => {});
+      delayAt = now; TDX.loadDelays(cred, isCurrent).catch(() => {});
     }, 60000);
     afterTripsChanged();
   } catch (err) {
@@ -1129,6 +1198,15 @@ async function connectTDX(cred, quiet) {
     if (!quiet) console.warn(err);
   }
 }
+// 回到前景：誤點超過一分鐘沒更新就馬上讀，跨日就重新載入當日時刻
+let delayAt = 0;
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || !TDX.ok) return;
+  const cred = store.get('tdx', {}); if (!cred.id || !cred.secret) return;
+  const now = Date.now();
+  if (twDate(now) !== TDX.date && minOfDay(now) >= 240) connectTDX(cred, true);
+  else if (now - delayAt > 60e3) { delayAt = now; const g = tdxGen; TDX.loadDelays(cred, () => g === tdxGen).catch(() => {}); }
+});
 $('#tdxgo').addEventListener('click', () => {
   const cred = { id: $('#tdxid').value.trim(), secret: $('#tdxsecret').value.trim() };
   if (!cred.id || !cred.secret) { tdxStatus('請填入 Client ID 與 Client Secret。'); return; }
@@ -1143,6 +1221,7 @@ $('#tdxclear').addEventListener('click', () => {
 function closeIntro(then) {
   const intro = $('#intro');
   intro.classList.add('out');
+  S.started = true; syncTerrain(true); // 開場畫面後面只畫平面，按下開始才開 3D 地形
   setTimeout(() => { intro.hidden = true; }, 1300);
   if (store.get('music', true)) setMusic(true);
   then();
@@ -1166,9 +1245,12 @@ document.addEventListener('keydown', e => {
 
 /* ---------- 主迴圈 ---------- */
 let last = performance.now(), lastPush = 0, lastUi = 0;
+let lastRaw = performance.now();
 function frame(now) {
   // 先排下一格：要排在地圖自己的重繪之前，下一格才會先輪到這裡
   requestAnimationFrame(frame);
+  watchFrameRate(now, now - lastRaw); lastRaw = now;
+  if (!paceOk(now)) return; // 畫質限幀：這一格跳過
   const dt = Math.min(1000, now - last); last = now;
   if (S.playing) { if (S.live && S.speed === 1) S.simMs = Date.now(); else S.simMs += dt * S.speed; }
   // 拉遠時列車一秒只移動不到一個像素：每 0.1 秒重送一次列車資料，整張地圖就得一直重畫，手機很吃力。

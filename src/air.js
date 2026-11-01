@@ -628,6 +628,7 @@ function setPlaneVis() {
 let airRaf = 0;
 function stepPlanes(now) {
   airRaf = requestAnimationFrame(stepPlanes);
+  if (!paceOk(now)) return; // 畫質限幀，與主迴圈同一格判斷
   if (!AIR.layers) { ensureLayers(); return; }
   if (!AIR.on) { PlaneGL.draw = []; return; }
   const z = map.getZoom(), near = z >= 11, m = curMin();
@@ -1001,6 +1002,7 @@ function reloadFlights() { loadFlights().catch(e => { console.warn(e); AIR.fligh
 AIR.flights = estimateFlights();
 setTimeout(reloadFlights, 5000);
 // 航班時間會隨延誤更新：有金鑰時每 10 分鐘重新讀一次
-setInterval(() => { if (Date.now() - AIR.loadAt > 10 * 60e3 && store.get('tdx', {}).id) reloadFlights(); }, 60e3);
+// 分頁在背景時不讀，回到前景後一分鐘內補讀
+setInterval(() => { if (!document.hidden && Date.now() - AIR.loadAt > 10 * 60e3 && store.get('tdx', {}).id) reloadFlights(); }, 60e3);
 $('#tdxgo').addEventListener('click', () => setTimeout(reloadFlights, 2500));
 $('#tdxclear').addEventListener('click', () => { AIR.gen++; AIR.flights = estimateFlights(); AIR.live = false; });

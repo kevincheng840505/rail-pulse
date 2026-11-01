@@ -317,5 +317,10 @@ async function loadFreeway() {
   FWY.ready = true;
   addFreewayLayers();
 }
-loadFreeway();
-(function waitMap() { if (S.mapReady && FWY.ready) addFreewayLayers(); else if (!(FWY.done && !FWY.ready)) setTimeout(waitMap, 500); })();
+// 國道資料（約 160 KB）延後到需要時才讀：拉近到 zoom 9.5 以上、跟拍國道客運，或 ?busdemo。
+// 開頁時省下下載與手機上約半秒的解碼計算，國道和客運本來就只在拉近時才看得到
+let fwyAsked = false;
+(function waitMap() {
+  if (!fwyAsked && (/[?&]busdemo\b/.test(location.search) || (S.mapReady && map.getZoom() >= 9.5) || (typeof BUS !== 'undefined' && BUS.follow))) { fwyAsked = true; loadFreeway(); }
+  if (S.mapReady && FWY.ready) addFreewayLayers(); else if (!(FWY.done && !FWY.ready)) setTimeout(waitMap, 500);
+})();
