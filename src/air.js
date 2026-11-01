@@ -597,7 +597,8 @@ function ensureLayers() {
 }
 function setPlaneVis() {
   if (!AIR.layers) return;
-  for (const l of ['planes3d', 'plane-dot', 'plane-shadow']) try { map.setLayoutProperty(l, 'visibility', AIR.on ? 'visible' : 'none'); } catch {}
+  // planes3d 也畫國道客運，所以一直開著；飛機開關由圖層的 render 依 AIR.on 決定
+  for (const l of ['plane-dot', 'plane-shadow']) try { map.setLayoutProperty(l, 'visibility', AIR.on ? 'visible' : 'none'); } catch {}
 }
 
 let airRaf = 0;

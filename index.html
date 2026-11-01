@@ -4533,7 +4533,8 @@ function ensureLayers() {
 }
 function setPlaneVis() {
   if (!AIR.layers) return;
-  for (const l of ['planes3d', 'plane-dot', 'plane-shadow']) try { map.setLayoutProperty(l, 'visibility', AIR.on ? 'visible' : 'none'); } catch {}
+  // planes3d 也畫國道客運，所以一直開著；飛機開關由圖層的 render 依 AIR.on 決定
+  for (const l of ['plane-dot', 'plane-shadow']) try { map.setLayoutProperty(l, 'visibility', AIR.on ? 'visible' : 'none'); } catch {}
 }
 
 let airRaf = 0;
@@ -4920,7 +4921,7 @@ $('#tdxclear').addEventListener('click', () => { AIR.gen++; AIR.flights = estima
    畫面附近或正在跟拍的路線再讀路線形狀（v2/Bus/Shape/InterCity），讓客運沿著道路平順移動，
    不會每 30 秒跳一格。只在即時模式（時間是現在）顯示。網址加上 ?busdemo 可用假資料預覽。 */
 
-const BUS = { on: store.get('buses', true), list: new Map(), shapes: new Map(), routes: new Map(), ops: new Map(), queue: [], qBusy: false,
+const BUS = { on: store.get('buses', true), list: new Map(), shapes: new Map(), routes: new Map(), ops: new Map(), queue: [], qBusy: false, retryAt: new Map(),
   live: false, status: '', loadAt: 0, gen: 0, follow: null, paused: false, view: store.get('busView', 'chase'), noSelect: false };
 const BUS_DEMO = /[?&]busdemo\b/.test(location.search);
 
@@ -4974,6 +4975,7 @@ async function loadOperators() {
 // 路線形狀與起訖站：只讀畫面附近與跟拍中的路線，排隊慢慢讀，不一次打爆額度
 function wantRoute(uid) {
   if (!uid || BUS.shapes.has(uid) || BUS.queue.includes(uid) || BUS_DEMO) return;
+  if ((BUS.retryAt.get(uid) || 0) > Date.now()) return; // 上次讀取失敗，稍後再試
   BUS.queue.push(uid); pumpQueue();
 }
 async function pumpQueue() {
@@ -4986,8 +4988,11 @@ async function pumpQueue() {
     const j = await busFetch(`v2/Bus/Shape/InterCity?$filter=${f}`);
     const list = [];
     if (Array.isArray(j)) for (const r of j) { const line = parseWKT(r.Geometry || ''); if (line.length > 1) list.push({ sub: r.SubRouteUID || uid, dir: +r.Direction || 0, ...shapeOf(line) }); }
-    BUS.shapes.set(uid, list);
-  } catch { BUS.shapes.set(uid, []); }
+    BUS.shapes.set(uid, list); BUS.retryAt.delete(uid);
+  } catch {
+    // 暫時性失敗（斷線、429）不要永久快取成空的，60 秒後允許重讀
+    BUS.shapes.delete(uid); BUS.retryAt.set(uid, Date.now() + 60e3);
+  }
   try {
     const j = await busFetch(`v2/Bus/Route/InterCity?$filter=${f}&$select=RouteUID,DepartureStopNameZh,DestinationStopNameZh,Operators`);
     if (Array.isArray(j) && j[0]) BUS.routes.set(uid, { from: j[0].DepartureStopNameZh || '', to: j[0].DestinationStopNameZh || '', op: j[0].Operators && j[0].Operators[0] ? zh(j[0].Operators[0].OperatorName) : '' });
