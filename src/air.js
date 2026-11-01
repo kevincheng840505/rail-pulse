@@ -474,6 +474,7 @@ const PlaneGL = {
     const mpp = 40075016.686 * Math.cos(map.getCenter().lat / DEG) / (512 * Math.pow(2, z)); // 每像素幾公尺
     let px = 0;
     for (const d of list) {
+      if (d.nopick) continue; // 站牌等靜態物件不需要重畫
       const alt = d.p ? d.p.alt || 0 : 0, len = d.len || 45;
       let q; try { q = map.project(d.ll); } catch { continue; }
       const m = 40 + alt / mpp; // 高空的東西斜看時會往上偏，邊界放寬
@@ -534,6 +535,7 @@ const PlaneGL = {
     const cv = map.getCanvas(), w = cv.clientWidth, h = cv.clientHeight;
     let best = null, bd = 1e9;
     for (const d of PlaneGL.draw.concat(PlaneGL.extra)) {
+      if (d.nopick) continue;
       const m = PlaneGL.model(d.p, d.ll), PM = PlaneGL.mul(M, m), L = d.len || AC_TYPES[acTypeOf(d.f)].L;
       const proj = (x) => { const cx = PM[0] * x + PM[12], cy = PM[1] * x + PM[13], cw = PM[3] * x + PM[15]; return cw > 0 ? [(cx / cw + 1) / 2 * w, (1 - cy / cw) / 2 * h] : null; };
       const c = proj(0), nose = proj(L / 2); if (!c || !nose) continue;
