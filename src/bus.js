@@ -343,7 +343,7 @@ function stepBuses(now) {
   let cam = null;
   if (BUS.follow && BUS.follow.drawn && !BUS.paused) cam = busCamera(BUS.follow);
   if (cam) { try { map.jumpTo(cam); } catch {} }
-  else if (extra.length) map.triggerRepaint();
+  else PlaneGL.kick(now);
 }
 requestAnimationFrame(stepBuses);
 
