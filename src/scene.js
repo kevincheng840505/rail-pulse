@@ -560,7 +560,6 @@ function noseFeatures(trip, L, root, tip, nose, w, h, detail, add, winColor, lin
 const VIEWS = [
   { id: 'persp', name: '透視' },
   { id: 'chase', name: '追車' },
-  { id: 'cab', name: '車頭' },
   { id: 'side', name: '側拍' },
   { id: 'orbit', name: '環繞' },
   { id: 'trackside', name: '路邊' },

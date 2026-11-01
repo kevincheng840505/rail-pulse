@@ -2438,7 +2438,6 @@ function noseFeatures(trip, L, root, tip, nose, w, h, detail, add, winColor, lin
 const VIEWS = [
   { id: 'persp', name: '透視' },
   { id: 'chase', name: '追車' },
-  { id: 'cab', name: '車頭' },
   { id: 'side', name: '側拍' },
   { id: 'orbit', name: '環繞' },
   { id: 'trackside', name: '路邊' },
@@ -2591,6 +2590,8 @@ const S = {
   tod: store.get('tod', 'auto'), wx: store.get('wx', 'auto'), realWx: null, realWxAt: 0, realWxPos: null,
   pickGroup: 'all', terrain: store.get('terrain', true), buildings: store.get('buildings', true), labels: store.get('labels', true),
 };
+// 已移除的視角（例如舊的「車頭」）存在瀏覽器裡時，改回預設
+if (!VIEWS.some(v => v.id === S.view)) S.view = 'persp';
 const curMin = () => minOfDay(S.simMs);
 const lookHour = () => S.tod === 'auto' ? curMin() / 60 : TOD_FIXED[S.tod];
 const lookWx = () => S.wx === 'auto' ? (S.realWx ? S.realWx.wx : 'clear') : S.wx;
@@ -3344,11 +3345,6 @@ function viewCamera(trip, pos, now, dt) {
       // 斜上方透視：看得到整列車與周圍街區
       to = trackPoint(trip, pos.km - Math.min(len * 0.45, 0.12)); ta = 0;
       from = offsetPt(to, -190 * M, 150 * M); fa = 190; break;
-    }
-    case 'cab': {
-      // 站在車頭後上方往前看，畫面下緣看得到車鼻
-      from = trackPoint(trip, pos.km - 9 * M); fa = H + 3.5;
-      to = trackPoint(trip, pos.km + 140 * M); ta = 0; anchor = 'from'; break;
     }
     case 'side': {
       // 以車頭為主：從斜前方側面看車頭與前兩三節
