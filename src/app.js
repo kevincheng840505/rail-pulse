@@ -952,7 +952,7 @@ function pickRoamFlight() {
 function roamNext() {
   const f = pickRoamFlight();
   // 看飛機會先關掉漫遊，這裡要讓漫遊繼續計時
-  if (f) { S.roamKeep = true; try { watchFlight(f); } finally { S.roamKeep = false; } return; }
+  if (f) { AIR.view = 'auto'; S.roamKeep = true; try { watchFlight(f); } finally { S.roamKeep = false; } return; }
   const t = pickRoamTrip(); if (!t) return;
   const views = VIEWS.map(v => v.id).filter(v => v !== S.view);
   S.view = views[Math.floor(Math.random() * views.length)];
