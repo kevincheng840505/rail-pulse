@@ -6285,7 +6285,7 @@ setInterval(() => { if (S.pickGroup === 'bus' && !$('#picker').hidden) renderBus
     b.addEventListener('click', () => { BUS.on = !BUS.on; store.set('buses', BUS.on); b.setAttribute('aria-pressed', String(BUS.on)); if (BUS.on) loadBuses(); else exitBusFollow(); });
   }
 }
-function reloadBuses() { if (BUS.loading) return; BUS.loading = true; loadBuses().catch(e => console.warn(e)).finally(() => { BUS.loading = false; }); }
+function reloadBuses() { loadBuses().catch(e => console.warn(e)); } // loadBuses 自己用 BUS.loading 擋重複
 setTimeout(reloadBuses, 1000); // TDX 佇列會控制請求頻率；客運即時位置優先權較高
 setInterval(reloadBuses, 30e3);
 document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - BUS.loadAt > 30e3) reloadBuses(); });
