@@ -186,8 +186,8 @@ function carFeatures(trip, pos, P, out, detail) {
     if (L.stripe2) band(iw + 0.00002, h * 0.33, h * 0.37, L.stripe2);
     band(w * 0.36, h, h * 1.07, L.roof);
     if (!L.stripe && trip.color) band(iw + 0.00002, h * 0.42, h * 0.52, trip.color);
-    if (lead && nose) { const e = E(front - nose / 2); noseFeatures(trip, L, cp(front - nose), cp(front), nose, w, h, detail, (g, b, t, c) => add(g, b, t, c, e), winColor, trip.color); }
-    if (tail && nose && L.n > 1) { const e = E(back + nose / 2); noseFeatures(trip, L, cp(back + nose), cp(back), nose, w, h, detail, (g, b, t, c) => add(g, b, t, c, e), winColor, trip.color); }
+    if (lead && nose) { const e = E(front - nose / 2); noseFeatures(trip, L, cp(front - nose), cp(front), nose, w, h, detail, (g, b, t, c) => add(g, b, t, c, e), winColor, trip.color, P.lit ? '#FFF6DC' : '#E9E4D2'); }
+    if (tail && nose && L.n > 1) { const e = E(back + nose / 2); noseFeatures(trip, L, cp(back + nose), cp(back), nose, w, h, detail, (g, b, t, c) => add(g, b, t, c, e), winColor, trip.color, P.lit ? '#FF2D2D' : '#B3262A'); }
   }
 }
 
@@ -509,7 +509,7 @@ function stationPeople(node, R, idx, m, out, cap) {
 
 /* 車頭：以平滑的俯視輪廓一層層往上疊。每一層的頂面高度越高、往前伸得越短，
    疊起來就是一個往前下斜的圓弧車鼻；腰帶、窗帶的顏色也跟著繞過車頭 */
-function noseFeatures(trip, L, root, tip, nose, w, h, detail, add, winColor, lineColor) {
+function noseFeatures(trip, L, root, tip, nose, w, h, detail, add, winColor, lineColor, lamp) {
   const key = Object.keys(LIVERY).find(k => LIVERY[k] === L);
   const S = NOSE_SHAPE[key] || NOSE_SHAPE.EMU900;
   const len = Math.hypot(tip.x - root.x, tip.y - root.y) || nose;
@@ -544,6 +544,15 @@ function noseFeatures(trip, L, root, tip, nose, w, h, detail, add, winColor, lin
     for (let j = nSide; j >= 0; j--) { const s = sk * j / nSide; ring.push(pt(s, -halfW(s))); }
     ring.push(ring[0]);
     add([ring], h * b0, h * b1, colorAt(m));
+  }
+  // 車燈：車頭兩側各一顆小燈（車頭暖白、車尾紅），是車身的一部分，會被前面的東西擋住
+  if (lamp) {
+    const W = halfW(1), lo = 0.15, hi = Math.min(S.tipH, 0.34) - 0.03;
+    const s0 = 1 - 0.3 / 1000 / len, s1 = 1 + (W * 0.22 + 0.00005) / len;
+    for (const sd of [-1, 1]) {
+      const y0 = sd * W * 0.4, y1 = sd * W * 0.72;
+      add([[pt(s0, y0), pt(s1, y0), pt(s1, y1), pt(s0, y1), pt(s0, y0)]], h * lo, h * Math.max(lo + 0.05, hi), lamp);
+    }
   }
 }
 

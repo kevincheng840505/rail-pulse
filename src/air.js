@@ -296,12 +296,13 @@ function stepPlanes(now) {
   if (!AIR.layers) { ensureLayers(); return; }
   if (!AIR.on) return;
   const z = map.getZoom();
-  // 拉近時每格更新，遠景兩秒一次就夠
+  // 只有畫面裡真的有飛機時才每格更新；其他時候一秒一次。
+  // GeoJSON 每次 setData 都要重新切圖磚、整張地圖重畫，空的資料一秒送三十次就足以讓手機一直卡頓
   const near = z >= 11;
-  if (now - AIR.last < (near ? 33 : 1000)) return;
+  if (now - AIR.last < (near && AIR.inView ? 33 : 1000)) return;
   AIR.last = now;
   const m = curMin(), pts = [], polys = [];
-  const b = map.getBounds(), pad = 0.3;
+  const b = map.getBounds(), pad = near ? 0.05 : 0.3;
   for (const f of AIR.flights) {
     const p = flightPos(f, m); if (!p) continue;
     const [lon, lat] = toLL(p.x, p.y);
@@ -309,8 +310,11 @@ function stepPlanes(now) {
     if (near && lon > b.getWest() - pad && lon < b.getEast() + pad && lat > b.getSouth() - pad && lat < b.getNorth() + pad) planeFeatures(f, p, polys);
     f._pos = p; f._ll = [lon, lat];
   }
-  map.getSource('plane-pts').setData({ type: 'FeatureCollection', features: pts });
-  map.getSource('planes').setData({ type: 'FeatureCollection', features: polys });
+  AIR.inView = polys.length > 0;
+  // 遠景的飛機圓點只在拉遠時看得到；拉近又沒有飛機在畫面裡時就不用一直送
+  if (!near || AIR.inView || AIR.ptsAt === undefined || now - AIR.ptsAt > 5000) { map.getSource('plane-pts').setData({ type: 'FeatureCollection', features: pts }); AIR.ptsAt = now; }
+  if (polys.length || AIR.hadPolys) map.getSource('planes').setData({ type: 'FeatureCollection', features: polys });
+  AIR.hadPolys = polys.length > 0;
 }
 requestAnimationFrame(stepPlanes);
 
