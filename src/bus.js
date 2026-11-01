@@ -3,7 +3,7 @@
    畫面附近或正在跟拍的路線再讀路線形狀（v2/Bus/Shape/InterCity），讓客運沿著道路平順移動，
    不會每 30 秒跳一格。只在即時模式（時間是現在）顯示。網址加上 ?busdemo 可用假資料預覽。 */
 
-const BUS = { on: store.get('buses', true), list: new Map(), shapes: new Map(), routes: new Map(), ops: new Map(), queue: [], qBusy: false, retryAt: new Map(),
+const BUS = { on: store.get('buses', true), list: new Map(), shapes: new Map(), routes: new Map(), ops: new Map(), queue: [], qBusy: false, stops: new Map(), retryAt: new Map(),
   live: false, status: '', loadAt: 0, gen: 0, follow: null, paused: false, view: store.get('busView', 'chase'), noSelect: false };
 const BUS_DEMO = /[?&]busdemo\b/.test(location.search);
 
@@ -38,6 +38,7 @@ async function loadBuses() {
   BUS.loadAt = Date.now();
   // 起訖站、客運公司名稱接著依序讀，不同時打（避免 429 擋到使用者點的車）
   if (!BUS.extraLoading) { BUS.extraLoading = true; (async () => { await loadAllRoutes(); if (!BUS.ops.size) await loadOperators(); BUS.extraLoading = false; })(); }
+  setTimeout(wantAllRoutes, 1500);
   const seen = new Set();
   for (const r of j) {
     const pos = r.BusPosition || {}, lat = +pos.PositionLat, lon = +pos.PositionLon, plate = r.PlateNumb;
@@ -82,26 +83,88 @@ async function loadAllRoutes() {
     if (Array.isArray(j)) for (const r of j) if (r.RouteUID) BUS.routes.set(r.RouteUID, { from: r.DepartureStopNameZh || '', to: r.DestinationStopNameZh || '', op: r.Operators && r.Operators[0] ? zh(r.Operators[0].OperatorName) : '' });
   } catch { BUS.routesAll = false; }
 }
+/* 路線形狀（TDX Shape）與站序（TDX StopOfRoute）：
+   - 一次問最多 12 條路線（$filter 用 or 串起來），間隔 1.2 秒，全台幾百條路線約半分鐘讀完。
+   - 讀到的存進瀏覽器的 IndexedDB 一週，下次開頁直接用，不必再等 TDX。 */
+const busDB = {
+  p: null,
+  open() {
+    if (!this.p) this.p = new Promise(res => {
+      try { const r = indexedDB.open('rail-pulse-bus', 1); r.onupgradeneeded = () => r.result.createObjectStore('route'); r.onsuccess = () => res(r.result); r.onerror = () => res(null); }
+      catch { res(null); }
+    });
+    return this.p;
+  },
+  async get(k) { const db = await this.open(); if (!db) return null; return new Promise(res => { try { const q = db.transaction('route').objectStore('route').get(k); q.onsuccess = () => res(q.result || null); q.onerror = () => res(null); } catch { res(null); } }); },
+  async set(k, v) { const db = await this.open(); if (!db) return; try { db.transaction('route', 'readwrite').objectStore('route').put(v, k); } catch {} },
+};
+const BUS_CACHE_MS = 7 * 86400e3;
+function applyRouteData(uid, d) {
+  const list = [];
+  for (const r of d.shapes || []) if (r.ll.length > 1) list.push({ sub: r.sub || uid, dir: r.dir || 0, ...shapeOf(r.ll) });
+  BUS.shapes.set(uid, list);
+  BUS.stops.set(uid, d.stops || []);
+}
 async function pumpQueue() {
   if (BUS.qBusy || !BUS.queue.length) return;
   BUS.qBusy = true;
-  const uid = BUS.queue.shift();
-  BUS.shapes.set(uid, null); // 讀取中
-  const f = encodeURIComponent(`RouteUID eq '${uid.replace(/'/g, '')}'`);
+  const batch = BUS.queue.splice(0, 12);
+  for (const uid of batch) BUS.shapes.set(uid, null); // 讀取中
+  // 先看快取
+  const need = [];
+  for (const uid of batch) {
+    const c = await busDB.get(uid);
+    if (c && Date.now() - c.t < BUS_CACHE_MS) applyRouteData(uid, c); else need.push(uid);
+  }
+  if (!need.length) { BUS.qBusy = false; return pumpQueue(); }
+  const f = encodeURIComponent(need.map(u => `RouteUID eq '${u.replace(/'/g, '')}'`).join(' or '));
   try {
-    const j = await busFetch(`v2/Bus/Shape/InterCity?$filter=${f}`);
-    const list = [];
-    if (Array.isArray(j)) for (const r of j) { const line = parseWKT(r.Geometry || ''); if (line.length > 1) list.push({ sub: r.SubRouteUID || uid, dir: +r.Direction || 0, ...shapeOf(line) }); }
-    BUS.shapes.set(uid, list); BUS.retryAt.delete(uid);
+    // $select 欄位名稱不合時 TDX 回 400：改成不指定欄位
+    const get = async (path, sel, key) => {
+      if (!BUS[key]) try { return await busFetch(`${path}?$filter=${f}&$select=${sel}`); } catch (e) { if (!/400/.test(e.message)) throw e; BUS[key] = true; }
+      return busFetch(`${path}?$filter=${f}`);
+    };
+    const sj = await get('v2/Bus/Shape/InterCity', 'RouteUID,SubRouteUID,Direction,Geometry', 'shapeNoSel');
+    const tj = await get('v2/Bus/StopOfRoute/InterCity', 'RouteUID,SubRouteUID,Direction,Stops', 'stopNoSel').catch(() => []);
+    const by = new Map(need.map(u => [u, { t: Date.now(), shapes: [], stops: [] }]));
+    if (Array.isArray(sj)) for (const r of sj) { const d = by.get(r.RouteUID); if (!d) continue; const ll = parseWKT(r.Geometry || '').map(([x, y]) => [+x.toFixed(5), +y.toFixed(5)]); d.shapes.push({ sub: r.SubRouteUID || r.RouteUID, dir: +r.Direction || 0, ll }); }
+    if (Array.isArray(tj)) for (const r of tj) {
+      const d = by.get(r.RouteUID); if (!d) continue;
+      const st = (r.Stops || []).slice().sort((p, q) => (p.StopSequence || 0) - (q.StopSequence || 0))
+        .map(x => [zh(x.StopName), +(+(x.StopPosition || {}).PositionLon).toFixed(5), +(+(x.StopPosition || {}).PositionLat).toFixed(5)]).filter(x => isFinite(x[1]) && isFinite(x[2]) && x[1] > 119);
+      d.stops.push({ sub: r.SubRouteUID || r.RouteUID, dir: +r.Direction || 0, st });
+    }
+    for (const [uid, d] of by) { applyRouteData(uid, d); BUS.retryAt.delete(uid); busDB.set(uid, d); }
   } catch {
     // 暫時性失敗（斷線、429）不要永久快取成空的，60 秒後允許重讀
-    BUS.shapes.delete(uid); BUS.retryAt.set(uid, Date.now() + 60e3);
+    for (const uid of need) { BUS.shapes.delete(uid); BUS.retryAt.set(uid, Date.now() + 60e3); }
   }
-  if (!BUS.routes.has(uid)) try {
-    const j = await busFetch(`v2/Bus/Route/InterCity?$filter=${f}&$select=RouteUID,DepartureStopNameZh,DestinationStopNameZh,Operators`);
-    if (Array.isArray(j) && j[0]) BUS.routes.set(uid, { from: j[0].DepartureStopNameZh || '', to: j[0].DestinationStopNameZh || '', op: j[0].Operators && j[0].Operators[0] ? zh(j[0].Operators[0].OperatorName) : '' });
-  } catch {}
   BUS.qWait = setTimeout(() => { BUS.qWait = 0; BUS.qBusy = false; pumpQueue(); }, 1200);
+}
+// 有車的路線全部排進去（附近、跟拍中的車會插隊）
+function wantAllRoutes() {
+  const seen = new Set();
+  for (const b of BUS.list.values()) if (b.route && !seen.has(b.route)) { seen.add(b.route); wantRoute(b.route); }
+}
+// 這輛車這一趟的站序（依子路線與方向），站點投影到路線形狀上得到沿線距離
+function busStops(b) {
+  const list = BUS.stops.get(b.route); if (!list || !list.length) return null;
+  const r = list.find(x => x.sub === b.sub && x.dir === b.dir) || list.find(x => x.dir === b.dir) || list[0];
+  const sh = b.sh; if (!sh) return { st: r.st, ss: null };
+  // 同一條路線不同車可能用正向或反向形狀，依形狀分開快取
+  r.ssBy = r.ssBy || new WeakMap();
+  let ss = r.ssBy.get(sh);
+  if (!ss) {
+    let last = -1;
+    ss = r.st.map(([, lon, lat]) => { const [x, y] = bxy(lon, lat), p = project(sh, x, y, last >= 0 ? last + 500 : null); if (p && p.d < 300) { last = p.s; return p.s; } return null; });
+    r.ssBy.set(sh, ss);
+  }
+  return { st: r.st, ss };
+}
+function nextStop(b) {
+  const r = busStops(b); if (!r || !r.ss || b.s == null) return null;
+  for (let i = 0; i < r.st.length; i++) if (r.ss[i] != null && r.ss[i] > b.s + 15) return { name: r.st[i][0], d: r.ss[i] - b.s };
+  return null;
 }
 // WKT：LINESTRING(lon lat, ...) 或 MULTILINESTRING((...),(...))，多段就接起來
 function parseWKT(w) {
@@ -395,6 +458,43 @@ function busParts(V) {
   return out;
 }
 
+/* ---------- 站牌：跟拍中那輛車這一趟的所有站 ---------- */
+function busStopParts(col) {
+  const out = [], box = (x1, x2, y1, y2, b, t, c) => out.push({ c: [[x1, y1], [x2, y1], [x2, y2], [x1, y2]], b, t, col: c });
+  box(-0.06, 0.06, -0.06, 0.06, 0, 2.75, '#8F969C');          // 站牌桿
+  box(-0.04, 0.04, -0.36, 0.36, 2.05, 2.75, col);              // 站牌
+  box(-0.045, 0.045, -0.3, 0.3, 2.12, 2.42, '#F6F7F8');        // 站名白底
+  box(-0.3, 0.3, -0.3, 0.3, 0, 0.08, '#9AA0A6');               // 底座
+  return out;
+}
+function busStopMeshes(b, extra) {
+  const r = busStops(b), sh = b.sh; if (!r || !r.ss || !sh) return;
+  const col = busColor(b);
+  r.st.forEach(([name, lon, lat], i) => {
+    if (r.ss[i] == null) return;
+    const q = along(sh, r.ss[i]);
+    // 站牌放在路邊（行進方向右側 4 公尺）
+    const [x, y] = bxy(lon, lat), rx = Math.cos(q.h / DEG), ry = -Math.sin(q.h / DEG);
+    extra.push({ p: { alt: 0, h: q.h, pitch: 0 }, ll: bll(x + rx * 4, y + ry * 4), len: 3, nopick: true, mesh: () => PlaneGL.meshFor('busstop|' + col, () => busStopParts(col)) });
+  });
+}
+function updateStopLayer() {
+  if (!S.mapReady) return;
+  const b = BUS.follow, r = b && busStops(b), key = r && r.ss ? b.route + '|' + b.sub + '|' + b.dir + '|' + r.ss.length : '';
+  if (key === BUS.stopKey) return;
+  BUS.stopKey = key;
+  const data = { type: 'FeatureCollection', features: key ? r.st.map(([name, lon, lat]) => ({ type: 'Feature', properties: { name }, geometry: { type: 'Point', coordinates: [lon, lat] } })) : [] };
+  if (!map.getSource('bus-stops')) {
+    map.addSource('bus-stops', { type: 'geojson', data });
+    map.addLayer({ id: 'bus-stop-dot', type: 'circle', source: 'bus-stops', minzoom: 9,
+      paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 2.5, 15, 5], 'circle-color': '#FFFFFF', 'circle-stroke-color': '#2B6CB0', 'circle-stroke-width': 2, 'circle-pitch-alignment': 'map' } });
+    map.addLayer({ id: 'bus-stop-name', type: 'symbol', source: 'bus-stops', minzoom: 12,
+      layout: { 'text-field': ['get', 'name'], 'text-font': ['Noto Sans Regular'], 'text-size': 12, 'text-offset': [0, 1.1], 'text-anchor': 'top', 'text-allow-overlap': false },
+      paint: { 'text-color': '#24313D', 'text-halo-color': '#FFFFFF', 'text-halo-width': 1.4 } });
+  } else map.getSource('bus-stops').setData(data);
+  if (b) map.setPaintProperty('bus-stop-dot', 'circle-stroke-color', busColor(b));
+}
+
 /* ---------- 每格更新 ---------- */
 const busVisible = () => BUS.on && (BUS_DEMO || Math.abs(S.simMs - Date.now()) < 3 * 60e3);
 let busLast = performance.now();
@@ -404,7 +504,7 @@ function stepBuses(now) {
   if (!S.mapReady || !AIR.layers) return;
   const extra = [];
   const show = busVisible() && BUS.list.size;
-  if (!show) { PlaneGL.extra = extra; if (BUS.follow) exitBusFollow(); return; }
+  if (!show) { PlaneGL.extra = extra; if (BUS.follow) exitBusFollow(); updateStopLayer(); return; }
   const z = map.getZoom(), t = Date.now(), bd = map.getBounds(), pad = 0.05;
   for (const b of BUS.list.values()) {
     const near = b === BUS.follow || (z >= 11 && b.fixes.length && (() => { const f = b.fixes[b.fixes.length - 1]; return f.lon > bd.getWest() - pad && f.lon < bd.getEast() + pad && f.lat > bd.getSouth() - pad && f.lat < bd.getNorth() + pad; })());
@@ -415,6 +515,8 @@ function stepBuses(now) {
     b.drawn = { ll, h: q.h, alt: q.alt || 0 };
     extra.push({ p: { alt: q.alt || 0, h: q.h, pitch: 0 }, ll, len: 12, mesh: () => PlaneGL.meshFor('bus|' + lk, () => busParts(lv)), onPick: () => followBus(b) });
   }
+  if (BUS.follow) busStopMeshes(BUS.follow, extra);
+  updateStopLayer();
   PlaneGL.extra = extra;
   let cam = null;
   if (BUS.follow && BUS.follow.drawn && !BUS.paused) cam = busCamera(BUS.follow);
@@ -502,7 +604,8 @@ function renderBusCap() {
   busCap.setAttribute('aria-expanded', String(!!S.capOpen)); busCap.setAttribute('aria-label', '客運資訊，按下可' + (S.capOpen ? '收起' : '展開'));
   const set = (sel, t) => { const el = busCap.querySelector(sel); if (el.textContent !== t) el.textContent = t; };
   const route = busRoute(b);
-  set('h2', busTitle(b)); set('.route', route + (route ? ' · ' : '') + b.plate); set('.st', status);
+  const ns = nextStop(b), nsTxt = ns ? `下一站 ${ns.name}（${ns.d < 1000 ? Math.round(ns.d / 10) * 10 + ' 公尺' : (ns.d / 1000).toFixed(1) + ' 公里'}）` : '';
+  set('h2', busTitle(b)); set('.route', route + (route ? ' · ' : '') + b.plate); set('.st', status + (nsTxt ? ' · ' + nsTxt : ''));
   set('.strip .nm', busTitle(b)); set('.strip .nx', Math.round(b.speed) + ' km/h');
   for (const d of busCap.querySelectorAll('.dot')) d.style.background = busColor(b);
   renderBusViewBtn();
@@ -608,6 +711,8 @@ function demoBuses() {
     const sh = shapeOf(line);
     BUS.shapes.set('DEMO', [{ sub: 'DEMO', dir: 0, ...sh }, { sub: 'DEMO', dir: 1, ...shapeOf(line.slice().reverse()) }]);
     BUS.routes.set('DEMO', { from: '臺北轉運站', to: '朝馬轉運站', op: '示範客運' });
+    const st = [['臺北轉運站', 121.517, 25.049], ['三重', 121.47, 25.06], ['林口', 121.40, 25.04], ['桃園', 121.30, 25.01], ['中壢', 121.21, 24.95], ['新竹', 121.02, 24.80], ['苗栗', 120.86, 24.59], ['朝馬轉運站', 120.68, 24.17]];
+    BUS.stops.set('DEMO', [{ sub: 'DEMO', dir: 0, st }, { sub: 'DEMO', dir: 1, st: st.slice().reverse() }]);
     ['國光客運', '統聯客運', '和欣客運', '葛瑪蘭客運', '阿羅哈客運', '首都客運'].forEach((n, i) => BUS.ops.set('DEMO' + i, n));
   }
   const now = Date.now(), list = BUS.shapes.get('DEMO');
