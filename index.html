@@ -3255,7 +3255,7 @@ function pushFocus() {
   if (near.length || S.hadNear) { map.getSource('near').setData({ type: 'FeatureCollection', features: near }); S.hadNear = near.length > 0; }
   // 畫面附近車站月台上的旅客：候車、上車、下車
   const ppl = [];
-  if (map.getZoom() >= 16) {
+  if (map.getZoom() >= 16 && !Quality.low) { // 省電畫質不畫旅客，也不計算（切到省電時下面送一次空資料清掉）
     const now = performance.now();
     if (!S.pplSt || now - S.pplSt.at > 1000) { const c = map.getCenter(), [cx, cy] = proj(c.lat, c.lng); S.pplSt = { at: now, list: NODES.filter(n => Math.hypot(n.x - cx, n.y - cy) < 0.5).sort((a, b) => Math.hypot(a.x - cx, a.y - cy) - Math.hypot(b.x - cx, b.y - cy)) }; }
     const cap = (COARSE ? 140 : 260) * 6;
