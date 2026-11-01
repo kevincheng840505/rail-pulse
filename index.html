@@ -1224,12 +1224,54 @@ const TDX = {
     this.token = j.access_token; this.exp = Date.now() + (j.expires_in - 60) * 1000;
     return this.token;
   },
-  async get(path, cred) {
-    const tk = await this.auth(cred.id, cred.secret);
-    const r = await fetch('https://tdx.transportdata.tw/api/basic/' + path + (path.includes('?') ? '&' : '?') + '$format=JSON', {
-      headers:{ authorization:'Bearer ' + tk } });
-    if (!r.ok) throw new Error('TDX 回應 HTTP ' + r.status);
-    return r.json();
+  /* TDX 每把金鑰每秒只收幾次請求，超過就回 429。列車、捷運、航班、客運、路線形狀全部排進同一個佇列：
+     - 每 260 毫秒最多送出一個（約每秒 4 次）
+     - pri 大的先送：使用者正在看的（客運即時位置、點選的車）排在背景讀路線形狀之前
+     - 遇到 429 整個佇列暫停一下再重送，最多重試 4 次，呼叫端多半不會看到失敗 */
+  q: [], qTimer: 0, nextAt: 0, holdUntil: 0, hold: 0,
+  get(path, cred, pri = 1) {
+    return new Promise((res, rej) => {
+      const job = { path, cred, pri, res, rej, tries: 0 };
+      let i = this.q.length; while (i > 0 && this.q[i - 1].pri < pri) i--;
+      this.q.splice(i, 0, job);
+      this.pump();
+    });
+  },
+  pump() {
+    if (this.qTimer || this.qAuth || !this.q.length) return;
+    const wait = Math.max(this.nextAt, this.holdUntil) - Date.now();
+    if (wait > 0) { this.qTimer = setTimeout(() => { this.qTimer = 0; this.pump(); }, wait); return; }
+    // 金鑰還沒拿到（開頁、過期）：先驗證完再放行，不然驗證期間排出去的請求會在驗證完同一瞬間一起送出
+    if (!this.token || Date.now() >= this.exp) {
+      const c = this.q[0].cred;
+      this.qAuth = true;
+      this.auth(c.id, c.secret)
+        .catch(e => { for (const j of this.q.splice(0)) j.rej(e); })
+        .finally(() => { this.qAuth = false; this.pump(); });
+      return;
+    }
+    const job = this.q.shift();
+    this.nextAt = Date.now() + 260;
+    this.send(job);
+    this.pump();
+  },
+  async send(job) {
+    try {
+      const tk = await this.auth(job.cred.id, job.cred.secret);
+      const r = await fetch('https://tdx.transportdata.tw/api/basic/' + job.path + (job.path.includes('?') ? '&' : '?') + '$format=JSON', {
+        headers:{ authorization:'Bearer ' + tk } });
+      if (r.status === 429 && job.tries < 4) {
+        job.tries++;
+        const ra = +r.headers.get('retry-after');
+        this.hold = Math.min(8000, Math.max(1500, this.hold * 2));
+        this.holdUntil = Math.max(this.holdUntil, Date.now() + (ra > 0 ? ra * 1000 : this.hold));
+        this.q.unshift(job); this.pump();
+        return;
+      }
+      if (!r.ok) throw new Error('TDX 回應 HTTP ' + r.status);
+      if (Date.now() > this.holdUntil + 10e3) this.hold = 0;
+      job.res(await r.json());
+    } catch (e) { job.rej(e); }
   },
   /* 把官方時刻表的停靠站補上中間通過站，轉成引擎用的車次 */
   toTrip(sys, no, typeName, stops) {
@@ -5284,14 +5326,14 @@ loadFreeway();
    畫面附近或正在跟拍的路線再讀路線形狀（v2/Bus/Shape/InterCity），讓客運沿著道路平順移動，
    不會每 30 秒跳一格。只在即時模式（時間是現在）顯示。網址加上 ?busdemo 可用假資料預覽。 */
 
-const BUS = { on: store.get('buses', true), list: new Map(), shapes: new Map(), routes: new Map(), ops: new Map(), queue: [], qBusy: false, stops: new Map(), retryAt: new Map(),
+const BUS = { on: store.get('buses', true), list: new Map(), shapes: new Map(), routes: new Map(), ops: new Map(), queue: [], qBusy: false, stops: new Map(), retryAt: new Map(), urgent: new Set(),
   live: false, status: '', loadAt: 0, gen: 0, follow: null, paused: false, view: store.get('busView', 'chase'), noSelect: false };
 const BUS_DEMO = /[?&]busdemo\b/.test(location.search);
 
 /* ---------- 讀取 ---------- */
 const busCred = () => store.get('tdx', {});
 const zh = v => (v && typeof v === 'object' ? v.Zh_tw || v.En || '' : String(v || ''));
-async function busFetch(path) { return TDX.get(path, busCred()); }
+async function busFetch(path, pri = 1) { return TDX.get(path, busCred(), pri); }
 
 async function loadBuses() {
   if (BUS_DEMO) return demoBuses();
@@ -5303,7 +5345,7 @@ async function loadBuses() {
   const sel = '$select=PlateNumb,OperatorID,RouteUID,RouteName,SubRouteUID,SubRouteName,Direction,BusPosition,Speed,Azimuth,GPSTime';
   let j;
   BUS.loading = true;
-  try { j = await busFetch('v2/Bus/RealTimeByFrequency/InterCity?' + (BUS.noSelect ? '' : sel)); }
+  try { j = await busFetch('v2/Bus/RealTimeByFrequency/InterCity?' + (BUS.noSelect ? '' : sel), 3); }
   catch (e) {
     BUS.loading = false;
     // 欄位名稱不合時 TDX 會回 400：改成不指定欄位再試一次
@@ -5349,6 +5391,7 @@ async function loadOperators() {
 // urgent：使用者點選的車，插到最前面並立刻讀，不等間隔
 function wantRoute(uid, urgent) {
   if (!uid || BUS_DEMO) return;
+  if (urgent) BUS.urgent.add(uid);
   if (urgent && BUS.queue.includes(uid)) { BUS.queue.splice(BUS.queue.indexOf(uid), 1); BUS.queue.unshift(uid); }
   // 形狀已有且站序也有（或正在讀）就不再排；站序上次沒讀到的，稍後會再排一次
   else if ((BUS.shapes.has(uid) && (BUS.stops.has(uid) || BUS.shapes.get(uid) === null)) || BUS.queue.includes(uid)) return;
@@ -5399,12 +5442,15 @@ async function pumpQueue() {
     if (c && Date.now() - c.t < BUS_CACHE_MS) applyRouteData(uid, c); else need.push(uid);
   }
   if (!need.length) { BUS.qBusy = false; return pumpQueue(); }
+  // 使用者點的車優先；其他路線是背景慢慢讀，排在所有即時資料後面
+  const pri = need.some(u => BUS.urgent.has(u)) ? 2 : 0;
+  for (const u of need) BUS.urgent.delete(u);
   const f = encodeURIComponent(need.map(u => `RouteUID eq '${u.replace(/'/g, '')}'`).join(' or '));
   try {
     // $select 欄位名稱不合時 TDX 回 400：改成不指定欄位
     const get = async (path, sel, key) => {
-      if (!BUS[key]) try { return await busFetch(`${path}?$filter=${f}&$select=${sel}`); } catch (e) { if (!/400/.test(e.message)) throw e; BUS[key] = true; }
-      return busFetch(`${path}?$filter=${f}`);
+      if (!BUS[key]) try { return await busFetch(`${path}?$filter=${f}&$select=${sel}`, pri); } catch (e) { if (!/400/.test(e.message)) throw e; BUS[key] = true; }
+      return busFetch(`${path}?$filter=${f}`, pri);
     };
     let tOk = true;
     const sj = await get('v2/Bus/Shape/InterCity', 'RouteUID,SubRouteUID,Direction,Geometry', 'shapeNoSel');
