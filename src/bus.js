@@ -69,7 +69,8 @@ async function loadOperators() {
 function wantRoute(uid, urgent) {
   if (!uid || BUS_DEMO) return;
   if (urgent && BUS.queue.includes(uid)) { BUS.queue.splice(BUS.queue.indexOf(uid), 1); BUS.queue.unshift(uid); }
-  else if (BUS.shapes.has(uid) || BUS.queue.includes(uid)) return;
+  // 形狀已有且站序也有（或正在讀）就不再排；站序上次沒讀到的，稍後會再排一次
+  else if ((BUS.shapes.has(uid) && (BUS.stops.has(uid) || BUS.shapes.get(uid) === null)) || BUS.queue.includes(uid)) return;
   else if ((BUS.retryAt.get(uid) || 0) > Date.now() && !urgent) return; // 上次讀取失敗，稍後再試
   else if (urgent) BUS.queue.unshift(uid); else BUS.queue.push(uid);
   if (urgent && BUS.qWait) { clearTimeout(BUS.qWait); BUS.qWait = 0; BUS.qBusy = false; }
@@ -99,17 +100,17 @@ const busDB = {
   async set(k, v) { const db = await this.open(); if (!db) return; try { db.transaction('route', 'readwrite').objectStore('route').put(v, k); } catch {} },
 };
 const BUS_CACHE_MS = 7 * 86400e3;
-function applyRouteData(uid, d) {
+function applyRouteData(uid, d, stopsOk = true) {
   const list = [];
   for (const r of d.shapes || []) if (r.ll.length > 1) list.push({ sub: r.sub || uid, dir: r.dir || 0, ...shapeOf(r.ll) });
   BUS.shapes.set(uid, list);
-  BUS.stops.set(uid, d.stops || []);
+  if (stopsOk) BUS.stops.set(uid, d.stops || []); else BUS.stops.delete(uid);
 }
 async function pumpQueue() {
   if (BUS.qBusy || !BUS.queue.length) return;
   BUS.qBusy = true;
   const batch = BUS.queue.splice(0, 12);
-  for (const uid of batch) BUS.shapes.set(uid, null); // 讀取中
+  for (const uid of batch) if (!BUS.shapes.get(uid)) BUS.shapes.set(uid, null); // 讀取中（已有形狀、只補站序的保留原形狀）
   // 先看快取
   const need = [];
   for (const uid of batch) {
@@ -124,8 +125,9 @@ async function pumpQueue() {
       if (!BUS[key]) try { return await busFetch(`${path}?$filter=${f}&$select=${sel}`); } catch (e) { if (!/400/.test(e.message)) throw e; BUS[key] = true; }
       return busFetch(`${path}?$filter=${f}`);
     };
+    let tOk = true;
     const sj = await get('v2/Bus/Shape/InterCity', 'RouteUID,SubRouteUID,Direction,Geometry', 'shapeNoSel');
-    const tj = await get('v2/Bus/StopOfRoute/InterCity', 'RouteUID,SubRouteUID,Direction,Stops', 'stopNoSel').catch(() => []);
+    const tj = await get('v2/Bus/StopOfRoute/InterCity', 'RouteUID,SubRouteUID,Direction,Stops', 'stopNoSel').catch(() => { tOk = false; return []; });
     const by = new Map(need.map(u => [u, { t: Date.now(), shapes: [], stops: [] }]));
     if (Array.isArray(sj)) for (const r of sj) { const d = by.get(r.RouteUID); if (!d) continue; const ll = parseWKT(r.Geometry || '').map(([x, y]) => [+x.toFixed(5), +y.toFixed(5)]); d.shapes.push({ sub: r.SubRouteUID || r.RouteUID, dir: +r.Direction || 0, ll }); }
     if (Array.isArray(tj)) for (const r of tj) {
@@ -134,10 +136,14 @@ async function pumpQueue() {
         .map(x => [zh(x.StopName), +(+(x.StopPosition || {}).PositionLon).toFixed(5), +(+(x.StopPosition || {}).PositionLat).toFixed(5)]).filter(x => isFinite(x[1]) && isFinite(x[2]) && x[1] > 119);
       d.stops.push({ sub: r.SubRouteUID || r.RouteUID, dir: +r.Direction || 0, st });
     }
-    for (const [uid, d] of by) { applyRouteData(uid, d); BUS.retryAt.delete(uid); busDB.set(uid, d); }
+    // 站序讀取失敗：形狀照用，但不寫快取，60 秒後再補讀站序
+    for (const [uid, d] of by) {
+      applyRouteData(uid, d, tOk);
+      if (tOk) { BUS.retryAt.delete(uid); busDB.set(uid, d); } else BUS.retryAt.set(uid, Date.now() + 60e3);
+    }
   } catch {
     // 暫時性失敗（斷線、429）不要永久快取成空的，60 秒後允許重讀
-    for (const uid of need) { BUS.shapes.delete(uid); BUS.retryAt.set(uid, Date.now() + 60e3); }
+    for (const uid of need) { if (!BUS.shapes.get(uid)) BUS.shapes.delete(uid); BUS.retryAt.set(uid, Date.now() + 60e3); }
   }
   BUS.qWait = setTimeout(() => { BUS.qWait = 0; BUS.qBusy = false; pumpQueue(); }, 1200);
 }
