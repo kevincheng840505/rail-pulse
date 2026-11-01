@@ -155,7 +155,7 @@ const Quality = {
 };
 const maxCarTrains = () => (COARSE ? 8 : 18) / (Quality.low ? 2 : 1); // 同時畫成車廂的列車上限（跟拍的列車另計）
 const liveTrains = () => Quality.low ? 3 : COARSE ? 5 : 8; // 其中每一格都更新的列數
-// 幀率上限：同一格（同一個時間戳）裡主迴圈、飛機、客運共用一個判斷，被跳過的格什麼都不送給地圖，地圖也就不重畫
+// 幀率上限：同一格（同一個時間戳）裡主迴圈與飛機共用一個判斷，被跳過的格什麼都不送給地圖，地圖也就不重畫
 const Pace = { at: -1, ok: true, last: -1e9 };
 function paceOk(now) {
   if (now !== Pace.at) {
@@ -1025,7 +1025,6 @@ function openPicker() { settings.hidden = true; sky.hidden = true; musicPanel.hi
 function closePicker() { picker.hidden = true; scrim.hidden = true; }
 function renderPicker() {
   if (S.pickGroup === 'air' && typeof renderAirPick === 'function') return renderAirPick(); // 飛機分頁在 air.js
-  if (S.pickGroup === 'bus' && typeof renderBusPick === 'function') return renderBusPick(); // 國道客運分頁在 bus.js
   const q = normName(pq.value.trim());
   let rows = S.positions.filter(p => S.pickGroup === 'all' || sysGroup(p.trip.sys) === S.pickGroup);
   if (q) {

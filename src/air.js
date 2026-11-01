@@ -466,12 +466,12 @@ function airportFeatures() {
    每種「機型＋航空公司＋起落架」的模型只建一次放進 GPU，每格只換一個矩陣（位置、航向、仰角）。
    以前每格把幾百個多邊形用 GeoJSON 重送，要等背景執行緒切完圖磚才畫得出來，飛機和鏡頭對不上就會抖。 */
 const PlaneGL = {
-  draw: [], extra: [], stat: [], meshes: new Map(), gl: null, prog: null, last: null, hover: false, kickAt: 0,
-  /* 飛機與客運會動，地圖要重畫才看得到。但每一格都重畫整張地圖（圖磚、建築、標籤全部）對手機很重，
+  draw: [], meshes: new Map(), gl: null, prog: null, last: null, hover: false, kickAt: 0,
+  /* 飛機會動，地圖要重畫才看得到。但每一格都重畫整張地圖（圖磚、建築、標籤全部）對手機很重，
      所以只在東西真的在畫面上時才重畫，而且依它在螢幕上有多大決定頻率：
      大到看得清楚才每格重畫；只有幾個像素時一秒幾次就夠，肉眼看不出差別 */
   kick(now) {
-    const list = (AIR.on ? PlaneGL.draw : []).concat(PlaneGL.extra);
+    const list = AIR.on ? PlaneGL.draw : [];
     if (!list.length) return;
     const z = map.getZoom(), c = map.getCanvas(), W = c.clientWidth, H = c.clientHeight;
     const mpp = 40075016.686 * Math.cos(map.getCenter().lat / DEG) / (512 * Math.pow(2, z)); // 每像素幾公尺
@@ -511,11 +511,11 @@ const PlaneGL = {
     return { P: new Float32Array(P), N: new Float32Array(N), C: new Float32Array(C), n: P.length / 3 };
   },
   mesh(type, airline, gear) { return PlaneGL.meshFor(type + '|' + airline + '|' + gear, () => planeParts(type, airline, gear)); },
-  // 依 key 快取模型；parts() 只在第一次用到時呼叫（國道客運也用這個）
+  // 依 key 快取模型；parts() 只在第一次用到時呼叫
   meshFor(key, parts) {
     let m = PlaneGL.meshes.get(key);
     if (!m) {
-      // parts() 可回傳部位清單，或已經算好的三角形（國道高架網格）
+      // parts() 可回傳部位清單，或已經算好的三角形
       const raw = parts(), d = raw && raw.P ? raw : PlaneGL.build(raw), gl = PlaneGL.gl;
       m = { n: d.n, bufs: [d.P, d.N, d.C].map(arr => { const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, arr, gl.STATIC_DRAW); return b; }) };
       PlaneGL.meshes.set(key, m);
@@ -537,7 +537,7 @@ const PlaneGL = {
     const M = PlaneGL.last; if (!M) return null;
     const cv = map.getCanvas(), w = cv.clientWidth, h = cv.clientHeight;
     let best = null, bd = 1e9;
-    for (const d of PlaneGL.draw.concat(PlaneGL.extra)) {
+    for (const d of PlaneGL.draw) {
       if (d.nopick) continue;
       const m = PlaneGL.model(d.p, d.ll), PM = PlaneGL.mul(M, m), L = d.len || AC_TYPES[acTypeOf(d.f)].L;
       const proj = (x) => { const cx = PM[0] * x + PM[12], cy = PM[1] * x + PM[13], cw = PM[3] * x + PM[15]; return cw > 0 ? [(cx / cw + 1) / 2 * w, (1 - cy / cw) / 2 * h] : null; };
@@ -572,8 +572,8 @@ const PlaneGL = {
     onRemove() { PlaneGL.gl = null; PlaneGL.meshes.clear(); },
     render(gl, matrix) {
       PlaneGL.last = matrix;
-      // 飛機（關掉時不畫）加上國道高架（靜態）與其他交通工具（國道客運）
-      const list = (AIR.on ? PlaneGL.draw : []).concat(PlaneGL.stat, PlaneGL.extra);
+      // 飛機關掉時不畫
+      const list = AIR.on ? PlaneGL.draw : [];
       if (!list.length || !PlaneGL.prog) return;
       const L = PlaneGL.loc;
       gl.useProgram(PlaneGL.prog);
@@ -624,7 +624,7 @@ function ensureLayers() {
 }
 function setPlaneVis() {
   if (!AIR.layers) return;
-  // planes3d 也畫國道客運，所以一直開著；飛機開關由圖層的 render 依 AIR.on 決定
+  // planes3d 一直開著；飛機開關由圖層的 render 依 AIR.on 決定
   for (const l of ['plane-dot', 'plane-shadow']) try { map.setLayoutProperty(l, 'visibility', AIR.on ? 'visible' : 'none'); } catch {}
 }
 
