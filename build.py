@@ -4,7 +4,7 @@ from pathlib import Path
 root = Path(__file__).parent
 src = root / "src"
 page = (src / "template.html").read_text(encoding="utf-8")
-for key, name in [("GEO", "geo.json"), ("DATA", "data.js"), ("ENGINE", "engine.js"), ("MUSIC", "music.js"), ("SCENE", "scene.js"), ("APP", "app.js"), ("EXTRAS", "extras.js"), ("AIR", "air.js"), ("BUS", "bus.js")]:
+for key, name in [("GEO", "geo.json"), ("DATA", "data.js"), ("ENGINE", "engine.js"), ("MUSIC", "music.js"), ("SCENE", "scene.js"), ("APP", "app.js"), ("EXTRAS", "extras.js"), ("AIR", "air.js"), ("ROAD", "freeway.js"), ("BUS", "bus.js")]:
     code = (src / name).read_text(encoding="utf-8")
     if key == "GEO":
         code = "const GEO=" + code.strip() + ";"
