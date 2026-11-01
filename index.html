@@ -5020,7 +5020,8 @@ function fwyAdvance(k, s, dist) {
     const nexts = (FWY.starts.get(w.z) || []).map(i => FWY.ways[i]).filter(o => o !== w);
     if (!nexts.length) { s = w.len; break; }
     const endH = fwyPoint(w, w.len).h;
-    nexts.sort((p, q) => (p.link - q.link) * 50 + (p.ref !== w.ref) * 20 + angGap(fwyPoint(p, 0).h, endH) - angGap(fwyPoint(q, 0).h, endH));
+    const cost = o => o.link * 50 + (o.ref !== w.ref) * 20 + angGap(fwyPoint(o, 0).h, endH);
+    nexts.sort((p, q) => cost(p) - cost(q));
     s -= w.len; w = nexts[0]; k = FWY.ways.indexOf(w);
   }
   return { w: k, s, ...fwyPoint(w, s) };
@@ -5046,7 +5047,7 @@ function fwySlice(w, s0, s1) {
 function fwyGeo(ways) {
   const ground = [], solid = [];
   const strip = (xy, l, r, base, top, kind) => {
-    if (xy.length < 2 || top - base < 0.05) return;
+    if (xy.length < 2 || top - base < 0.01) return;
     const A = fwyOffset(xy, l), B = fwyOffset(xy, r).reverse(), ring = A.concat(B, [A[0]]).map(([x, y]) => bll(x, y));
     solid.push({ type: 'Feature', properties: { kind, base, top }, geometry: { type: 'Polygon', coordinates: [ring] } });
   };
