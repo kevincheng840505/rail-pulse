@@ -2733,6 +2733,144 @@ function paceOk(now) {
   return Pace.ok;
 }
 const DOT = COARSE ? 1.35 : 1; // 手機上列車圓點放大 // 這個縮放以上把列車畫成一節節車廂
+/* ---------- 列車 3D 圖層：車廂直接交給 WebGL 畫 ----------
+   以前車廂是 GeoJSON 的 fill-extrusion 圖層：每次更新都要送到背景執行緒切圖磚、再傳回來，
+   跟拍時幾乎每一格都這樣做，手機的主執行緒被佔滿，縮放就卡。
+   現在把同樣的車廂方塊（carFeatures 產生的多邊形與高度）在這裡直接變成三角形，當格上傳、當格畫出，
+   不經過背景執行緒，鏡頭和車身也一定是同一格的位置，不需要以前的雙緩衝與平移補償。
+   光線算法照 MapLibre 的 fill-extrusion，看起來跟原本一樣。 */
+const TrainGL = {
+  // 每組各自一份三角形：背景車廂、跟拍的列車、附近的列車、月台旅客
+  groups: {
+    cars: { base: 'b3', minz: CAR_ZOOM }, focus: { base: 'b3', minz: CAR_ZOOM },
+    near: { base: 'b3', minz: CAR_ZOOM }, people: { base: 'b', minz: 16 },
+  },
+  gl: null, prog: null, loc: null, colors: new Map(),
+  set(name, feats) {
+    const g = this.groups[name];
+    if (!feats.length && !g.f) return; // 已經是空的：不用重畫
+    g.f = feats.length ? feats : null; g.dirty = true;
+    if (map) map.triggerRepaint();
+  },
+  has(name) { return !!this.groups[name].f; },
+  rgb(c) {
+    let v = this.colors.get(c);
+    if (!v) { const n = parseInt(c.slice(1), 16); v = [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255]; this.colors.set(c, v); }
+    return v;
+  },
+  // 多邊形（經緯度）＋底高、頂高（公尺）→ 以第一個點為原點、單位公尺的三角形（頂面與側面；底面看不到不畫）
+  build(g) {
+    const f = g.f, gl = this.gl;
+    g.dirty = false; g.n = 0;
+    if (!f || !gl) return;
+    const c0 = f[0].geometry.coordinates[0][0], R = Math.PI / 180;
+    const ox = (c0[0] + 180) / 360, oy = (1 - Math.log(Math.tan(Math.PI / 4 + c0[1] * R / 2)) / Math.PI) / 2;
+    const mpu = 40075016.686 * Math.cos(c0[1] * R); // 這個緯度上，每個墨卡托單位是幾公尺
+    let need = 0;
+    for (const q of f) need += (q.geometry.coordinates[0].length - 1) * 9 * 3; // 頂面 (n-2)*3 + 側面 n*6 ≤ n*9 個頂點
+    if (!g.P || g.P.length < need) { const cap = Math.ceil(need * 1.5); g.P = new Float32Array(cap); g.N = new Float32Array(cap); g.C = new Float32Array(cap); }
+    const P = g.P, N = g.N, C = g.C, bk = g.base;
+    let k = 0;
+    const xs = [], ys = [];
+    const vtx = (x, y, z, nx, ny, nz, col) => { P[k] = x; P[k + 1] = y; P[k + 2] = z; N[k] = nx; N[k + 1] = ny; N[k + 2] = nz; C[k] = col[0]; C[k + 1] = col[1]; C[k + 2] = col[2]; k += 3; };
+    for (const q of f) {
+      const pr = q.properties, lo = pr[bk] || 0, hi = pr.t;
+      if (!(hi - lo > 1e-3)) continue;
+      const ring = q.geometry.coordinates[0], n = ring.length - 1, col = this.rgb(pr.c);
+      let area = 0;
+      for (let i = 0; i < n; i++) {
+        const [lon, lat] = ring[i];
+        xs[i] = ((lon + 180) / 360 - ox) * mpu;
+        ys[i] = ((1 - Math.log(Math.tan(Math.PI / 4 + lat * R / 2)) / Math.PI) / 2 - oy) * mpu;
+      }
+      for (let i = 0; i < n; i++) { const j = (i + 1) % n; area += xs[i] * ys[j] - xs[j] * ys[i]; }
+      const sg = area >= 0 ? 1 : -1;
+      // 頂面：扇形三角化（車廂零件都是凸多邊形）
+      for (let i = 1; i < n - 1; i++) { vtx(xs[0], ys[0], hi, 0, 0, 1, col); vtx(xs[i], ys[i], hi, 0, 0, 1, col); vtx(xs[i + 1], ys[i + 1], hi, 0, 0, 1, col); }
+      // 側面：法向量朝外
+      for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n, dx = xs[j] - xs[i], dy = ys[j] - ys[i], l = Math.hypot(dx, dy) || 1, nx = sg * dy / l, ny = -sg * dx / l;
+        vtx(xs[i], ys[i], lo, nx, ny, 0, col); vtx(xs[j], ys[j], lo, nx, ny, 0, col); vtx(xs[j], ys[j], hi, nx, ny, 0, col);
+        vtx(xs[i], ys[i], lo, nx, ny, 0, col); vtx(xs[j], ys[j], hi, nx, ny, 0, col); vtx(xs[i], ys[i], hi, nx, ny, 0, col);
+      }
+    }
+    g.n = k / 3;
+    // 模型矩陣：公尺 → 墨卡托單位，再移到原點
+    const s = 1 / mpu;
+    g.model = [s, 0, 0, 0, 0, s, 0, 0, 0, 0, s, 0, ox, oy, 0, 1];
+    if (!g.bufs) g.bufs = [gl.createBuffer(), gl.createBuffer(), gl.createBuffer()];
+    [P, N, C].forEach((arr, i) => { gl.bindBuffer(gl.ARRAY_BUFFER, g.bufs[i]); gl.bufferData(gl.ARRAY_BUFFER, arr.subarray(0, k), gl.DYNAMIC_DRAW); });
+  },
+  // 點選：沿著畫出來的列車每節車廂取一點投到螢幕上，找最近的一列
+  pick(pt) {
+    if (!map || map.getZoom() < CAR_ZOOM) return null;
+    const m = curMin(), list = [S.follow, ...(S.nearby || []), ...(this.bg || [])];
+    let best = null, bd = 18;
+    for (const t of list) {
+      const pos = t && tripPos(t, m); if (!pos) continue;
+      const L = liveryOf(t), step = (L.len + L.gap) / 1000;
+      for (let i = 0; i < L.n; i++) {
+        const p = trackPoint(t, pos.km - step * (i + 0.5)), q = map.project(unproj(p.x, p.y)), d = Math.hypot(q.x - pt.x, q.y - pt.y);
+        if (d < bd) { bd = d; best = t; }
+      }
+    }
+    return best;
+  },
+  layer: {
+    id: 'trains3d', type: 'custom', renderingMode: '3d',
+    onAdd(m, gl) {
+      const T = TrainGL;
+      T.gl = gl;
+      for (const g of Object.values(T.groups)) { g.bufs = null; g.dirty = true; }
+      const sh = (type, src) => { const o = gl.createShader(type); gl.shaderSource(o, src); gl.compileShader(o); return o; };
+      const prog = gl.createProgram();
+      // 與 MapLibre fill-extrusion 相同的打光（vertical-gradient 關閉時）
+      gl.attachShader(prog, sh(gl.VERTEX_SHADER, `
+        uniform mat4 u_pm; uniform vec3 u_lightpos; uniform vec3 u_lightcolor; uniform float u_lightintensity;
+        attribute vec3 a_pos; attribute vec3 a_n; attribute vec3 a_c; varying vec3 v_c;
+        void main() {
+          float cv = a_c.r * 0.2126 + a_c.g * 0.7152 + a_c.b * 0.0722;
+          float d = clamp(dot(a_n, u_lightpos), 0.0, 1.0);
+          d = mix(1.0 - u_lightintensity, max(1.0 - cv + u_lightintensity, 1.0), d);
+          v_c = clamp(a_c * d * u_lightcolor, mix(vec3(0.0), vec3(0.3), 1.0 - u_lightcolor), vec3(1.0));
+          gl_Position = u_pm * vec4(a_pos, 1.0);
+        }`));
+      gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, `precision mediump float; varying vec3 v_c; void main() { gl_FragColor = vec4(v_c, 1.0); }`));
+      gl.linkProgram(prog);
+      T.prog = prog;
+      T.loc = { pm: gl.getUniformLocation(prog, 'u_pm'), lp: gl.getUniformLocation(prog, 'u_lightpos'), lc: gl.getUniformLocation(prog, 'u_lightcolor'), li: gl.getUniformLocation(prog, 'u_lightintensity'),
+        attrs: ['a_pos', 'a_n', 'a_c'].map(a => gl.getAttribLocation(prog, a)) };
+    },
+    onRemove() { TrainGL.gl = null; TrainGL.prog = null; },
+    render(gl, matrix) {
+      const T = TrainGL; if (!T.prog) return;
+      const z = map.getZoom();
+      const live = Object.values(T.groups).filter(g => g.f && z >= g.minz);
+      if (!live.length) return;
+      const L = T.loc;
+      gl.useProgram(T.prog);
+      // 光線：跟地圖的 setLight 一樣（anchor: map），位置是 [半徑, 方位角, 仰角]
+      let lc = [1, 1, 1], li = 0.5, lp = [0, 0, 1.2];
+      try {
+        const lt = map.getLight() || {};
+        if (typeof lt.color === 'string' && lt.color[0] === '#') lc = T.rgb(lt.color);
+        if (typeof lt.intensity === 'number') li = lt.intensity;
+        if (Array.isArray(lt.position)) { const [r, a0, p0] = lt.position, a = (a0 + 90) * Math.PI / 180, pl = p0 * Math.PI / 180; lp = [r * Math.cos(a) * Math.sin(pl), r * Math.sin(a) * Math.sin(pl), r * Math.cos(pl)]; }
+      } catch {}
+      gl.uniform3fv(L.lp, lp); gl.uniform3fv(L.lc, lc); gl.uniform1f(L.li, li);
+      gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(true); gl.disable(gl.CULL_FACE); gl.disable(gl.BLEND);
+      for (const g of live) {
+        if (g.dirty) T.build(g);
+        if (!g.n) continue;
+        gl.uniformMatrix4fv(L.pm, false, new Float32Array(PlaneGLmul(matrix, g.model)));
+        g.bufs.forEach((b, i) => { gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.enableVertexAttribArray(L.attrs[i]); gl.vertexAttribPointer(L.attrs[i], 3, gl.FLOAT, false, 0, 0); });
+        gl.drawArrays(gl.TRIANGLES, 0, g.n);
+      }
+    },
+  },
+};
+// 4x4 矩陣相乘（雙精度，避免墨卡托座標在單精度下抖動）
+function PlaneGLmul(a, b) { const o = new Float64Array(16); for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) { let v = 0; for (let k = 0; k < 4; k++) v += a[k * 4 + j] * b[i * 4 + k]; o[i * 4 + j] = v; } return o; }
 function initMap() {
   if (!window.maplibregl) { $('#intro p').textContent = '地圖元件載入失敗，請確認網路連線後重新整理。'; return; }
   map = new maplibregl.Map({
@@ -2764,30 +2902,21 @@ function initMap() {
       layout: { 'text-field': ['get', 'name'], 'text-font': ['Noto Sans Regular'], 'text-size': ['interpolate', ['linear'], ['zoom'], 7, 12, 14, 15, 18, 20], 'text-offset': [0, 1.1], 'text-anchor': 'top', 'text-letter-spacing': 0.1, visibility: S.labels ? 'visible' : 'none' },
       paint: { 'text-color': '#EEF3F6', 'text-halo-color': 'rgba(5,10,18,.85)', 'text-halo-width': 1.6 } });
     map.addSource('trains', { type: 'geojson', data: EMPTY });
-    map.addSource('cars', { type: 'geojson', data: EMPTY });
-    map.addSource('focus', { type: 'geojson', data: EMPTY });
-    map.addSource('focus2', { type: 'geojson', data: EMPTY });
     map.addSource('lights', { type: 'geojson', data: EMPTY });
     map.addLayer({ id: 'train-halo', type: 'circle', source: 'trains', maxzoom: 15,
       paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, ['case', ['get', 'sel'], 14, 6], 13, ['case', ['get', 'sel'], 26, 14]], 'circle-color': ['get', 'color'], 'circle-blur': 1, 'circle-opacity': P0.glow + 0.15, 'circle-pitch-alignment': 'map' } });
-    const carPaint = { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 't'], 'fill-extrusion-base': ['get', 'b3'], 'fill-extrusion-opacity': 1, 'fill-extrusion-vertical-gradient': false };
-    map.addLayer({ id: 'cars', type: 'fill-extrusion', source: 'cars', minzoom: CAR_ZOOM, paint: carPaint });
-    // 跟拍的列車用兩組圖層輪流：一組顯示，另一組在背後載入下一份車身，載好才換過來
-    const focusPaint = { ...carPaint, 'fill-extrusion-translate-anchor': 'map', 'fill-extrusion-translate-transition': { duration: 0, delay: 0 }, 'fill-extrusion-opacity-transition': { duration: 0, delay: 0 } };
-    map.addLayer({ id: 'focus-cars', type: 'fill-extrusion', source: 'focus', minzoom: CAR_ZOOM, paint: focusPaint });
-    map.addLayer({ id: 'focus-cars2', type: 'fill-extrusion', source: 'focus2', minzoom: CAR_ZOOM, paint: { ...focusPaint, 'fill-extrusion-opacity': 0 } });
-    map.addSource('near', { type: 'geojson', data: EMPTY });
-    map.addLayer({ id: 'near-cars', type: 'fill-extrusion', source: 'near', minzoom: CAR_ZOOM, paint: carPaint });
+    // 車廂（背景、跟拍、附近）與月台旅客：自訂 WebGL 圖層，見 TrainGL
+    map.addLayer(TrainGL.layer);
     // 車頭燈（暖白）與尾燈（紅）：照在地上的光暈，放在車廂與建築這些 3D 圖層底下，
     // 被車身、建築擋住的部分就看不到，不會浮在整個畫面最上層
     map.addLayer({ id: 'light-glow', type: 'circle', source: 'lights', minzoom: 11,
       paint: { 'circle-color': ['get', 'c'], 'circle-blur': 1, 'circle-pitch-alignment': 'map',
         'circle-radius': ['interpolate', ['exponential', 1.6], ['zoom'], 11, ['*', 4, ['get', 'k']], 15, ['*', 12, ['get', 'k']], 19, ['*', 60, ['get', 'k']]],
-        'circle-opacity': ['interpolate', ['linear'], ['zoom'], 11, 0, 12, 0.9] } }, 'cars');
+        'circle-opacity': ['interpolate', ['linear'], ['zoom'], 11, 0, 12, 0.9] } }, 'trains3d');
     // 亮點只在遠看（車廂還是圓點）時畫；近看時車頭本身就有燈
     map.addLayer({ id: 'light-core', type: 'circle', source: 'lights', minzoom: 12, maxzoom: CAR_ZOOM,
       paint: { 'circle-color': '#FFFFFF', 'circle-pitch-alignment': 'map', 'circle-blur': 0.4,
-        'circle-radius': ['interpolate', ['exponential', 1.6], ['zoom'], 12, ['*', 1, ['get', 'k']], 16, ['*', 3, ['get', 'k']], 19, ['*', 10, ['get', 'k']]] } }, 'cars');
+        'circle-radius': ['interpolate', ['exponential', 1.6], ['zoom'], 12, ['*', 1, ['get', 'k']], 16, ['*', 3, ['get', 'k']], 19, ['*', 10, ['get', 'k']]] } }, 'trains3d');
     // 半透明建築要畫在車廂之後：先畫的 3D 圖層會擋住後畫的，這樣隔著建築也看得到列車
     try { map.moveLayer('buildings'); } catch {}
     map.addSource('facade', { type: 'geojson', data: EMPTY });
@@ -2795,9 +2924,7 @@ function initMap() {
       paint: { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 't'], 'fill-extrusion-base': ['get', 'b'], 'fill-extrusion-opacity': 0.8, 'fill-extrusion-vertical-gradient': false } });
     const solid = { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 't'], 'fill-extrusion-base': ['get', 'b'], 'fill-extrusion-opacity': 1, 'fill-extrusion-vertical-gradient': false };
     map.addSource('platforms', { type: 'geojson', data: EMPTY });
-    map.addLayer({ id: 'platforms', type: 'fill-extrusion', source: 'platforms', minzoom: FACADE_ZOOM, paint: solid }, 'focus-cars');
-    map.addSource('people', { type: 'geojson', data: EMPTY });
-    map.addLayer({ id: 'people', type: 'fill-extrusion', source: 'people', minzoom: 16, paint: solid }, 'focus-cars');
+    map.addLayer({ id: 'platforms', type: 'fill-extrusion', source: 'platforms', minzoom: FACADE_ZOOM, paint: solid }, 'trains3d');
     map.addSource('lamps', { type: 'geojson', data: EMPTY });
     map.addLayer({ id: 'lamp-glow', type: 'circle', source: 'lamps', minzoom: FACADE_ZOOM,
       paint: { 'circle-color': '#FFD48A', 'circle-blur': 1, 'circle-pitch-alignment': 'map', 'circle-opacity': 0,
@@ -2817,10 +2944,12 @@ function initMap() {
     applyQuality();
     applyLook(true); pushTrains(true);
     map.on('click', onMapClick);
-    for (const l of ['train', 'train-halo', 'cars', 'st-dot']) {
+    for (const l of ['train', 'train-halo', 'st-dot']) {
       map.on('mouseenter', l, () => map.getCanvas().style.cursor = 'pointer');
       map.on('mouseleave', l, () => map.getCanvas().style.cursor = '');
     }
+    // 車廂畫在自訂圖層上，滑鼠游標改用 TrainGL.pick 判斷
+    if (!COARSE) map.on('mousemove', e => { if (map.getZoom() < CAR_ZOOM) return; const hit = !!TrainGL.pick(e.point); if (hit !== TrainGL.hover) { TrainGL.hover = hit; map.getCanvas().style.cursor = hit ? 'pointer' : ''; } });
   });
   // 使用者自己拖曳、旋轉或縮放時，暫停跟車
   for (const ev of ['dragstart', 'rotatestart', 'pitchstart', 'zoomstart']) {
@@ -2857,7 +2986,6 @@ function applyQuality() {
   const low = Quality.low, vis = on => on ? 'visible' : 'none';
   try { if (map.getPixelRatio() !== Quality.pixelRatio) map.setPixelRatio(Quality.pixelRatio); } catch {}
   try { map.setLayoutProperty('hills', 'visibility', vis(!low)); } catch {}
-  try { map.setLayoutProperty('people', 'visibility', vis(!low)); } catch {}
   for (const l of ['facade', 'lamp-glow']) try { map.setLayoutProperty(l, 'visibility', vis(S.buildings && !low)); } catch {}
   syncTerrain(true); Facade.soon(true); pushTrains(true);
 }
@@ -3160,13 +3288,10 @@ function pushTrains(force) {
   if (doLights) for (const { trip, pos } of near) trainLights(trip, pos, bgLights);
   if (doCars) {
     lastCars = performance.now();
-    for (const { trip, pos } of near.slice(0, maxCarTrains())) {
-      const start = cars.length;
-      carFeatures(trip, pos, S.P, cars, false); // 窗格細節只畫在跟拍的列車上
-      for (let i = start; i < cars.length; i++) cars[i].properties.idx = trip.idx;
-    }
-    map.getSource('cars').setData({ type: 'FeatureCollection', features: cars });
-  } else if (z < CAR_ZOOM - 0.3 && lastCars) { map.getSource('cars').setData(EMPTY); lastCars = 0; }
+    const bg = near.slice(0, maxCarTrains());
+    for (const { trip, pos } of bg) carFeatures(trip, pos, S.P, cars, false); // 窗格細節只畫在跟拍的列車上
+    TrainGL.set('cars', cars); TrainGL.bg = bg.map(n => n.trip);
+  } else if (z < CAR_ZOOM - 0.3 && lastCars) { TrainGL.set('cars', []); TrainGL.bg = []; lastCars = 0; }
   // 圓點圖層近看時不顯示，降低更新頻率
   if (force || z < CAR_ZOOM + 0.6 || performance.now() - lastDots > 1000) { map.getSource('trains').setData({ type: 'FeatureCollection', features: pts }); lastDots = performance.now(); }
   if (!doLights) bgLights = [];
@@ -3179,54 +3304,18 @@ function pushLights() {
   if (map.getZoom() >= 10.5) for (const t of [S.follow, ...(S.nearby || [])]) { const pos = t && tripPos(t, curMin()); if (pos) trainLights(t, pos, out); }
   map.getSource('lights').setData({ type: 'FeatureCollection', features: out });
 }
-// 跟拍的列車：GeoJSON 交給背景執行緒切圖磚，畫面上真正出現會晚幾格，而且新舊圖磚可能混在同一格畫出來。
-// 所以用兩組圖層輪流：新車身先送進看不到的那一組，整組載完才在同一格換成顯示它；
-// 每一格再用 fill-extrusion-translate 把顯示中的車身平移到現在該在的位置（改繪圖參數當格就生效）
-const FOCUS_BUF = [{ src: 'focus', layer: 'focus-cars' }, { src: 'focus2', layer: 'focus-cars2' }];
-function focusSwap() {
-  const F = S.fb || (S.fb = { show: 0, t: null, trip: null, pend: null });
-  if (!F.pend) return true;
-  const B = FOCUS_BUF[F.pend.buf];
-  if (!map.isSourceLoaded(B.src) && performance.now() - F.pend.at < 500) return false;
-  map.setPaintProperty(B.layer, 'fill-extrusion-opacity', 1);
-  map.setPaintProperty(FOCUS_BUF[F.show].layer, 'fill-extrusion-opacity', 0);
-  F.show = F.pend.buf; F.t = F.pend.m; F.trip = F.pend.trip; F.pend = null; S.focusShift = null;
-  return true;
-}
-function shiftFocus() {
-  const F = S.fb; if (!F) return;
-  let tr = [0, 0];
-  const t = S.follow;
-  if (t && F.trip === t && F.t != null) {
-    const a = tripPos(t, F.t), b = tripPos(t, curMin());
-    if (a && b) {
-      const p0 = trackPoint(t, a.km), p1 = trackPoint(t, b.km), lat = map.getCenter().lat * Math.PI / 180;
-      const mpp = 40075016.686 * Math.cos(lat) / (512 * Math.pow(2, map.getZoom()));
-      tr = [(p1.x - p0.x) * 1000 / mpp, (p1.y - p0.y) * 1000 / mpp];
-    }
-  }
-  if (!S.focusShift || Math.abs(tr[0] - S.focusShift[0]) + Math.abs(tr[1] - S.focusShift[1]) > 0.01) { map.setPaintProperty(FOCUS_BUF[F.show].layer, 'fill-extrusion-translate', tr); S.focusShift = tr; }
-}
 function pushFocus() {
   if (!S.mapReady) return;
   const t = S.follow, m = curMin();
-  // 沒在跟車而且跟拍圖層已經清空：不用再一直送空資料（每次送都會讓整張地圖重畫）
-  const idle = !t && S.fb && !S.fb.trip && (!S.fb.pend || !S.fb.pend.trip);
-  if (idle) { if (S.fb.pend) focusSwap(); }
-  else if (focusSwap()) {
-    const pos = t && tripPos(t, m), out = [], buf = 1 - S.fb.show;
-    if (pos) { carFeatures(t, pos, S.P, out, true); for (const f of out) f.properties.idx = t.idx; out[0].properties.ts = m; }
-    map.getSource(FOCUS_BUF[buf].src).setData({ type: 'FeatureCollection', features: out });
-    S.fb.pend = { buf, m, trip: t, at: performance.now() };
-  }
-  // 跟拍列車附近的列車另外一個圖層，每一格更新
+  // 跟拍的列車：每一格重算車身，當格畫出（車廂離得夠近才畫，遠看時是圓點）
+  const zf = map.getZoom() >= CAR_ZOOM - 0.3, out = [];
+  const pos = zf && t && tripPos(t, m);
+  if (pos) carFeatures(t, pos, S.P, out, true);
+  TrainGL.set('focus', out);
+  // 跟拍列車附近（或自由瀏覽時畫面中央）的列車，每一格更新
   const near = [];
-  for (const n of S.nearby || []) {
-    const np = tripPos(n, m); if (!np) continue;
-    const start = near.length; carFeatures(n, np, S.P, near, false);
-    for (let i = start; i < near.length; i++) near[i].properties.idx = n.idx;
-  }
-  if (near.length || S.hadNear) { map.getSource('near').setData({ type: 'FeatureCollection', features: near }); S.hadNear = near.length > 0; }
+  if (zf) for (const n of S.nearby || []) { const np = tripPos(n, m); if (np) carFeatures(n, np, S.P, near, false); }
+  TrainGL.set('near', near);
   // 畫面附近車站月台上的旅客：候車、上車、下車
   const ppl = [];
   if (map.getZoom() >= 16 && !Quality.low) { // 省電畫質不畫旅客，也不計算（切到省電時下面送一次空資料清掉）
@@ -3235,7 +3324,7 @@ function pushFocus() {
     const cap = (COARSE ? 140 : 260) * 6;
     for (const n of S.pplSt.list) for (const [R, idx] of stationReps(n)) stationPeople(n, R, idx, m, ppl, cap);
   }
-  if (ppl.length || S.hadPeople) { map.getSource('people').setData({ type: 'FeatureCollection', features: ppl }); S.hadPeople = ppl.length > 0; }
+  TrainGL.set('people', ppl);
 }
 function pushFocusFrame() { pushFocus(); if (S.hadLights) pushLights(); }
 
@@ -3544,9 +3633,9 @@ plist.addEventListener('click', e => {
 let popup = null;
 function onMapClick(e) {
   const box = [[e.point.x - 10, e.point.y - 10], [e.point.x + 10, e.point.y + 10]];
-  const hit = map.queryRenderedFeatures(box, { layers: ['train', 'train-halo', 'cars', 'focus-cars', 'focus-cars2', 'near-cars', 'st-dot'] });
-  const tr = hit.find(f => f.layer.id !== 'st-dot');
-  if (tr) { const t = TRIPS[tr.properties.idx]; if (t !== S.follow || S.followPaused) { setRoam(false); follow(t); } return; }
+  const hit = map.queryRenderedFeatures(box, { layers: ['train', 'train-halo', 'st-dot'] });
+  const tr = hit.find(f => f.layer.id !== 'st-dot'), t = tr ? TRIPS[tr.properties.idx] : TrainGL.pick(e.point);
+  if (t) { if (t !== S.follow || S.followPaused) { setRoam(false); follow(t); } return; }
   const st = hit.find(f => f.layer.id === 'st-dot');
   if (st) showStation(NODES[st.properties.id]);
 }
@@ -3805,7 +3894,6 @@ function frame(now) {
     if (S.roam && S.follow && !S.flying && !tripPos(S.follow, curMin())) roamNext();
   } else if (S.follow || (S.nearby && S.nearby.length)) pushFocusFrame();
   stepCamera(now, dt);
-  if (S.mapReady) shiftFocus();
   Precip.step(dt, now);
   if (S.roam && now > S.roamAt && !S.flying) { S.roamAt = now + ROAM_SEC * 1000; roamNext(); }
   if (now - lastUi > 500) {
