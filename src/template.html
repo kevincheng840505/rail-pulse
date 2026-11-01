@@ -70,22 +70,22 @@ body.clean #notice { top:calc(env(safe-area-inset-top,0px) + 18px); }
 body.clean #spotcap { top:calc(env(safe-area-inset-top,0px) + 62px); }
 /* 看飛機 */
 #aircap { position:fixed; left:max(16px, env(safe-area-inset-left,0px)); bottom:calc(env(safe-area-inset-bottom,0px) + 84px); z-index:4; width:min(360px, calc(100% - 32px)); box-sizing:border-box; border-radius:18px; padding:14px 16px; }
-#aircap .kicker .kicker { display:flex; gap:8px; align-items:center; font-size:12px; color:var(--muted); letter-spacing:.08em; }
-#aircap .dot .dot { width:10px; height:10px; border-radius:50%; background:#F4F7FA; box-shadow:0 0 12px #F4F7FA; }
-#aircap h2 h2 { margin:6px 0 2px; font-family:var(--font-display); font-weight:900; font-size:26px; letter-spacing:.06em; }
-#aircap .route .route { color:var(--muted); font-size:14px; }
-#aircap .st .st { margin-top:10px; font-family:var(--font-mono); font-size:14px; color:var(--accent); }
-#aircap .caprow .caprow { display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
+#aircap .kicker { display:flex; gap:8px; align-items:center; font-size:12px; color:var(--muted); letter-spacing:.08em; }
+#aircap .dot { width:10px; height:10px; border-radius:50%; background:#F4F7FA; box-shadow:0 0 12px #F4F7FA; }
+#aircap h2 { margin:6px 0 2px; font-family:var(--font-display); font-weight:900; font-size:26px; letter-spacing:.06em; }
+#aircap .route { color:var(--muted); font-size:14px; }
+#aircap .st { margin-top:10px; font-family:var(--font-mono); font-size:14px; color:var(--accent); }
+#aircap .caprow { display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
 body.airwatch #caption { display:none !important; }
 /* 收合的飛機字卡：和列車一樣是一條細長列 */
 #aircap { cursor:pointer; }
-#aircap .strip .strip { display:none; }
-#aircap.mini.mini { width:auto; max-width:min(380px, calc(100% - 24px)); padding:8px 8px 8px 12px; border-radius:999px; }
-#aircap.mini > :not(.strip).mini > :not(.strip) { display:none; }
-#aircap.mini .strip.mini .strip { display:flex; align-items:center; gap:8px; white-space:nowrap; font-size:13px; }
-#aircap.mini .strip .nm.mini .strip .nm { font-family:var(--font-display); font-size:14px; overflow:hidden; text-overflow:ellipsis; }
-#aircap.mini .strip .nx.mini .strip .nx { color:var(--accent); font-family:var(--font-mono); font-size:12px; overflow:hidden; text-overflow:ellipsis; }
-#aircap .strip .x .strip .x { flex:none; width:28px; height:28px; border-radius:50%; padding:0; display:grid; place-items:center; cursor:pointer; border:1px solid var(--line); background:var(--glass); color:var(--ink); }
+#aircap .strip { display:none; }
+#aircap.mini { width:auto; max-width:min(380px, calc(100% - 24px)); padding:8px 8px 8px 12px; border-radius:999px; }
+#aircap.mini > :not(.strip) { display:none; }
+#aircap.mini .strip { display:flex; align-items:center; gap:8px; white-space:nowrap; font-size:13px; }
+#aircap.mini .strip .nm { font-family:var(--font-display); font-size:14px; overflow:hidden; text-overflow:ellipsis; }
+#aircap.mini .strip .nx { color:var(--accent); font-family:var(--font-mono); font-size:12px; overflow:hidden; text-overflow:ellipsis; }
+#aircap .strip .x { flex:none; width:28px; height:28px; border-radius:50%; padding:0; display:grid; place-items:center; cursor:pointer; border:1px solid var(--line); background:var(--glass); color:var(--ink); }
 body.clean #aircap { display:none !important; }
 #dock { position:fixed; left:50%; transform:translateX(-50%); bottom:calc(env(safe-area-inset-bottom,0px) + 18px); z-index:5; display:flex; gap:8px; align-items:center; }
 .pillbtn { height:44px; padding:0 18px; border-radius:999px; font-weight:700; font-size:15px; letter-spacing:.04em; display:flex; align-items:center; gap:8px; white-space:nowrap; }
