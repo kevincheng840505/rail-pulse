@@ -158,42 +158,20 @@ body.clean #aircap { display:none !important; }
 #precip { position:fixed; inset:0; width:100%; height:100%; pointer-events:none; z-index:2; }
 #fogveil { position:fixed; inset:0; pointer-events:none; z-index:1; opacity:0; transition:opacity 2s ease; }
 
-/* 專注時刻（番茄鐘） */
-#focus { position:fixed; top:calc(env(safe-area-inset-top,0px) + 64px); right:max(14px, env(safe-area-inset-right,0px)); z-index:21; width:min(340px, calc(100% - 28px)); box-sizing:border-box; border-radius:18px; padding:16px; background:var(--glass-strong); backdrop-filter:blur(22px); -webkit-backdrop-filter:blur(22px); border:1px solid var(--line); max-height:calc(100% - 100px); overflow:auto; --fc:var(--accent); }
-.fdial { position:relative; width:180px; height:180px; margin:4px auto 0; }
-.fdial svg { width:100%; height:100%; transform:rotate(-90deg); }
-.fdial circle { fill:none; stroke-width:6; }
-.fdial .bg { stroke:var(--line); }
-#fring { stroke:var(--fc); stroke-linecap:round; stroke-dasharray:339.29; transition:stroke-dashoffset 1s linear, stroke .4s; }
-.fdial .mid { position:absolute; inset:0; display:grid; place-content:center; text-align:center; }
-#fphase { font-family:var(--font-display); font-weight:900; font-size:15px; letter-spacing:.3em; padding-left:.3em; color:var(--fc); }
-#ftime { font-family:var(--font-mono); font-weight:700; font-size:44px; letter-spacing:.02em; font-variant-numeric:tabular-nums; line-height:1.1; }
-#fsub { font-size:12px; color:var(--muted); letter-spacing:.12em; }
-#fdots { display:flex; justify-content:center; gap:8px; margin:10px 0 2px; }
-#fdots i { width:8px; height:8px; border-radius:50%; border:1.5px solid var(--fc); box-sizing:border-box; }
-#fdots i.on { background:var(--fc); }
-#fdots i.cur { background:var(--fc); opacity:.45; }
-#fstat { text-align:center; font-size:12px; color:var(--muted); }
-.fctl { display:flex; justify-content:center; gap:8px; margin-top:12px; }
-.fctl .pillbtn { height:40px; }
-#focuschip { position:fixed; top:calc(env(safe-area-inset-top,0px) + 58px); left:max(16px, env(safe-area-inset-left,0px)); z-index:5; display:flex; align-items:center; gap:8px; height:30px; padding:0 12px 0 10px; border-radius:999px; font-size:12.5px; --fc:var(--accent); }
-#focuschip::before { content:""; width:8px; height:8px; border-radius:50%; background:var(--fc); box-shadow:0 0 10px var(--fc); }
-#focuschip.paused::before { box-shadow:none; opacity:.5; }
-#focuschip .k { color:var(--muted); letter-spacing:.08em; }
-#focuschip .t { font-family:var(--font-mono); font-weight:700; font-variant-numeric:tabular-nums; }
-body:not(.clean) #focuschip { display:none; }
-body.clean #focuschip { top:calc(env(safe-area-inset-top,0px) + 16px); opacity:.55; }
-body.clean #focuschip:hover { opacity:1; }
-body.clean #focus { display:none !important; }
-
-/* 底部的「專注」按鈕：計時中變成倒數 */
-#focusdock { font-variant-numeric:tabular-nums; }
-#focusdock .k { font-size:12px; font-weight:400; opacity:.75; }
-#focusdock .t { font-family:var(--font-mono); }
-#focusdock.brk { background:var(--ok); color:#06210F; border-color:transparent; }
+/* 漫遊・專注（番茄鐘）：倒數一直留在時鐘下面，不用點開任何面板 */
+#focusline { position:fixed; top:calc(env(safe-area-inset-top,0px) + 56px); left:max(16px, env(safe-area-inset-left,0px)); z-index:5; display:block; width:min(240px, calc(100% - 32px)); padding:0; border:0; background:none; text-align:left; cursor:pointer; text-shadow:0 1px 12px rgba(0,0,0,.6); --fc:var(--accent); }
+#focusline .l { display:flex; align-items:baseline; gap:8px; font-size:12.5px; white-space:nowrap; }
+#focusline .k { color:var(--fc); font-weight:700; letter-spacing:.12em; }
+#focusline .t { font-family:var(--font-mono); font-weight:700; font-size:15px; font-variant-numeric:tabular-nums; }
+#focusline .s { color:var(--muted); overflow:hidden; text-overflow:ellipsis; min-width:0; }
+#focusline .bar { display:block; height:2px; margin-top:6px; background:var(--line); border-radius:2px; overflow:hidden; }
+#focusline .bar i { display:block; height:100%; width:0; background:var(--fc); transition:width 1s linear; }
+#focusline.paused { opacity:.6; }
+body.clean #focusline { top:calc(env(safe-area-inset-top,0px) + 16px); opacity:.6; }
 #caption .frow { display:flex; gap:10px; align-items:baseline; margin-top:10px; padding-top:9px; border-top:1px solid var(--line); font-size:13px; }
 #caption .frow .fk { flex:none; color:var(--accent); font-family:var(--font-mono); font-size:12px; }
-#flog > div { display:grid; grid-template-columns:8px auto 1fr auto; gap:8px; align-items:center; padding:7px 0; border-bottom:1px solid var(--line); font-size:13px; }
+#fstat { font-size:12.5px; color:var(--ink); margin-bottom:6px; }
+#flog > div { display:grid; grid-template-columns:8px auto 1fr auto; gap:8px; align-items:center; padding:6px 0; border-bottom:1px solid var(--line); font-size:12.5px; }
 #flog i { width:8px; height:8px; border-radius:50%; }
 #flog b { white-space:nowrap; }
 #flog span { color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
@@ -258,7 +236,7 @@ body.clean #focus { display:none !important; }
 
 <div id="brand"><div class="clock"><b id="clock">--:--</b></div></div>
 
-<button id="focuschip" class="glass" hidden><span class="k"></span><span class="t"></span></button>
+<button id="focusline" hidden aria-live="off"><span class="l"><span class="k"></span><span class="t"></span><span class="s"></span></span><span class="bar"><i></i></span></button>
 
 <div id="tools">
   <button class="ib" id="musicbtn" aria-pressed="false" title="音樂" aria-label="音樂"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/></svg></button>
@@ -277,7 +255,6 @@ body.clean #focus { display:none !important; }
 
 <div id="dock">
   <button class="pillbtn primary" id="pickbtn">選一列車</button>
-  <button class="pillbtn" id="focusdock" aria-pressed="false" title="專注時刻（P 開始／暫停）">專注</button>
   <button class="pillbtn" id="roambtn" aria-pressed="false" title="每隔一段時間自動換一列車，偶爾去機場看飛機起降">漫遊</button>
   <button class="pillbtn small" id="viewbtn" title="切換跟車視角（V）" disabled>視角・追車</button>
 </div>
@@ -318,44 +295,6 @@ body.clean #focus { display:none !important; }
   </section>
 </section>
 
-<section id="focus" class="panel" hidden aria-label="專注時刻">
-  <section>
-    <div class="fdial">
-      <svg viewBox="0 0 120 120" aria-hidden="true"><circle class="bg" cx="60" cy="60" r="54"/><circle id="fring" cx="60" cy="60" r="54"/></svg>
-      <div class="mid"><div id="fphase"></div><div id="ftime" aria-live="off"></div><div id="fsub"></div></div>
-    </div>
-    <div id="fdots" aria-hidden="true"></div>
-    <div id="fstat"></div>
-    <div class="fctl">
-      <button class="pillbtn primary" id="fgo">開始專注</button>
-      <button class="pillbtn small" id="fskip" title="直接進到下一段（不算完成）">跳過</button>
-      <button class="pillbtn small" id="freset" title="回到第一段專注">重來</button>
-    </div>
-  </section>
-  <section id="ftickets" hidden>
-    <h4>今天的車票</h4>
-    <div id="flog"></div>
-  </section>
-  <section>
-    <h4>節奏</h4>
-    <div class="row" id="fpreset">
-      <button data-v="classic">25／5 分</button><button data-v="deep">50／10 分</button><button data-v="short">15／3 分</button>
-    </div>
-    <div class="note">每完成 4 段專注，休息會拉長一次。</div>
-  </section>
-  <section>
-    <h4>專注時</h4>
-    <div class="row">
-      <button id="fride" title="專注時跟著一班長途車不換車，到終點自動轉乘；休息時自動漫遊">搭一班車</button>
-      <button id="fmusic" title="開始專注時自動播放背景音樂">播放音樂</button>
-      <button id="fclean" title="開始專注時隱藏按鈕與字卡，只留倒數；專注結束自動回來">隱藏介面</button>
-      <button id="fauto" title="一段結束後自動開始下一段">自動接續</button>
-      <button id="fchime" title="每段結束時響兩聲柔和的鐘聲">結束鐘聲</button>
-    </div>
-    <div class="note">專注＝搭一班車，字卡會告訴你結束時大約到哪一站；休息＝下車漫遊。倒數存在這台裝置，重新整理也會接著算。快捷鍵 P 開始／暫停。</div>
-  </section>
-</section>
-
 <section id="sky" class="panel" hidden aria-label="光線與天氣">
   <section>
     <h4>時段</h4>
@@ -380,6 +319,20 @@ body.clean #focus { display:none !important; }
       <button data-v="high" aria-pressed="false" title="完整效果：3D 地形、山影、建築立面、月台旅客，不限幀率">高</button>
     </div>
     <div class="note">預設為省電。想看 3D 地形與完整細節可以改成「高」，手機會比較耗電、發熱。</div>
+  </section>
+  <section>
+    <h4>漫遊・專注</h4>
+    <div id="fstat"></div>
+    <div id="flog"></div>
+    <div class="row" id="fpreset" style="margin-top:10px">
+      <button data-v="off">只漫遊</button><button data-v="classic">25／5 分</button><button data-v="deep">50／10 分</button><button data-v="short">15／3 分</button>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <button id="fclean" title="專注時隱藏按鈕與字卡，只留倒數；休息時回來">專注時隱藏介面</button>
+      <button id="fchime" title="專注與休息交換時響兩聲柔和的鐘聲">鐘聲</button>
+      <button id="freset" title="倒數回到第一段專注">重來</button>
+    </div>
+    <div class="note">漫遊就是番茄鐘：專注時跟著同一班長途車不換車，倒數留在時鐘下面，字卡會說結束時大約到哪一站；休息時每分鐘換一列車或去看飛機。每 4 段專注有一次長休息。點時鐘下的倒數或按 P 可以暫停。</div>
   </section>
   <section>
     <h4>畫面</h4>
@@ -407,7 +360,7 @@ body.clean #focus { display:none !important; }
   </section>
   <section>
     <h4>說明</h4>
-    <div class="note">R 漫遊、V 切換視角、M 播放／暫停音樂、P 番茄鐘開始／暫停、F 隱藏介面、Esc 離開跟車。軌道與底圖 © OpenStreetMap 貢獻者，地形 © Mapzen／AWS Terrain Tiles，音樂由瀏覽器即時合成。</div>
+    <div class="note">R 漫遊、V 切換視角、M 播放／暫停音樂、P 暫停／繼續專注倒數、F 隱藏介面、Esc 離開跟車。軌道與底圖 © OpenStreetMap 貢獻者，地形 © Mapzen／AWS Terrain Tiles，音樂由瀏覽器即時合成。</div>
   </section>
 </section>
 
@@ -418,9 +371,8 @@ body.clean #focus { display:none !important; }
     <div class="btns">
       <button class="pillbtn primary" id="startroam">開始漫遊</button>
       <button class="pillbtn" id="startpick">自己選一列</button>
-      <button class="pillbtn" id="startfocus" title="上一班車，陪你專注 25 分鐘">開始專注</button>
     </div>
-    <small>建議開啟聲音 · 右上角可以選歌</small>
+    <small>漫遊時陪你專注：25 分鐘跟一班車，5 分鐘到處看看 · 建議開啟聲音</small>
   </div>
 </div>
 
@@ -4049,7 +4001,7 @@ function closeIntro(then) {
   then();
 }
 // 班次與軌道載入完成前先停用開場按鈕，避免漫遊或選車時還沒有列車
-const startBtns = [$('#startroam'), $('#startpick'), $('#startfocus')];
+const startBtns = [$('#startroam'), $('#startpick')];
 startBtns.forEach(b => { b.disabled = true; });
 $('#startroam').addEventListener('click', () => closeIntro(() => setRoam(true)));
 $('#startpick').addEventListener('click', () => closeIntro(openPicker));
@@ -5401,29 +5353,32 @@ setInterval(() => { if (!document.hidden && Date.now() - AIR.loadAt > 10 * 60e3 
 $('#tdxgo').addEventListener('click', () => setTimeout(reloadFlights, 2500));
 $('#tdxclear').addEventListener('click', () => { AIR.gen++; AIR.flights = estimateFlights(); AIR.live = false; });
 </script>
-<script>/* ===== 專注時刻：番茄鐘，和整個 App 是同一件事 =====
-   一段專注＝搭一班車：開始時上一班還要開很久的列車，鏡頭穩穩跟著它，不換車；
-   字卡告訴你「專注結束時大約到哪一站」，車開到終點就自動轉乘。
-   一段休息＝下車走走：自動漫遊，看看別的列車和飛機。
-   跟車時跑過的公里數記成今天的「車票」。
+<script>/* ===== 漫遊・專注：番茄鐘就是漫遊的節奏 =====
+   按下「漫遊」就開始：
+   專注（25 分）＝搭一班車：上一班還要開很久的列車，鏡頭穩穩跟著它，不換車；
+     字卡告訴你「專注結束時大約到哪一站」，車開到終點就自動轉乘。
+   休息（5 分）＝下車走走：照原本的漫遊，每分鐘換一列車或去機場看飛機。
+   倒數一直留在時鐘下面（隱藏介面時在左上角），不用點開任何面板；節奏與今天的車票放在 ⚙ 設定。
    時間以「結束的時間點」記錄並存在這台裝置，重新整理或分頁在背景也不會走偏。
    只在計時中每秒更新一次畫面，不碰地圖的繪製迴圈，省電模式下也幾乎不耗電。 */
 const Focus = (() => {
   const PRESETS = { classic: [25, 5, 15], deep: [50, 10, 20], short: [15, 3, 10] };
   const PHASE = {
-    focus: { name: '專注', sub: '行駛中', color: 'var(--accent)' },
-    short: { name: '休息', sub: '下車走走', color: 'var(--ok)' },
-    long: { name: '長休息', sub: '大站轉乘', color: 'var(--ok)' },
+    focus: { name: '專注', color: 'var(--accent)' },
+    short: { name: '休息', color: 'var(--ok)' },
+    long: { name: '長休息', color: 'var(--ok)' },
   };
   const LONG_EVERY = 4;
   const today = () => { const d = new Date(Date.now() + 8 * 3600e3); return d.toISOString().slice(0, 10); }; // 台灣日期
 
   // 狀態：phase、是否在跑、結束時間點（跑的時候）或剩餘秒數（暫停時）、本輪已完成幾段、今天的統計與車票
   const F = Object.assign({ preset: 'classic', phase: 'focus', running: false, endAt: 0, left: null, cycle: 0,
-    music: true, ride: true, clean: false, auto: false, chime: true, day: today(), done: 0, mins: 0, km: 0, log: [] }, store.get('focus', {}));
+    clean: false, chime: true, day: today(), done: 0, mins: 0, km: 0, log: [] }, store.get('focus', {}));
+  if (!PRESETS[F.preset] && F.preset !== 'off') F.preset = 'classic';
   const newDay = () => { F.day = today(); F.done = 0; F.mins = 0; F.km = 0; F.log = []; };
   if (F.day !== today()) newDay();
   const save = () => store.set('focus', F);
+  const enabled = () => F.preset !== 'off';
   const durOf = ph => (PRESETS[F.preset] || PRESETS.classic)[ph === 'focus' ? 0 : ph === 'short' ? 1 : 2] * 60;
   // 這一段的長度在開始時就固定（F.len），中途換節奏只影響下一段，倒數與累計的分鐘數才會一致
   const total = () => F.len || durOf(F.phase);
@@ -5431,8 +5386,7 @@ const Focus = (() => {
   const mmss = s => String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
   const focusing = () => F.running && F.phase === 'focus';
 
-  const panel = $('#focus'), chip = $('#focuschip'), dock = $('#focusdock');
-  const RING = 2 * Math.PI * 54;
+  const line = $('#focusline');
   const baseTitle = document.title;
   let tickTimer = 0, actx = null;
 
@@ -5456,31 +5410,46 @@ const Focus = (() => {
     } catch {}
   }
   function notify(text) {
-    try { if (document.hidden && 'Notification' in window && Notification.permission === 'granted') new Notification('鐵道脈動・專注時刻', { body: text, silent: true }); } catch {}
+    try { if (document.hidden && 'Notification' in window && Notification.permission === 'granted') new Notification('鐵道脈動', { body: text, silent: true }); } catch {}
   }
 
-  /* ---------- 搭一班車 ---------- */
-  // 這班車還會開多久（分鐘）
+  /* ---------- 專注＝搭一班車 ---------- */
   const runLeft = t => effTime(t, t.nodes.length - 1, 'arr') - tripMinute(t);
   // 上車：挑一班還要開過整段專注的列車（偏好自強、普悠瑪、高鐵這種長途車）；都不夠長就挑開最久的
-  function pickBoard(mins) {
-    const pool = S.positions.map(p => p.trip);
+  function pickBoard(mins, not) {
+    const pool = S.positions.map(p => p.trip).filter(t => t !== not);
     if (!pool.length) return null;
-    const w = t => (t.sys === 'THSR' ? 4 : t.sys === 'TRA' ? (t.type === '區間' ? 1.5 : 5) : 1.5);
+    const w = t => (t.sys === 'THSR' ? 4 : t.sys === 'TRA' ? (t.type === '區間' ? 1.5 : 5) : 0.5);
     const long = pool.filter(t => runLeft(t) >= mins);
     if (!long.length) return pool.reduce((a, t) => runLeft(t) > runLeft(a) ? t : a, pool[0]);
     let r = Math.random() * long.reduce((a, t) => a + w(t), 0);
     for (const t of long) { r -= w(t); if (r <= 0) return t; }
     return long[0];
   }
-  function board() {
-    if (!F.ride || !S.started || !S.positions.length) return;
-    setRoam(false);
-    const t = S.follow, left = remaining() / 60;
-    // 已經在跟的車還會開一陣子就繼續搭；快到終點了才換
-    if (t && tripPos(t, curMin()) && runLeft(t) >= Math.min(left, 8)) { if (S.followPaused) setView(S.view); return; }
-    const nt = pickBoard(left); if (nt) follow(nt);
+  // force：漫遊鈕在專注時是「換一班車」
+  function board(force) {
+    if (!S.started || !S.positions.length) return;
+    const t = S.follow, left = remaining() / 60, watching = typeof AIR !== 'undefined' && AIR.watch;
+    if (!force && !watching && t && tripPos(t, curMin()) && runLeft(t) >= left) { if (S.followPaused) setView(S.view); return; }
+    const nt = pickBoard(left, force ? t : null); if (nt) follow(nt);
   }
+  // 專注時漫遊不自動換車；休息時照常每分鐘換
+  function applyPhase() {
+    if (!S.roam) return;
+    if (focusing()) { S.roamAt = Infinity; board(false); }
+    else if (S.roamAt === Infinity) S.roamAt = performance.now() + 2000;
+  }
+  const _roamNext = roamNext;
+  roamNext = function () { if (focusing()) { board(true); S.roamAt = Infinity; return; } return _roamNext.apply(this, arguments); };
+  // 漫遊開關＝番茄鐘開關。選了別的車（漫遊關掉但還在跟車）倒數照走；離開跟車才暫停
+  const _setRoam = setRoam;
+  setRoam = function (on) {
+    const r = _setRoam.apply(this, arguments);
+    if (S.roam) { if (enabled() && !F.running) start(); else applyPhase(); }
+    else if (F.running) setTimeout(() => { if (!S.roam && !S.follow && F.running) pause(); }, 0);
+    return r;
+  };
+
   // 車票：專注時跟著的列車，從哪一站到哪一站、跑了幾公里
   let ride = null;
   const stationAt = (t, km) => { let i = 0; while (i < t.nodes.length - 1 && t.cum[i + 1] <= km + 0.05) i++; return t.nodes[i].name; };
@@ -5496,17 +5465,17 @@ const Focus = (() => {
     save();
   }
   function trackRide() {
-    if (!focusing() || !F.ride) return closeTicket();
+    if (!focusing()) return closeTicket();
     const t = S.follow, pos = t && tripPos(t, curMin());
     if (ride && ride.trip !== t) closeTicket();
     if (!t) return;
-    if (!pos) { closeTicket(); board(); return; } // 到終點了：轉乘
+    if (!pos) { closeTicket(); board(true); return; } // 到終點了：轉乘
     if (!ride) ride = { trip: t, km0: pos.km, km1: pos.km };
     else ride.km1 = Math.max(ride.km1, pos.km);
   }
   // 字卡上的一行：專注結束時大約在哪裡
   function capRow(t) {
-    if (!focusing() || !F.ride || t !== S.follow) return '';
+    if (!focusing() || t !== S.follow) return '';
     const end = tripMinute(t) + remaining() / 60, n = t.nodes.length;
     let where;
     if (end >= effTime(t, n - 1, 'arr')) where = `先到終點${t.nodes[n - 1].name}，到時幫你轉乘`;
@@ -5516,18 +5485,15 @@ const Focus = (() => {
 
   /* ---------- 計時 ---------- */
   function start() {
+    if (!enabled()) return;
     if (!F.len) F.len = durOf(F.phase);
     F.endAt = Date.now() + remaining() * 1000; F.running = true; F.left = null; save();
-    if (F.phase === 'focus') {
-      if (F.music && !Music.playing) setMusic(true);
-      board();
-      if (F.clean && !document.body.classList.contains('clean')) { panel.hidden = true; toggleClean(true); }
-      try { if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {}); } catch {}
-    } else if (F.ride && S.started) { setRoam(true); }
+    if (F.phase === 'focus' && F.clean && S.started && !document.body.classList.contains('clean')) toggleClean(true);
+    applyPhase();
     loop(); render(); renderCaption(true);
   }
   function pause() { trackRide(); F.left = remaining(); F.running = false; closeTicket(); save(); stopLoop(); render(); renderCaption(true); }
-  function reset() { closeTicket(); F.running = false; F.left = null; F.len = 0; F.phase = 'focus'; F.cycle = 0; save(); stopLoop(); render(); renderCaption(true); }
+  function stop() { closeTicket(); F.running = false; F.left = null; F.len = 0; F.phase = 'focus'; F.cycle = 0; save(); stopLoop(); if (S.roam && S.roamAt === Infinity) S.roamAt = performance.now() + 2000; render(); renderCaption(true); }
   function finish(skipped) {
     const was = F.phase;
     if (was === 'focus') {
@@ -5539,14 +5505,13 @@ const Focus = (() => {
     F.running = false; F.left = null; F.len = 0; stopLoop();
     if (!skipped) {
       chime(F.phase === 'focus');
-      notify(was === 'focus' ? `完成一段專注，${PHASE[F.phase].name} ${durOf(F.phase) / 60} 分鐘` : '休息結束，準備下一段專注');
-      if (was === 'focus' && document.body.classList.contains('clean')) toggleClean(false);
+      notify(was === 'focus' ? `完成一段專注，${PHASE[F.phase].name} ${durOf(F.phase) / 60} 分鐘` : '休息結束，上車繼續專注');
     }
+    if (was === 'focus' && document.body.classList.contains('clean') && F.clean) toggleClean(false);
     save();
-    // 休息：下車走走（漫遊）；休息結束：停在原地等你，或自動接續
-    if (was === 'focus' && !skipped && F.ride && S.started) setRoam(true);
-    if (was !== 'focus' && F.ride) setRoam(false);
-    if (F.auto && !skipped) start(); else { render(); renderCaption(true); }
+    // 休息：下車走走（漫遊）；一段接一段，直到你停下漫遊
+    if (was === 'focus' && S.started && !S.roam) setRoam(true);
+    start();
   }
   function loop() { stopLoop(); tickTimer = setInterval(tick, 1000); }
   function stopLoop() { clearInterval(tickTimer); tickTimer = 0; }
@@ -5555,71 +5520,53 @@ const Focus = (() => {
     trackRide();
     if (F.running && remaining() <= 0) finish(false); else render();
   }
+  const toggle = () => { if (F.running) pause(); else if (enabled()) { if (!S.roam && !S.follow) setRoam(true); else start(); } };
 
   /* ---------- 畫面 ---------- */
   const fmtKm = km => km >= 10 ? Math.round(km) + '' : (Math.round(km * 10) / 10) + '';
   function render() {
     const left = remaining(), len = total(), P = PHASE[F.phase];
-    const active = F.running || left < len || F.cycle > 0;
-    // 底部的「專注」按鈕就是計時器：沒在計時是一般按鈕，計時中顯示倒數
-    dock.setAttribute('aria-pressed', String(focusing()));
-    dock.classList.toggle('brk', F.running && F.phase !== 'focus');
-    dock.innerHTML = active ? `<span class="k">${F.running || left >= len ? P.name : '暫停'}</span><span class="t">${mmss(left)}</span>` : '專注';
-    dock.setAttribute('aria-label', active ? `${P.name} 剩 ${mmss(left)}，打開專注面板` : '專注時刻');
-    // 隱藏介面時，左上角留一顆小倒數
-    chip.hidden = !active;
-    chip.style.setProperty('--fc', P.color);
-    chip.classList.toggle('paused', !F.running);
-    chip.querySelector('.t').textContent = mmss(left);
-    chip.querySelector('.k').textContent = F.running || left >= len ? P.name : '暫停';
-    chip.setAttribute('aria-label', `${P.name} 剩 ${mmss(left)}，點一下${F.running ? '暫停' : '繼續'}`);
+    const paused = !F.running && left < len;
+    // 時鐘下面的一行：專注 18:42 · 自強 106 次，下面一條細細的進度
+    line.hidden = !enabled() || !(F.running || paused);
+    if (!line.hidden) {
+      line.style.setProperty('--fc', P.color);
+      line.classList.toggle('paused', paused);
+      line.querySelector('.k').textContent = paused ? '暫停' : P.name;
+      line.querySelector('.t').textContent = mmss(left);
+      line.querySelector('.s').textContent = paused ? '點一下繼續' : F.phase === 'focus' ? (S.follow ? trainTitle(S.follow) : '') : '到處看看';
+      line.querySelector('.bar i').style.width = (100 * (1 - left / len)).toFixed(2) + '%';
+      line.setAttribute('aria-label', `${P.name} 剩 ${mmss(left)}，點一下${paused ? '繼續' : '暫停'}`);
+    }
     document.title = F.running ? `${mmss(left)} ${P.name}・${baseTitle}` : baseTitle;
-    if (panel.hidden) return;
-    panel.style.setProperty('--fc', P.color);
-    const t = S.follow;
-    $('#fphase').textContent = P.name;
-    $('#fsub').textContent = focusing() && F.ride && t ? '搭乘 ' + trainTitle(t) : P.sub;
-    $('#ftime').textContent = mmss(left);
-    $('#fring').style.strokeDashoffset = String(RING * (1 - left / len));
-    const go = $('#fgo'); go.textContent = F.running ? '暫停' : left < len ? '繼續' : F.phase === 'focus' ? (F.ride ? '上車・開始專注' : '開始專注') : '開始休息';
-    // 這一輪的四格：已完成實心、進行中半透明
-    const inRound = F.cycle % LONG_EVERY, cur = F.phase === 'focus' ? inRound : -1;
-    $('#fdots').innerHTML = Array.from({ length: LONG_EVERY }, (_, i) => `<i class="${i < inRound || (F.phase === 'long' && F.cycle > 0) ? 'on' : i === cur ? 'cur' : ''}"></i>`).join('');
+    if (!settings.hidden) renderSettings();
+  }
+  function renderSettings() {
     const km = F.km + (ride ? ride.km1 - ride.km0 : 0);
-    $('#fstat').textContent = F.done || km >= 0.1 ? `今天 ${F.done} 段・${F.mins >= 60 ? Math.floor(F.mins / 60) + ' 小時 ' : ''}${F.mins % 60 || !F.mins ? F.mins % 60 + ' 分' : ''}${km >= 0.1 ? '・跟車 ' + fmtKm(km) + ' 公里' : ''}` : '今天還沒開始';
+    $('#fstat').textContent = F.done || km >= 0.1 ? `今天專注 ${F.done} 段・${F.mins >= 60 ? Math.floor(F.mins / 60) + ' 小時 ' : ''}${F.mins % 60 || !F.mins ? F.mins % 60 + ' 分' : ''}${km >= 0.1 ? '・跟車 ' + fmtKm(km) + ' 公里' : ''}` : '今天還沒開始專注';
     const live = ride && ride.km1 - ride.km0 >= 0.1 ? [{ n: trainTitle(ride.trip), c: ride.trip.color, a: stationAt(ride.trip, ride.km0), b: '行駛中', km: Math.round((ride.km1 - ride.km0) * 10) / 10 }] : [];
-    const rows = live.concat(F.log).slice(0, 6);
-    $('#ftickets').hidden = !rows.length;
-    $('#flog').innerHTML = rows.map(r => `<div><i style="background:${r.c}"></i><b>${esc(r.n)}</b><span>${esc(r.a)} → ${esc(r.b)}</span><em>${fmtKm(r.km)} km</em></div>`).join('');
+    $('#flog').innerHTML = live.concat(F.log).slice(0, 5).map(r => `<div><i style="background:${r.c}"></i><b>${esc(r.n)}</b><span>${esc(r.a)} → ${esc(r.b)}</span><em>${fmtKm(r.km)} km</em></div>`).join('');
     for (const b of $('#fpreset').children) b.setAttribute('aria-pressed', String(b.dataset.v === F.preset));
-    for (const [id, key] of OPTS) $(id).setAttribute('aria-pressed', String(F[key]));
+    $('#fclean').setAttribute('aria-pressed', String(F.clean));
+    $('#fchime').setAttribute('aria-pressed', String(F.chime));
   }
 
   /* ---------- 操作 ---------- */
-  const OPTS = [['#fride', 'ride'], ['#fmusic', 'music'], ['#fclean', 'clean'], ['#fauto', 'auto'], ['#fchime', 'chime']];
-  function open(on = panel.hidden) {
-    panel.hidden = !on;
-    if (on) { settings.hidden = true; sky.hidden = true; musicPanel.hidden = true; closePicker(); render(); }
-  }
-  dock.addEventListener('click', () => open());
-  chip.addEventListener('click', () => F.running ? pause() : start());
-  // 其他面板打開時收起這個面板
-  ['#musicbtn', '#skybtn', '#setbtn', '#pickbtn'].forEach(id => $(id).addEventListener('click', () => { panel.hidden = true; }));
-  $('#fgo').addEventListener('click', () => F.running ? pause() : start());
-  $('#fskip').addEventListener('click', () => finish(true));
-  $('#freset').addEventListener('click', reset);
+  line.addEventListener('click', toggle);
+  $('#setbtn').addEventListener('click', () => { if (!settings.hidden) renderSettings(); });
   $('#fpreset').addEventListener('click', e => {
     const b = e.target.closest('button[data-v]'); if (!b || b.dataset.v === F.preset) return;
-    F.preset = b.dataset.v; save(); render(); // 進行中或暫停中的這一段維持原長度，下一段才用新節奏
+    const was = enabled(); F.preset = b.dataset.v; save();
+    if (!enabled()) stop(); // 只漫遊：關掉倒數，漫遊照舊
+    else if (!was && S.roam) start();
+    render(); renderSettings(); // 進行中的這一段維持原長度，下一段才用新節奏
   });
-  for (const [id, key] of OPTS) $(id).addEventListener('click', () => { F[key] = !F[key]; save(); render(); renderCaption(true); });
-  // 開場的「開始專注」：直接上車開始第一段
-  $('#startfocus').addEventListener('click', () => closeIntro(() => { open(false); if (focusing()) board(); else { if (F.phase !== 'focus') reset(); start(); } }));
-  // P：開始／暫停；Esc 先關掉這個面板（搶在主程式之前，免得順便離開跟車）
+  $('#freset').addEventListener('click', () => { stop(); if (S.roam) start(); renderSettings(); });
+  for (const [id, key] of [['#fclean', 'clean'], ['#fchime', 'chime']]) $(id).addEventListener('click', () => { F[key] = !F[key]; save(); renderSettings(); });
+  // P：暫停／繼續
   window.addEventListener('keydown', e => {
     if (e.target.matches('input, textarea') || !$('#intro').hidden && !$('#intro').classList.contains('out')) return;
-    if (e.key === 'Escape' && !panel.hidden && !document.body.classList.contains('clean')) { panel.hidden = true; e.stopImmediatePropagation(); }
-    else if ((e.key === 'p' || e.key === 'P') && !e.metaKey && !e.ctrlKey) { F.running ? pause() : start(); }
+    if ((e.key === 'p' || e.key === 'P') && !e.metaKey && !e.ctrlKey) toggle();
   }, true);
   // 分頁切回來時立刻校正一次（背景分頁的計時器會被瀏覽器放慢）
   document.addEventListener('visibilitychange', () => { if (!document.hidden && F.running) tick(); });

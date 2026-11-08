@@ -156,42 +156,20 @@ body.clean #aircap { display:none !important; }
 #precip { position:fixed; inset:0; width:100%; height:100%; pointer-events:none; z-index:2; }
 #fogveil { position:fixed; inset:0; pointer-events:none; z-index:1; opacity:0; transition:opacity 2s ease; }
 
-/* 專注時刻（番茄鐘） */
-#focus { position:fixed; top:calc(env(safe-area-inset-top,0px) + 64px); right:max(14px, env(safe-area-inset-right,0px)); z-index:21; width:min(340px, calc(100% - 28px)); box-sizing:border-box; border-radius:18px; padding:16px; background:var(--glass-strong); backdrop-filter:blur(22px); -webkit-backdrop-filter:blur(22px); border:1px solid var(--line); max-height:calc(100% - 100px); overflow:auto; --fc:var(--accent); }
-.fdial { position:relative; width:180px; height:180px; margin:4px auto 0; }
-.fdial svg { width:100%; height:100%; transform:rotate(-90deg); }
-.fdial circle { fill:none; stroke-width:6; }
-.fdial .bg { stroke:var(--line); }
-#fring { stroke:var(--fc); stroke-linecap:round; stroke-dasharray:339.29; transition:stroke-dashoffset 1s linear, stroke .4s; }
-.fdial .mid { position:absolute; inset:0; display:grid; place-content:center; text-align:center; }
-#fphase { font-family:var(--font-display); font-weight:900; font-size:15px; letter-spacing:.3em; padding-left:.3em; color:var(--fc); }
-#ftime { font-family:var(--font-mono); font-weight:700; font-size:44px; letter-spacing:.02em; font-variant-numeric:tabular-nums; line-height:1.1; }
-#fsub { font-size:12px; color:var(--muted); letter-spacing:.12em; }
-#fdots { display:flex; justify-content:center; gap:8px; margin:10px 0 2px; }
-#fdots i { width:8px; height:8px; border-radius:50%; border:1.5px solid var(--fc); box-sizing:border-box; }
-#fdots i.on { background:var(--fc); }
-#fdots i.cur { background:var(--fc); opacity:.45; }
-#fstat { text-align:center; font-size:12px; color:var(--muted); }
-.fctl { display:flex; justify-content:center; gap:8px; margin-top:12px; }
-.fctl .pillbtn { height:40px; }
-#focuschip { position:fixed; top:calc(env(safe-area-inset-top,0px) + 58px); left:max(16px, env(safe-area-inset-left,0px)); z-index:5; display:flex; align-items:center; gap:8px; height:30px; padding:0 12px 0 10px; border-radius:999px; font-size:12.5px; --fc:var(--accent); }
-#focuschip::before { content:""; width:8px; height:8px; border-radius:50%; background:var(--fc); box-shadow:0 0 10px var(--fc); }
-#focuschip.paused::before { box-shadow:none; opacity:.5; }
-#focuschip .k { color:var(--muted); letter-spacing:.08em; }
-#focuschip .t { font-family:var(--font-mono); font-weight:700; font-variant-numeric:tabular-nums; }
-body:not(.clean) #focuschip { display:none; }
-body.clean #focuschip { top:calc(env(safe-area-inset-top,0px) + 16px); opacity:.55; }
-body.clean #focuschip:hover { opacity:1; }
-body.clean #focus { display:none !important; }
-
-/* 底部的「專注」按鈕：計時中變成倒數 */
-#focusdock { font-variant-numeric:tabular-nums; }
-#focusdock .k { font-size:12px; font-weight:400; opacity:.75; }
-#focusdock .t { font-family:var(--font-mono); }
-#focusdock.brk { background:var(--ok); color:#06210F; border-color:transparent; }
+/* 漫遊・專注（番茄鐘）：倒數一直留在時鐘下面，不用點開任何面板 */
+#focusline { position:fixed; top:calc(env(safe-area-inset-top,0px) + 56px); left:max(16px, env(safe-area-inset-left,0px)); z-index:5; display:block; width:min(240px, calc(100% - 32px)); padding:0; border:0; background:none; text-align:left; cursor:pointer; text-shadow:0 1px 12px rgba(0,0,0,.6); --fc:var(--accent); }
+#focusline .l { display:flex; align-items:baseline; gap:8px; font-size:12.5px; white-space:nowrap; }
+#focusline .k { color:var(--fc); font-weight:700; letter-spacing:.12em; }
+#focusline .t { font-family:var(--font-mono); font-weight:700; font-size:15px; font-variant-numeric:tabular-nums; }
+#focusline .s { color:var(--muted); overflow:hidden; text-overflow:ellipsis; min-width:0; }
+#focusline .bar { display:block; height:2px; margin-top:6px; background:var(--line); border-radius:2px; overflow:hidden; }
+#focusline .bar i { display:block; height:100%; width:0; background:var(--fc); transition:width 1s linear; }
+#focusline.paused { opacity:.6; }
+body.clean #focusline { top:calc(env(safe-area-inset-top,0px) + 16px); opacity:.6; }
 #caption .frow { display:flex; gap:10px; align-items:baseline; margin-top:10px; padding-top:9px; border-top:1px solid var(--line); font-size:13px; }
 #caption .frow .fk { flex:none; color:var(--accent); font-family:var(--font-mono); font-size:12px; }
-#flog > div { display:grid; grid-template-columns:8px auto 1fr auto; gap:8px; align-items:center; padding:7px 0; border-bottom:1px solid var(--line); font-size:13px; }
+#fstat { font-size:12.5px; color:var(--ink); margin-bottom:6px; }
+#flog > div { display:grid; grid-template-columns:8px auto 1fr auto; gap:8px; align-items:center; padding:6px 0; border-bottom:1px solid var(--line); font-size:12.5px; }
 #flog i { width:8px; height:8px; border-radius:50%; }
 #flog b { white-space:nowrap; }
 #flog span { color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
@@ -255,7 +233,7 @@ body.clean #focus { display:none !important; }
 
 <div id="brand"><div class="clock"><b id="clock">--:--</b></div></div>
 
-<button id="focuschip" class="glass" hidden><span class="k"></span><span class="t"></span></button>
+<button id="focusline" hidden aria-live="off"><span class="l"><span class="k"></span><span class="t"></span><span class="s"></span></span><span class="bar"><i></i></span></button>
 
 <div id="tools">
   <button class="ib" id="musicbtn" aria-pressed="false" title="音樂" aria-label="音樂"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/></svg></button>
@@ -274,7 +252,6 @@ body.clean #focus { display:none !important; }
 
 <div id="dock">
   <button class="pillbtn primary" id="pickbtn">選一列車</button>
-  <button class="pillbtn" id="focusdock" aria-pressed="false" title="專注時刻（P 開始／暫停）">專注</button>
   <button class="pillbtn" id="roambtn" aria-pressed="false" title="每隔一段時間自動換一列車，偶爾去機場看飛機起降">漫遊</button>
   <button class="pillbtn small" id="viewbtn" title="切換跟車視角（V）" disabled>視角・追車</button>
 </div>
@@ -315,44 +292,6 @@ body.clean #focus { display:none !important; }
   </section>
 </section>
 
-<section id="focus" class="panel" hidden aria-label="專注時刻">
-  <section>
-    <div class="fdial">
-      <svg viewBox="0 0 120 120" aria-hidden="true"><circle class="bg" cx="60" cy="60" r="54"/><circle id="fring" cx="60" cy="60" r="54"/></svg>
-      <div class="mid"><div id="fphase"></div><div id="ftime" aria-live="off"></div><div id="fsub"></div></div>
-    </div>
-    <div id="fdots" aria-hidden="true"></div>
-    <div id="fstat"></div>
-    <div class="fctl">
-      <button class="pillbtn primary" id="fgo">開始專注</button>
-      <button class="pillbtn small" id="fskip" title="直接進到下一段（不算完成）">跳過</button>
-      <button class="pillbtn small" id="freset" title="回到第一段專注">重來</button>
-    </div>
-  </section>
-  <section id="ftickets" hidden>
-    <h4>今天的車票</h4>
-    <div id="flog"></div>
-  </section>
-  <section>
-    <h4>節奏</h4>
-    <div class="row" id="fpreset">
-      <button data-v="classic">25／5 分</button><button data-v="deep">50／10 分</button><button data-v="short">15／3 分</button>
-    </div>
-    <div class="note">每完成 4 段專注，休息會拉長一次。</div>
-  </section>
-  <section>
-    <h4>專注時</h4>
-    <div class="row">
-      <button id="fride" title="專注時跟著一班長途車不換車，到終點自動轉乘；休息時自動漫遊">搭一班車</button>
-      <button id="fmusic" title="開始專注時自動播放背景音樂">播放音樂</button>
-      <button id="fclean" title="開始專注時隱藏按鈕與字卡，只留倒數；專注結束自動回來">隱藏介面</button>
-      <button id="fauto" title="一段結束後自動開始下一段">自動接續</button>
-      <button id="fchime" title="每段結束時響兩聲柔和的鐘聲">結束鐘聲</button>
-    </div>
-    <div class="note">專注＝搭一班車，字卡會告訴你結束時大約到哪一站；休息＝下車漫遊。倒數存在這台裝置，重新整理也會接著算。快捷鍵 P 開始／暫停。</div>
-  </section>
-</section>
-
 <section id="sky" class="panel" hidden aria-label="光線與天氣">
   <section>
     <h4>時段</h4>
@@ -377,6 +316,20 @@ body.clean #focus { display:none !important; }
       <button data-v="high" aria-pressed="false" title="完整效果：3D 地形、山影、建築立面、月台旅客，不限幀率">高</button>
     </div>
     <div class="note">預設為省電。想看 3D 地形與完整細節可以改成「高」，手機會比較耗電、發熱。</div>
+  </section>
+  <section>
+    <h4>漫遊・專注</h4>
+    <div id="fstat"></div>
+    <div id="flog"></div>
+    <div class="row" id="fpreset" style="margin-top:10px">
+      <button data-v="off">只漫遊</button><button data-v="classic">25／5 分</button><button data-v="deep">50／10 分</button><button data-v="short">15／3 分</button>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <button id="fclean" title="專注時隱藏按鈕與字卡，只留倒數；休息時回來">專注時隱藏介面</button>
+      <button id="fchime" title="專注與休息交換時響兩聲柔和的鐘聲">鐘聲</button>
+      <button id="freset" title="倒數回到第一段專注">重來</button>
+    </div>
+    <div class="note">漫遊就是番茄鐘：專注時跟著同一班長途車不換車，倒數留在時鐘下面，字卡會說結束時大約到哪一站；休息時每分鐘換一列車或去看飛機。每 4 段專注有一次長休息。點時鐘下的倒數或按 P 可以暫停。</div>
   </section>
   <section>
     <h4>畫面</h4>
@@ -404,7 +357,7 @@ body.clean #focus { display:none !important; }
   </section>
   <section>
     <h4>說明</h4>
-    <div class="note">R 漫遊、V 切換視角、M 播放／暫停音樂、P 番茄鐘開始／暫停、F 隱藏介面、Esc 離開跟車。軌道與底圖 © OpenStreetMap 貢獻者，地形 © Mapzen／AWS Terrain Tiles，音樂由瀏覽器即時合成。</div>
+    <div class="note">R 漫遊、V 切換視角、M 播放／暫停音樂、P 暫停／繼續專注倒數、F 隱藏介面、Esc 離開跟車。軌道與底圖 © OpenStreetMap 貢獻者，地形 © Mapzen／AWS Terrain Tiles，音樂由瀏覽器即時合成。</div>
   </section>
 </section>
 
@@ -415,9 +368,8 @@ body.clean #focus { display:none !important; }
     <div class="btns">
       <button class="pillbtn primary" id="startroam">開始漫遊</button>
       <button class="pillbtn" id="startpick">自己選一列</button>
-      <button class="pillbtn" id="startfocus" title="上一班車，陪你專注 25 分鐘">開始專注</button>
     </div>
-    <small>建議開啟聲音 · 右上角可以選歌</small>
+    <small>漫遊時陪你專注：25 分鐘跟一班車，5 分鐘到處看看 · 建議開啟聲音</small>
   </div>
 </div>
 
