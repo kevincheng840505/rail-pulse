@@ -942,17 +942,33 @@ function pickRoamTrip() {
   for (const p of pool) { r -= weight(p); if (r <= 0) return p.trip; }
   return pool[0].trip;
 }
-// 漫遊也會去機場看飛機起降：大約每四次換一次飛機，剛看完飛機就換回列車
+// 漫遊也會去機場看飛機起降：大約每四、五次換一次飛機，剛看完飛機就換回列車。
+// 只挑一分鐘左右就要起飛離地或落地的航班（不挑停在地上滑行等待的），看完那一刻就換下一個
 function pickRoamFlight() {
-  if (typeof AIR === 'undefined' || !AIR.on || AIR.watch || !S.mapReady || Math.random() > 0.28) return null;
+  if (typeof AIR === 'undefined' || !AIR.on || AIR.watch || !S.mapReady || Math.random() > 0.5) return null;
   const m = curMin(), c = [];
-  for (const ap of WATCH_APS) { const f = pickWatchFlight(ap, m); if (f) c.push(f); }
+  for (const f of AIR.flights) for (const ap of WATCH_APS) {
+    const ev = eventTime(f, ap); if (!ev) continue;
+    let dt = ev.t - m; if (dt < -720) dt += 1440; if (dt > 720) dt -= 1440;
+    if (dt > 0.1 && dt < 1.2 && watchPhase(f, ap, m)) c.push({ f, ap, t: m + dt });
+  }
   return c.length ? c[Math.floor(Math.random() * c.length)] : null;
 }
+// 漫遊中的飛機：離地或落地後約 25 秒就換下一個
+function roamFlightDone() {
+  const R = S.roamFlight; if (!R) return false;
+  if (!AIR.watch || !AIR.watch.f) return true;
+  // 自己按了「換一架」：交給一般的漫遊計時
+  if (AIR.watch.f.id !== R.f.id) { S.roamFlight = null; return false; }
+  return curMin() > R.t + 0.4;
+}
 function roamNext() {
-  const f = pickRoamFlight();
+  S.roamFlight = null;
+  const F = pickRoamFlight();
   // 看飛機會先關掉漫遊，這裡要讓漫遊繼續計時
-  if (f) { AIR.view = 'auto'; S.roamKeep = true; try { watchFlight(f); } finally { S.roamKeep = false; } return; }
+  if (F) { AIR.view = 'auto'; S.roamKeep = true; try { watchFlight(F.f); } finally { S.roamKeep = false; }
+    // 等起飛或落地之後再換（roamFlightDone），一般計時只當保險
+    S.roamFlight = F; S.roamAt = performance.now() + 120000; return; }
   const t = pickRoamTrip(); if (!t) return;
   const views = VIEWS.map(v => v.id).filter(v => v !== S.view);
   S.view = views[Math.floor(Math.random() * views.length)];
@@ -1349,7 +1365,7 @@ function frame(now) {
   } else if (S.follow || (S.nearby && S.nearby.length)) pushFocusFrame();
   stepCamera(now, dt);
   Precip.step(dt, now);
-  if (S.roam && now > S.roamAt && !S.flying) { S.roamAt = now + ROAM_SEC * 1000; roamNext(); }
+  if (S.roam && !S.flying && (now > S.roamAt || roamFlightDone())) { S.roamAt = now + ROAM_SEC * 1000; roamNext(); }
   if (now - lastUi > 500) {
     lastUi = now; renderClock(); renderCaption(); applyLook();
     if (!picker.hidden && document.activeElement !== pq) renderPicker();
