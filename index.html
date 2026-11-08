@@ -3388,19 +3388,29 @@ function pushTrains(force) {
   if (doCars) {
     lastCars = performance.now();
     const bg = near.slice(0, maxCarTrains());
-    for (const { trip, pos } of bg) carFeatures(trip, pos, S.P, cars, false); // 窗格細節只畫在跟拍的列車上
-    TrainGL.set('cars', cars); TrainGL.bg = bg.map(n => n.trip);
-  } else if (z < CAR_ZOOM - 0.3 && lastCars) { TrainGL.set('cars', []); TrainGL.bg = []; lastCars = 0; }
+    // 背景車廂沒動（停站、暫停）就不重送，地圖也不必重畫
+    const ck = S.lookKey + '|' + bg.map(({ trip, pos }) => trip.idx + ':' + pos.km.toFixed(6) + (pos.atStation ? ':' + doorPhase(pos.dwell) : '')).join(',');
+    if (force || ck !== S.carsKey) {
+      S.carsKey = ck;
+      for (const { trip, pos } of bg) carFeatures(trip, pos, S.P, cars, false); // 窗格細節只畫在跟拍的列車上
+      TrainGL.set('cars', cars);
+    }
+    TrainGL.bg = bg.map(n => n.trip);
+  } else if (z < CAR_ZOOM - 0.3 && lastCars) { TrainGL.set('cars', []); TrainGL.bg = []; lastCars = 0; S.carsKey = ''; }
   // 圓點圖層近看時不顯示，降低更新頻率
   if (force || z < CAR_ZOOM + 0.6 || performance.now() - lastDots > 1000) { map.getSource('trains').setData({ type: 'FeatureCollection', features: pts }); lastDots = performance.now(); }
   if (!doLights) bgLights = [];
   if (doLights || S.hadLights) pushLights();
   S.hadLights = doLights;
-  pushFocus();
+  pushFocusIfChanged(force);
 }
 function pushLights() {
   const out = bgLights.slice();
   if (map.getZoom() >= 10.5) for (const t of [S.follow, ...(S.nearby || [])]) { const pos = t && tripPos(t, curMin()); if (pos) trainLights(t, pos, out); }
+  // 燈光位置和上次一樣就不重送：每送一次，背景執行緒要重切整片圖磚、地圖也跟著重畫好幾次
+  const key = out.map(f => f.properties.c + f.geometry.coordinates[0].toFixed(7) + ',' + f.geometry.coordinates[1].toFixed(7)).join(';');
+  if (key === S.lightsKey) return;
+  S.lightsKey = key;
   map.getSource('lights').setData({ type: 'FeatureCollection', features: out });
 }
 function pushFocus() {
@@ -3425,7 +3435,33 @@ function pushFocus() {
   }
   TrainGL.set('people', ppl);
 }
-function pushFocusFrame() { pushFocus(); if (S.hadLights) pushLights(); }
+function pushFocusFrame() { if (pushFocusIfChanged() && S.hadLights) pushLights(); }
+function pushFocusIfChanged(force) {
+  const k = S.mapReady ? focusKey() : null;
+  if (!force && k !== null && k === S.stillKey) return false;
+  S.stillKey = k; pushFocus(); S.focusMoved = true; return true;
+}
+/* 靜止畫面不重畫：列車停站（門已開好）或暫停時，車身、燈光、鏡頭都沒變，就不必每秒重算、重畫 30～60 次。
+   畫面上看起來完全一樣，但手機和電腦的顯示晶片可以休息，比較不會燙。
+   回傳 null 表示畫面裡有一直在動的東西（月台旅客），每一格都要畫 */
+const doorPhase = d => d < 0.11 || d > 0.89 ? d.toFixed(3) : 'o'; // 門正在開關時每格不同，開好之後不再變
+function focusKey() {
+  if (!Quality.low && map.getZoom() >= 16) return null;
+  const m = curMin(), parts = [Math.round(map.getZoom() * 20), S.lookKey, S.hadLights ? 1 : 0, S.nearby ? S.nearby.length : 0];
+  for (const t of [S.follow, ...(S.nearby || [])]) {
+    const p = t && tripPos(t, m);
+    parts.push(p ? t.idx + ':' + p.km.toFixed(6) + (p.atStation ? ':' + doorPhase(p.dwell) : '') : '-');
+  }
+  return parts.join('|');
+}
+// 鏡頭和地圖現在的位置一樣（差不到一個像素的零頭）就不必 jumpTo；jumpTo 本身就會讓地圖重畫一次
+function camSame(cam) {
+  const c = map.getCenter(), cl = cam.center.lng != null ? cam.center : { lng: cam.center[0], lat: cam.center[1] };
+  return Math.abs(c.lng - cl.lng) < 1e-9 && Math.abs(c.lat - cl.lat) < 1e-9 &&
+    (cam.zoom == null || Math.abs(map.getZoom() - cam.zoom) < 1e-6) &&
+    (cam.pitch == null || Math.abs(map.getPitch() - cam.pitch) < 1e-4) &&
+    (cam.bearing == null || Math.abs(angDiff(map.getBearing(), cam.bearing)) < 1e-4);
+}
 
 /* ---------- 跟車鏡頭 ---------- */
 let flightId = 0;
@@ -3551,7 +3587,7 @@ function stepCamera(now, dt) {
       const c = map.getCenter(), cam = { center: [c.lng + ll[0] - prev[0], c.lat + ll[1] - prev[1]] };
       // 傾斜按鈕：每一格往目標俯仰角靠近一點，跟平移一起做，車子不會在動畫中跑掉
       if (S.tiltTo != null) { const p0 = map.getPitch(); cam.pitch = p0 + (S.tiltTo - p0) * (1 - Math.exp(-dt / 110)); if (Math.abs(S.tiltTo - cam.pitch) < 0.2) { cam.pitch = S.tiltTo; S.tiltTo = null; } }
-      map.jumpTo(cam);
+      if (!camSame(cam)) { map.jumpTo(cam); S.camMoved = true; }
     }
     return;
   }
@@ -3564,7 +3600,7 @@ function stepCamera(now, dt) {
     cam.bearing = T.bearing + angDiff(T.bearing, cam.bearing) * k;
     if (k >= 1) S.trans = null;
   }
-  map.jumpTo(cam);
+  if (!camSame(cam)) { map.jumpTo(cam); S.camMoved = true; }
 }
 function unlockView() {
   if (!S.follow) return;
@@ -4020,6 +4056,7 @@ function frame(now) {
   // 依縮放放慢更新頻率；跟車時維持每 0.1 秒
   const zNow = S.mapReady ? map.getZoom() : 0;
   const pushGap = S.follow ? 100 : zNow < 9 ? 1000 : zNow < 12 ? 500 : zNow < 13.5 ? 200 : 100;
+  S.camMoved = false; S.focusMoved = false;
   if (now - lastPush > pushGap) {
     updatePositions(); pushTrains(); lastPush = now;
     // 列車抵達終點：漫遊時換下一列
@@ -4035,7 +4072,7 @@ function frame(now) {
   }
   // 跟車時當格同步重繪：鏡頭、車身平移和背景執行緒剛送回的列車圖磚一起畫，
   // 不讓地圖自己排的重繪拿到「新車身＋舊平移」而前後跳一下
-  if (S.mapReady && S.follow && !S.followPaused && !S.flying) map.redraw();
+  if (S.mapReady && S.follow && !S.followPaused && !S.flying && (S.camMoved || S.focusMoved)) map.redraw();
 }
 
 /* ---------- ?perf：載入計時面板 ----------
