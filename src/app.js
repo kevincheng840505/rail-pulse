@@ -1369,7 +1369,7 @@ function closeIntro(then) {
   then();
 }
 // 班次與軌道載入完成前先停用開場按鈕，避免漫遊或選車時還沒有列車
-const startBtns = [$('#startroam'), $('#startpick'), $('#startfocus')];
+const startBtns = [$('#startroam'), $('#startpick')];
 startBtns.forEach(b => { b.disabled = true; });
 $('#startroam').addEventListener('click', () => closeIntro(() => setRoam(true)));
 $('#startpick').addEventListener('click', () => closeIntro(openPicker));
