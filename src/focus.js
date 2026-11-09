@@ -89,7 +89,9 @@ const Focus = (() => {
     const p = tripPos(c.t, curMin());
     trip = c.t;
     F.mode = 'ride';
-    F.ride = { sys: c.t.sys, no: c.t.no, origin: c.t.origin, dest: c.i, km0: p ? p.km : c.t.cum[0], from: p ? stationName(c.t, p) : c.t.origin, start: Date.now(), plan: Math.round(c.a) };
+    F.ride = { sys: c.t.sys, no: c.t.no, origin: c.t.origin, dest: c.i, km0: p ? p.km : c.t.cum[0], from: p ? stationName(c.t, p) : c.t.origin, start: Date.now(), plan: Math.round(c.a),
+      // 營運日分鐘數的起點：之後用模擬時間往前加，跨午夜也不會跳回當天的分鐘數
+      sim0: S.simMs, tm0: tripMinute(c.t) };
     save();
     if (S.roam) setRoam(false);
     follow(c.t);
@@ -100,9 +102,10 @@ const Focus = (() => {
   }
   // 上車的地方：停在站上就是那一站，行駛中就寫「上一站」
   const stationName = (t, p) => t.nodes[p.seg].name;
-  const left = () => trip && F.ride ? (effTime(trip, F.ride.dest, 'arr') - tripMinute(trip)) * 60 : 0;
+  const rideMin = () => F.ride.tm0 + (S.simMs - F.ride.sim0) / 60000;
+  const left = () => trip && F.ride ? (effTime(trip, F.ride.dest, 'arr') - rideMin()) * 60 : 0;
   function arrive() {
-    const r = F.ride, t = trip, mins = Math.max(1, Math.round((Date.now() - r.start) / 60000));
+    const r = F.ride, t = trip, mins = Math.max(1, Math.min(Math.round((Date.now() - r.start) / 60000), Math.round(effTime(t, r.dest, 'arr') - r.tm0))); // 重新整理晚回來也只算這趟車的時間
     const km = Math.max(0, t.cum[r.dest] - r.km0);
     F.done++; F.mins += mins; F.km += km;
     const long = F.round % 4 === 3; F.round++;
@@ -146,7 +149,9 @@ const Focus = (() => {
   function tick() {
     if (F.day !== today()) { newDay(); save(); }
     if (F.mode === 'ride') {
-      if (!trip) { trip = findTrip(); if (!trip) { if (TRIPS.length) endAll(); return; } if (S.started && S.follow !== trip) follow(trip); }
+      if (!trip) { trip = findTrip(); if (!trip) { if (TRIPS.length) endAll(); return; } if (left() <= 0) return arrive(); if (S.started && S.follow !== trip) follow(trip); }
+      // TDX 換了一份時刻表：同一班車換成新物件，跟著換過來
+      if (S.follow && S.follow !== trip && sameService(S.follow)) trip = S.follow;
       // 自己換了別的車或離開跟車：當作下車
       if (S.started && S.follow !== trip && !S.flying) return getOff();
       if (left() <= 0) return arrive();
@@ -159,9 +164,11 @@ const Focus = (() => {
     render();
   }
   // 重新整理之後找回原本那班車（捷運沒有車次號碼，找不回來就結束）
+  const sameService = t => { const r = F.ride; return !!r && !!r.no && t.sys === r.sys && t.no === r.no && t.origin === r.origin; };
   function findTrip() {
     const r = F.ride; if (!r || !r.no) return null;
-    return TRIPS.find(t => t.sys === r.sys && t.no === r.no && t.origin === r.origin && tripPos(t, curMin())) || null;
+    const all = TRIPS.filter(sameService);
+    return all.find(t => tripPos(t, curMin())) || all[0] || null; // 已經到站的也找回來，才能補發車票
   }
 
   /* ---------- 畫面 ---------- */
@@ -171,7 +178,7 @@ const Focus = (() => {
     document.body.classList.toggle('resting', resting);
     card.hidden = !(riding || resting);
     if (riding) {
-      const s = left(), r = F.ride, total = Math.max(60, (effTime(trip, r.dest, 'arr') - tripMinute(trip)) * 60 + (Date.now() - r.start) / 1000);
+      const s = left(), r = F.ride, total = Math.max(60, (effTime(trip, r.dest, 'arr') - r.tm0) * 60);
       card.style.setProperty('--fc', 'var(--accent)');
       $('#rphase').textContent = '專注'; $('#rtrain').textContent = trainTitle(trip);
       $('#rt').textContent = mmss(s);
