@@ -1055,9 +1055,7 @@ function renderCaption(force) {
   const progress = pos ? Math.min(1, pos.km / total) : (next === '已抵達終點' ? 1 : 0);
   const delay = t.sys === 'TRA' ? (t.delay ? `<span class="late">晚 ${t.delay} 分</span>` : '<span class="ok">準點</span>') : '';
   const speed = pos && !pos.atStation ? Math.round((t.cum[pos.seg + 1] - t.cum[pos.seg]) / Math.max(0.1, effTime(t, pos.seg + 1, 'arr') - effTime(t, pos.seg, 'dep')) * 60) : 0;
-  // 專注中：多一行「專注結束時大約到哪一站」（focus.js）
-  const frow = typeof Focus !== 'undefined' ? Focus.capRow(t) : '';
-  const key = [t.idx, next, eta, Math.round(progress * 200), S.followPaused, speed, t.delay, frow].join('|');
+  const key = [t.idx, next, eta, Math.round(progress * 200), S.followPaused, speed, t.delay].join('|');
   if (key === capKey && !force) return;
   capKey = key;
   cap.classList.toggle('mini', !S.capOpen);
@@ -1070,7 +1068,6 @@ function renderCaption(force) {
     <div class="next"><div><div class="lab">${pos && pos.atStation ? '此刻' : '下一站'}</div><b>${esc(next)}</b></div><span class="eta">${esc(eta)}</span></div>
     <div class="bar"><i style="width:${(progress * 100).toFixed(1)}%"></i></div>
     <div class="meta"><span>已過 ${done} / ${stops} 站</span><span>${speed ? '約 ' + speed + ' km/h' : ''}</span></div>
-    ${frow}
     <div class="caprow"><button class="pillbtn small" id="leave2">離開</button></div>`;
 }
 // 字卡預設是一條細長的列，點一下展開完整資訊，再點一下收起
@@ -1369,7 +1366,7 @@ function closeIntro(then) {
   then();
 }
 // 班次與軌道載入完成前先停用開場按鈕，避免漫遊或選車時還沒有列車
-const startBtns = [$('#startroam'), $('#startpick')];
+const startBtns = [$('#startroam'), $('#startpick'), $('#startfocus')];
 startBtns.forEach(b => { b.disabled = true; });
 $('#startroam').addEventListener('click', () => closeIntro(() => setRoam(true)));
 $('#startpick').addEventListener('click', () => closeIntro(openPicker));
