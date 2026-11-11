@@ -1,0 +1,11 @@
+name = "rail-pulse-tdx"
+main = "worker.mjs"
+compatibility_date = "2026-11-01"
+
+[vars]
+ALLOWED_ORIGINS = "https://kevincheng840505.github.io"
+
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1001"
+simple = { limit = 60, period = 60 }

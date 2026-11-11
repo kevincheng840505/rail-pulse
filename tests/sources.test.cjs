@@ -38,3 +38,11 @@ test('actual generated flight model is never labelled as an official timetable',
  const rows=vm.runInContext('estimateFlights().map(f=>DataSource.describe(f))',c);assert.ok(rows.length>100);
  for(const r of rows){assert.ok(r.types.includes('estimated_timetable'));assert.ok(!r.types.includes('official_timetable'));assert.match(r.text,/非實際定位/)}
 });
+test('keyless client never requests a token or sends a bearer credential',async()=>{
+ const c=engine();const requests=[];c.store={get:(k,d)=>k==='tdxProxy'?'https://proxy.example':d};
+ c.fetch=async(url,opt)=>{requests.push({url,opt});return Response.json([],{headers:{'x-data-updated-at':'12345'}})};
+ const cred=vm.runInContext('TDX.credentials()',c);assert.equal(cred.proxy,'https://proxy.example');c.cred=cred;
+ await vm.runInContext("TDX.get('v2/Rail/TRA/LiveTrainDelay',cred)",c);
+ assert.equal(requests.length,1);assert.equal(requests[0].url,'https://proxy.example/tdx/v2/Rail/TRA/LiveTrainDelay');assert.equal(requests[0].opt.headers.authorization,undefined);
+ assert.equal(vm.runInContext("TDX.sourceTimes.get('v2/Rail/TRA/LiveTrainDelay')",c),12345);
+});

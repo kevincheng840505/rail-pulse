@@ -376,6 +376,13 @@ async function tdxFetch(url, ms, what, opt) {
   } finally { clearTimeout(tm); }
 }
 const TDX = {
+  sourceTimes: new Map(),
+  credentials() {
+    const personal = store.get('tdx', {});
+    if (personal.id && personal.secret) return personal;
+    const proxy = store.get('tdxProxy', typeof document !== 'undefined' ? document.querySelector('meta[name=tdx-proxy]')?.content || '' : '');
+    return proxy ? {proxy} : null;
+  },
   token: null, exp: 0, status: '未連線', ok: false, lastDelay: null,
   async auth(id, secret) {
     if (this.token && Date.now() < this.exp) return this.token;
@@ -413,7 +420,7 @@ const TDX = {
     const wait = Math.max(this.nextAt, this.holdUntil) - Date.now();
     if (wait > 0) { this.qTimer = setTimeout(() => { this.qTimer = 0; this.pump(); }, wait); return; }
     // 金鑰還沒拿到（開頁、過期）：先驗證完再放行，不然驗證期間排出去的請求會在驗證完同一瞬間一起送出
-    if (!this.token || Date.now() >= this.exp) {
+    if (!this.q[0].cred.proxy && (!this.token || Date.now() >= this.exp)) {
       const c = this.q[0].cred;
       this.qAuth = true;
       this.auth(c.id, c.secret)
@@ -430,10 +437,10 @@ const TDX = {
   },
   async send(job) {
     try {
-      const tk = await this.auth(job.cred.id, job.cred.secret);
+      const tk = job.cred.proxy ? null : await this.auth(job.cred.id, job.cred.secret);
       if (job.perf) job.perf.sent = performance.now();
-      const r = await tdxFetch('https://tdx.transportdata.tw/api/basic/' + job.path + (job.path.includes('?') ? '&' : '?') + '$format=JSON', 45e3, '讀取資料', {
-        headers:{ authorization:'Bearer ' + tk } });
+      const url = job.cred.proxy ? job.cred.proxy + '/tdx/' + job.path : 'https://tdx.transportdata.tw/api/basic/' + job.path + (job.path.includes('?') ? '&' : '?') + '$format=JSON';
+      const r = await tdxFetch(url, 45e3, '讀取資料', { headers:tk ? {authorization:'Bearer ' + tk} : {} });
       if (r.status === 429 && job.tries < 4) {
         job.tries++;
         const ra = +r.headers.get('retry-after');
@@ -445,6 +452,7 @@ const TDX = {
       }
       if (!r.ok) throw new Error('TDX 回應 HTTP ' + r.status);
       if (Date.now() > this.holdUntil + 10e3) this.hold = 0;
+      this.sourceTimes.set(job.path, Number(r.headers.get('x-data-updated-at')) || Date.now());
       const body = await r.json();
       if (job.perf) { job.perf.done = performance.now(); job.perf.n = Array.isArray(body) ? body.length : body && body.TrainTimetables ? body.TrainTimetables.length : ''; }
       job.res(body);
@@ -496,13 +504,13 @@ const TDX = {
       const info = t.TrainInfo;
       const trip = this.toTrip('TRA', info.TrainNo, (info.TrainTypeName && info.TrainTypeName.Zh_tw) || '',
         t.StopTimes.map(s => ({ name:s.StationName.Zh_tw, arr:s.ArrivalTime, dep:s.DepartureTime })));
-      if (trip) trips.push(trip);
+      if (trip) { trip.sources.timetable.updatedAt = this.sourceTimes.get(trip.sys === 'TRA' ? 'v3/Rail/TRA/DailyTrainTimetable/Today' : 'v2/Rail/THSR/DailyTimetable/Today') || Date.now(); trips.push(trip); }
     }
     for (const t of (thsr || [])) {
       const info = t.DailyTrainInfo;
       const trip = this.toTrip('THSR', info.TrainNo, '',
         t.StopTimes.map(s => ({ name:s.StationName.Zh_tw, arr:s.ArrivalTime || s.DepartureTime, dep:s.DepartureTime || s.ArrivalTime })));
-      if (trip) trips.push(trip);
+      if (trip) { trip.sources.timetable.updatedAt = this.sourceTimes.get(trip.sys === 'TRA' ? 'v3/Rail/TRA/DailyTrainTimetable/Today' : 'v2/Rail/THSR/DailyTimetable/Today') || Date.now(); trips.push(trip); }
     }
     if (!trips.length) throw new Error('沒有取得任何班次');
     return trips;
@@ -521,9 +529,9 @@ const TDX = {
       if (c && Date.now() - c.t < 3 * 864e5) { if (PERF) perfMark('捷運快取 ' + op); return { op, sys, updatedAt:c.t, s2s: c.s2s, freq: c.freq, fl: c.fl }; }
       const get = path => this.get(`v2/Rail/Metro/${path}/${op}`, cred, 2).catch(() => null);
       const [s2s, freq, fl] = await Promise.all([get('S2STravelTime'), get('Frequency'), get('FirstLastTimetable')]);
-      const D = { op, sys, updatedAt:Date.now(), s2s: Array.isArray(s2s) ? s2s : [], freq: Array.isArray(freq) ? freq : [], fl: Array.isArray(fl) ? fl : [] };
+      const D = { op, sys, updatedAt:Math.min(...['S2STravelTime','Frequency','FirstLastTimetable'].map(k=>this.sourceTimes.get(`v2/Rail/Metro/${k}/${op}`) || Date.now())), s2s: Array.isArray(s2s) ? s2s : [], freq: Array.isArray(freq) ? freq : [], fl: Array.isArray(fl) ? fl : [] };
       // 站間時間和首末班都有才存；班距沒有（例如高雄輕軌 TDX 回 400）照存，下次也不再問
-      if (D.s2s.length && D.fl.length) cacheDB.set(key, { t: Date.now(), s2s: D.s2s, freq: D.freq, fl: D.fl });
+      if (D.s2s.length && D.fl.length) cacheDB.set(key, { t: D.updatedAt, s2s: D.s2s, freq: D.freq, fl: D.fl });
       return D;
     }));
     const trips = [], covered = new Set();
@@ -631,7 +639,7 @@ const TDX = {
     for (const d of j) map.set(String(d.TrainNo), d.DelayTime);
     for (const t of TRIPS) if (t.sys === 'TRA' && t.live) {
       t.liveDelay = map.has(t.no) && Number.isFinite(map.get(t.no)) ? map.get(t.no) : null;
-      t.sources.delay = t.liveDelay == null ? null : DataSource.record('official_delay', Date.now(), 120e3);
+      t.sources.delay = t.liveDelay == null ? null : DataSource.record('official_delay', this.sourceTimes.get('v2/Rail/TRA/LiveTrainDelay') || Date.now(), 120e3);
       t.delay = t.liveDelay || 0;
       t.end = t.times[t.times.length - 1].arr + t.delay;
     }

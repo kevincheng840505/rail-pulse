@@ -1,5 +1,6 @@
 <!doctype html>
 <html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="tdx-proxy" content="">
 <title>鐵道脈動</title>
 <meta name="description" content="全台鐵道 3D 即時動態：選一列車，跟著它穿過山海與城市。">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -407,6 +408,10 @@ body.clean #ride { opacity:.75; }
     <h4>TDX 即時資料</h4>
     <div class="note">填入 <a href="https://tdx.transportdata.tw/" target="_blank" rel="noopener">TDX</a> 的 API 金鑰後，台鐵與高鐵改用當日官方時刻表，台鐵每分鐘套用即時誤點；捷運與輕軌改用官方站間行駛時間、各時段班距與首末班車。金鑰只存在這台裝置的瀏覽器。</div>
     <label for="tdxid">Client ID</label>
+    <label for="tdxproxy">一般使用者：TDX 代理網址（不需個人金鑰）</label>
+    <input id="tdxproxy" type="url" placeholder="https://your-proxy.workers.dev" autocomplete="off">
+    <button class="pillbtn" id="tdxproxygo">使用免金鑰模式</button>
+    <div class="note">代理需由網站管理員部署。以下個人模式為選用；瀏覽器儲存不是安全的密鑰保管庫，請勿在共用裝置輸入密鑰。</div>
     <input id="tdxid" autocomplete="off" spellcheck="false">
     <label for="tdxsecret">Client Secret</label>
     <input id="tdxsecret" type="password" autocomplete="off" spellcheck="false">
@@ -1377,6 +1382,13 @@ async function tdxFetch(url, ms, what, opt) {
   } finally { clearTimeout(tm); }
 }
 const TDX = {
+  sourceTimes: new Map(),
+  credentials() {
+    const personal = store.get('tdx', {});
+    if (personal.id && personal.secret) return personal;
+    const proxy = store.get('tdxProxy', typeof document !== 'undefined' ? document.querySelector('meta[name=tdx-proxy]')?.content || '' : '');
+    return proxy ? {proxy} : null;
+  },
   token: null, exp: 0, status: '未連線', ok: false, lastDelay: null,
   async auth(id, secret) {
     if (this.token && Date.now() < this.exp) return this.token;
@@ -1414,7 +1426,7 @@ const TDX = {
     const wait = Math.max(this.nextAt, this.holdUntil) - Date.now();
     if (wait > 0) { this.qTimer = setTimeout(() => { this.qTimer = 0; this.pump(); }, wait); return; }
     // 金鑰還沒拿到（開頁、過期）：先驗證完再放行，不然驗證期間排出去的請求會在驗證完同一瞬間一起送出
-    if (!this.token || Date.now() >= this.exp) {
+    if (!this.q[0].cred.proxy && (!this.token || Date.now() >= this.exp)) {
       const c = this.q[0].cred;
       this.qAuth = true;
       this.auth(c.id, c.secret)
@@ -1431,10 +1443,10 @@ const TDX = {
   },
   async send(job) {
     try {
-      const tk = await this.auth(job.cred.id, job.cred.secret);
+      const tk = job.cred.proxy ? null : await this.auth(job.cred.id, job.cred.secret);
       if (job.perf) job.perf.sent = performance.now();
-      const r = await tdxFetch('https://tdx.transportdata.tw/api/basic/' + job.path + (job.path.includes('?') ? '&' : '?') + '$format=JSON', 45e3, '讀取資料', {
-        headers:{ authorization:'Bearer ' + tk } });
+      const url = job.cred.proxy ? job.cred.proxy + '/tdx/' + job.path : 'https://tdx.transportdata.tw/api/basic/' + job.path + (job.path.includes('?') ? '&' : '?') + '$format=JSON';
+      const r = await tdxFetch(url, 45e3, '讀取資料', { headers:tk ? {authorization:'Bearer ' + tk} : {} });
       if (r.status === 429 && job.tries < 4) {
         job.tries++;
         const ra = +r.headers.get('retry-after');
@@ -1446,6 +1458,7 @@ const TDX = {
       }
       if (!r.ok) throw new Error('TDX 回應 HTTP ' + r.status);
       if (Date.now() > this.holdUntil + 10e3) this.hold = 0;
+      this.sourceTimes.set(job.path, Number(r.headers.get('x-data-updated-at')) || Date.now());
       const body = await r.json();
       if (job.perf) { job.perf.done = performance.now(); job.perf.n = Array.isArray(body) ? body.length : body && body.TrainTimetables ? body.TrainTimetables.length : ''; }
       job.res(body);
@@ -1497,13 +1510,13 @@ const TDX = {
       const info = t.TrainInfo;
       const trip = this.toTrip('TRA', info.TrainNo, (info.TrainTypeName && info.TrainTypeName.Zh_tw) || '',
         t.StopTimes.map(s => ({ name:s.StationName.Zh_tw, arr:s.ArrivalTime, dep:s.DepartureTime })));
-      if (trip) trips.push(trip);
+      if (trip) { trip.sources.timetable.updatedAt = this.sourceTimes.get(trip.sys === 'TRA' ? 'v3/Rail/TRA/DailyTrainTimetable/Today' : 'v2/Rail/THSR/DailyTimetable/Today') || Date.now(); trips.push(trip); }
     }
     for (const t of (thsr || [])) {
       const info = t.DailyTrainInfo;
       const trip = this.toTrip('THSR', info.TrainNo, '',
         t.StopTimes.map(s => ({ name:s.StationName.Zh_tw, arr:s.ArrivalTime || s.DepartureTime, dep:s.DepartureTime || s.ArrivalTime })));
-      if (trip) trips.push(trip);
+      if (trip) { trip.sources.timetable.updatedAt = this.sourceTimes.get(trip.sys === 'TRA' ? 'v3/Rail/TRA/DailyTrainTimetable/Today' : 'v2/Rail/THSR/DailyTimetable/Today') || Date.now(); trips.push(trip); }
     }
     if (!trips.length) throw new Error('沒有取得任何班次');
     return trips;
@@ -1522,9 +1535,9 @@ const TDX = {
       if (c && Date.now() - c.t < 3 * 864e5) { if (PERF) perfMark('捷運快取 ' + op); return { op, sys, updatedAt:c.t, s2s: c.s2s, freq: c.freq, fl: c.fl }; }
       const get = path => this.get(`v2/Rail/Metro/${path}/${op}`, cred, 2).catch(() => null);
       const [s2s, freq, fl] = await Promise.all([get('S2STravelTime'), get('Frequency'), get('FirstLastTimetable')]);
-      const D = { op, sys, updatedAt:Date.now(), s2s: Array.isArray(s2s) ? s2s : [], freq: Array.isArray(freq) ? freq : [], fl: Array.isArray(fl) ? fl : [] };
+      const D = { op, sys, updatedAt:Math.min(...['S2STravelTime','Frequency','FirstLastTimetable'].map(k=>this.sourceTimes.get(`v2/Rail/Metro/${k}/${op}`) || Date.now())), s2s: Array.isArray(s2s) ? s2s : [], freq: Array.isArray(freq) ? freq : [], fl: Array.isArray(fl) ? fl : [] };
       // 站間時間和首末班都有才存；班距沒有（例如高雄輕軌 TDX 回 400）照存，下次也不再問
-      if (D.s2s.length && D.fl.length) cacheDB.set(key, { t: Date.now(), s2s: D.s2s, freq: D.freq, fl: D.fl });
+      if (D.s2s.length && D.fl.length) cacheDB.set(key, { t: D.updatedAt, s2s: D.s2s, freq: D.freq, fl: D.fl });
       return D;
     }));
     const trips = [], covered = new Set();
@@ -1632,7 +1645,7 @@ const TDX = {
     for (const d of j) map.set(String(d.TrainNo), d.DelayTime);
     for (const t of TRIPS) if (t.sys === 'TRA' && t.live) {
       t.liveDelay = map.has(t.no) && Number.isFinite(map.get(t.no)) ? map.get(t.no) : null;
-      t.sources.delay = t.liveDelay == null ? null : DataSource.record('official_delay', Date.now(), 120e3);
+      t.sources.delay = t.liveDelay == null ? null : DataSource.record('official_delay', this.sourceTimes.get('v2/Rail/TRA/LiveTrainDelay') || Date.now(), 120e3);
       t.delay = t.liveDelay || 0;
       t.end = t.times[t.times.length - 1].arr + t.delay;
     }
@@ -3954,7 +3967,7 @@ mseek.addEventListener('input', () => { seeking = true; $('#mcur').textContent =
 mseek.addEventListener('change', () => { seeking = false; Music.seek(mseek.value / 1000 * Music.tracks[Music.index].dur); });
 $('#setbtn').addEventListener('click', () => {
   settings.hidden = !settings.hidden;
-  if (!settings.hidden) { closePicker(); sky.hidden = true; musicPanel.hidden = true; const c = store.get('tdx', {}); $('#tdxid').value = c.id || ''; $('#tdxsecret').value = c.secret || ''; }
+  if (!settings.hidden) { closePicker(); sky.hidden = true; musicPanel.hidden = true; const c = store.get('tdx', {}); $('#tdxid').value = c.id || ''; $('#tdxsecret').value = c.secret || ''; $('#tdxproxy').value = store.get('tdxProxy', ''); }
 });
 function toggleBtn(id, key, apply) {
   const b = $(id); b.setAttribute('aria-pressed', String(S[key]));
@@ -4071,7 +4084,7 @@ async function connectTDX(cred, quiet) {
 let delayAt = 0;
 document.addEventListener('visibilitychange', () => {
   if (document.hidden || !TDX.ok) return;
-  const cred = store.get('tdx', {}); if (!cred.id || !cred.secret) return;
+  const cred = TDX.credentials(); if (!cred) return;
   const now = Date.now();
   if (twDate(now) !== TDX.date && minOfDay(now) >= 240) connectTDX(cred, true);
   else if (now - delayAt > 60e3) { delayAt = now; const g = tdxGen; TDX.loadDelays(cred, () => g === tdxGen).catch(() => {}); }
@@ -4079,10 +4092,20 @@ document.addEventListener('visibilitychange', () => {
 $('#tdxgo').addEventListener('click', () => {
   const cred = { id: $('#tdxid').value.trim(), secret: $('#tdxsecret').value.trim() };
   if (!cred.id || !cred.secret) { tdxStatus('請填入 Client ID 與 Client Secret。'); return; }
-  store.set('tdx', cred); connectTDX(cred);
+  store.set('tdx', cred); store.set('tdxProxy', ''); TDX.token = null; connectTDX(cred);
+});
+$('#tdxproxygo').addEventListener('click', () => {
+  let url;
+  try {
+    url = new URL($('#tdxproxy').value.trim());
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.pathname !== '/') throw new Error();
+  } catch { tdxStatus('請填入 HTTPS 代理根網址（不含路徑、帳密或查詢參數）。'); return; }
+  store.set('tdx', {}); store.set('tdxProxy', url.origin); TDX.token = null;
+  $('#tdxid').value = ''; $('#tdxsecret').value = '';
+  connectTDX({proxy:url.origin});
 });
 $('#tdxclear').addEventListener('click', () => {
-  tdxGen++; store.set('tdx', {}); TDX.ok = false; clearInterval(delayTimer);
+  tdxGen++; store.set('tdx', {}); store.set('tdxProxy', ''); TDX.loading = false; TDX.ok = false; clearInterval(delayTimer);
   generateAll(); afterTripsChanged(); tdxStatus('已改回班表推估。');
 });
 
@@ -4200,8 +4223,8 @@ async function boot() {
   startBtns.forEach(b => { b.disabled = false; });
   perfMark('開場按鈕可按');
   requestAnimationFrame(t => { last = t; frame(t); });
-  const cred = store.get('tdx', {});
-  if (cred.id && cred.secret) connectTDX(cred, true);
+  const cred = TDX.credentials();
+  if (cred) connectTDX(cred, true);
 }
 boot();
 </script>
@@ -4362,8 +4385,8 @@ function parseAlerts(label, j) {
 }
 async function loadAlerts() {
   if (!Extras.alerts || Extras.demo) return;
-  const cred = store.get('tdx', {});
-  if (!cred.id || !cred.secret) { setAlerts([]); return; }
+  const cred = TDX.credentials();
+  if (!cred) { setAlerts([]); return; }
   if (Extras.alertBusy) return; Extras.alertBusy = true; // 開頁和按下連線都會觸發，不要重複排
   Extras.alertLoad = Date.now();
   const res = await Promise.allSettled(ALERT_SOURCES.map(([label, path]) => TDX.get(path, cred, 0).then(j => parseAlerts(label, j)))).finally(() => { Extras.alertBusy = false; });
@@ -4417,6 +4440,7 @@ extrasToggle('#alertbtn', 'alerts', on => {
   if (on) { Extras.alertList = []; loadAlerts().catch(() => {}); }
   else { clearTimeout(Extras.alertTimer); noticeEl.classList.remove('on'); noticeEl.hidden = true; Extras.alertList = []; }
 });
+$('#tdxproxygo').addEventListener('click', () => setTimeout(() => loadAlerts().catch(() => {}), 1500));
 $('#tdxgo').addEventListener('click', () => setTimeout(() => loadAlerts().catch(() => {}), 1500));
 $('#tdxclear').addEventListener('click', () => setAlerts([]));
 
@@ -4640,8 +4664,8 @@ function estimateFlights() {
   return out;
 }
 async function loadFlights() {
-  const cred = store.get('tdx', {});
-  if (!cred.id || !cred.secret) { AIR.sourceError = false; AIR.flights = estimateFlights(); AIR.live = false; AIR.status = '班表推估'; return; }
+  const cred = TDX.credentials();
+  if (!cred) { AIR.sourceError = false; AIR.flights = estimateFlights(); AIR.live = false; AIR.status = '班表推估'; return; }
   AIR.loadAt = Date.now();
   const gen = ++AIR.gen;
   const d0 = dayStart(Date.now());
@@ -5440,13 +5464,14 @@ document.addEventListener('keydown', e => {
   b.addEventListener('click', () => { AIR.on = !AIR.on; store.set('planes', AIR.on); b.setAttribute('aria-pressed', String(AIR.on)); setPlaneVis(); });
 })();
 // 上一次還在讀就不重複排（開頁和按下連線都會觸發）
-function reloadFlights() { if (AIR.loading) return; AIR.loading = true; loadFlights().catch(e => { console.warn(e); AIR.sourceError = true; AIR.flights = estimateFlights(); }).finally(() => { AIR.loading = false; }); }
+function reloadFlights() { if (AIR.loading) { AIR.reloadPending = true; return; } AIR.loading = true; loadFlights().catch(e => { console.warn(e); AIR.sourceError = true; AIR.live = false; AIR.status = '航班服務錯誤，使用推估'; AIR.flights = estimateFlights(); }).finally(() => { AIR.loading = false; if (AIR.reloadPending) { AIR.reloadPending = false; reloadFlights(); } }); }
 AIR.flights = estimateFlights();
 // TDX 佇列會控制請求頻率，不必等太久；時刻表先排進佇列，航班隨後
 setTimeout(reloadFlights, 1500);
 // 航班時間會隨延誤更新：有金鑰時每 10 分鐘重新讀一次
 // 分頁在背景時不讀，回到前景後一分鐘內補讀
-setInterval(() => { if (!document.hidden && Date.now() - AIR.loadAt > 10 * 60e3 && store.get('tdx', {}).id) reloadFlights(); }, 60e3);
+setInterval(() => { if (!document.hidden && Date.now() - AIR.loadAt > 10 * 60e3 && TDX.credentials()) reloadFlights(); }, 60e3);
+$('#tdxproxygo').addEventListener('click', () => { AIR.gen++; setTimeout(reloadFlights, 2500); });
 $('#tdxgo').addEventListener('click', () => setTimeout(reloadFlights, 2500));
 $('#tdxclear').addEventListener('click', () => { AIR.gen++; AIR.sourceError = false; AIR.flights = estimateFlights(); AIR.live = false; });
 </script>

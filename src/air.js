@@ -204,8 +204,8 @@ function estimateFlights() {
   return out;
 }
 async function loadFlights() {
-  const cred = store.get('tdx', {});
-  if (!cred.id || !cred.secret) { AIR.sourceError = false; AIR.flights = estimateFlights(); AIR.live = false; AIR.status = '班表推估'; return; }
+  const cred = TDX.credentials();
+  if (!cred) { AIR.sourceError = false; AIR.flights = estimateFlights(); AIR.live = false; AIR.status = '班表推估'; return; }
   AIR.loadAt = Date.now();
   const gen = ++AIR.gen;
   const d0 = dayStart(Date.now());
@@ -1004,12 +1004,13 @@ document.addEventListener('keydown', e => {
   b.addEventListener('click', () => { AIR.on = !AIR.on; store.set('planes', AIR.on); b.setAttribute('aria-pressed', String(AIR.on)); setPlaneVis(); });
 })();
 // 上一次還在讀就不重複排（開頁和按下連線都會觸發）
-function reloadFlights() { if (AIR.loading) return; AIR.loading = true; loadFlights().catch(e => { console.warn(e); AIR.sourceError = true; AIR.flights = estimateFlights(); }).finally(() => { AIR.loading = false; }); }
+function reloadFlights() { if (AIR.loading) { AIR.reloadPending = true; return; } AIR.loading = true; loadFlights().catch(e => { console.warn(e); AIR.sourceError = true; AIR.live = false; AIR.status = '航班服務錯誤，使用推估'; AIR.flights = estimateFlights(); }).finally(() => { AIR.loading = false; if (AIR.reloadPending) { AIR.reloadPending = false; reloadFlights(); } }); }
 AIR.flights = estimateFlights();
 // TDX 佇列會控制請求頻率，不必等太久；時刻表先排進佇列，航班隨後
 setTimeout(reloadFlights, 1500);
 // 航班時間會隨延誤更新：有金鑰時每 10 分鐘重新讀一次
 // 分頁在背景時不讀，回到前景後一分鐘內補讀
-setInterval(() => { if (!document.hidden && Date.now() - AIR.loadAt > 10 * 60e3 && store.get('tdx', {}).id) reloadFlights(); }, 60e3);
+setInterval(() => { if (!document.hidden && Date.now() - AIR.loadAt > 10 * 60e3 && TDX.credentials()) reloadFlights(); }, 60e3);
+$('#tdxproxygo').addEventListener('click', () => { AIR.gen++; setTimeout(reloadFlights, 2500); });
 $('#tdxgo').addEventListener('click', () => setTimeout(reloadFlights, 2500));
 $('#tdxclear').addEventListener('click', () => { AIR.gen++; AIR.sourceError = false; AIR.flights = estimateFlights(); AIR.live = false; });
