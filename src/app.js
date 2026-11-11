@@ -1228,7 +1228,7 @@ mseek.addEventListener('input', () => { seeking = true; $('#mcur').textContent =
 mseek.addEventListener('change', () => { seeking = false; Music.seek(mseek.value / 1000 * Music.tracks[Music.index].dur); });
 $('#setbtn').addEventListener('click', () => {
   settings.hidden = !settings.hidden;
-  if (!settings.hidden) { closePicker(); sky.hidden = true; musicPanel.hidden = true; const c = store.get('tdx', {}); $('#tdxid').value = c.id || ''; $('#tdxsecret').value = c.secret || ''; }
+  if (!settings.hidden) { closePicker(); sky.hidden = true; musicPanel.hidden = true; const c = store.get('tdx', {}); $('#tdxid').value = c.id || ''; $('#tdxsecret').value = c.secret || ''; $('#tdxproxy').value = store.get('tdxProxy', ''); }
 });
 function toggleBtn(id, key, apply) {
   const b = $(id); b.setAttribute('aria-pressed', String(S[key]));
@@ -1345,7 +1345,7 @@ async function connectTDX(cred, quiet) {
 let delayAt = 0;
 document.addEventListener('visibilitychange', () => {
   if (document.hidden || !TDX.ok) return;
-  const cred = store.get('tdx', {}); if (!cred.id || !cred.secret) return;
+  const cred = TDX.credentials(); if (!cred) return;
   const now = Date.now();
   if (twDate(now) !== TDX.date && minOfDay(now) >= 240) connectTDX(cred, true);
   else if (now - delayAt > 60e3) { delayAt = now; const g = tdxGen; TDX.loadDelays(cred, () => g === tdxGen).catch(() => {}); }
@@ -1353,10 +1353,20 @@ document.addEventListener('visibilitychange', () => {
 $('#tdxgo').addEventListener('click', () => {
   const cred = { id: $('#tdxid').value.trim(), secret: $('#tdxsecret').value.trim() };
   if (!cred.id || !cred.secret) { tdxStatus('請填入 Client ID 與 Client Secret。'); return; }
-  store.set('tdx', cred); connectTDX(cred);
+  store.set('tdx', cred); store.set('tdxProxy', ''); TDX.token = null; connectTDX(cred);
+});
+$('#tdxproxygo').addEventListener('click', () => {
+  let url;
+  try {
+    url = new URL($('#tdxproxy').value.trim());
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.pathname !== '/') throw new Error();
+  } catch { tdxStatus('請填入 HTTPS 代理根網址（不含路徑、帳密或查詢參數）。'); return; }
+  store.set('tdx', {}); store.set('tdxProxy', url.origin); TDX.token = null;
+  $('#tdxid').value = ''; $('#tdxsecret').value = '';
+  connectTDX({proxy:url.origin});
 });
 $('#tdxclear').addEventListener('click', () => {
-  tdxGen++; store.set('tdx', {}); TDX.ok = false; clearInterval(delayTimer);
+  tdxGen++; store.set('tdx', {}); store.set('tdxProxy', ''); TDX.loading = false; TDX.ok = false; clearInterval(delayTimer);
   generateAll(); afterTripsChanged(); tdxStatus('已改回班表推估。');
 });
 
@@ -1474,7 +1484,7 @@ async function boot() {
   startBtns.forEach(b => { b.disabled = false; });
   perfMark('開場按鈕可按');
   requestAnimationFrame(t => { last = t; frame(t); });
-  const cred = store.get('tdx', {});
-  if (cred.id && cred.secret) connectTDX(cred, true);
+  const cred = TDX.credentials();
+  if (cred) connectTDX(cred, true);
 }
 boot();

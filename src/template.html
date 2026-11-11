@@ -1,3 +1,4 @@
+<meta name="tdx-proxy" content="">
 <title>鐵道脈動</title>
 <meta name="description" content="全台鐵道 3D 即時動態：選一列車，跟著它穿過山海與城市。">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -404,6 +405,10 @@ body.clean #ride { opacity:.75; }
     <h4>TDX 即時資料</h4>
     <div class="note">填入 <a href="https://tdx.transportdata.tw/" target="_blank" rel="noopener">TDX</a> 的 API 金鑰後，台鐵與高鐵改用當日官方時刻表，台鐵每分鐘套用即時誤點；捷運與輕軌改用官方站間行駛時間、各時段班距與首末班車。金鑰只存在這台裝置的瀏覽器。</div>
     <label for="tdxid">Client ID</label>
+    <label for="tdxproxy">一般使用者：TDX 代理網址（不需個人金鑰）</label>
+    <input id="tdxproxy" type="url" placeholder="https://your-proxy.workers.dev" autocomplete="off">
+    <button class="pillbtn" id="tdxproxygo">使用免金鑰模式</button>
+    <div class="note">代理需由網站管理員部署。以下個人模式為選用；瀏覽器儲存不是安全的密鑰保管庫，請勿在共用裝置輸入密鑰。</div>
     <input id="tdxid" autocomplete="off" spellcheck="false">
     <label for="tdxsecret">Client Secret</label>
     <input id="tdxsecret" type="password" autocomplete="off" spellcheck="false">
