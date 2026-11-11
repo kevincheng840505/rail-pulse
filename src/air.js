@@ -198,14 +198,14 @@ function estimateFlights() {
       const al = isDom ? (hash(ap + j) < 0.5 ? 'AE' : 'B7') : lines[Math.floor(hash(ap + kind + 'a' + j) * lines.length)];
       const no = al + (100 + Math.floor(hash(ap + kind + 'n' + j) * 800));
       const f = makeFlight({ no, airline: al === 'UNI' ? 'B7' : al, dep: kind === 'dep' ? ap : other, arr: kind === 'arr' ? ap : other, t, kind, both: isDom });
-      if (f) out.push(f);
+      if (f) { f.aircraft = true; f.sources = {timetable:DataSource.record('estimated_timetable', Date.now(), 0, {error:AIR.sourceError || false})}; out.push(f); }
     }
   }
   return out;
 }
 async function loadFlights() {
   const cred = store.get('tdx', {});
-  if (!cred.id || !cred.secret) { AIR.flights = estimateFlights(); AIR.live = false; AIR.status = '班表推估'; return; }
+  if (!cred.id || !cred.secret) { AIR.sourceError = false; AIR.flights = estimateFlights(); AIR.live = false; AIR.status = '班表推估'; return; }
   AIR.loadAt = Date.now();
   const gen = ++AIR.gen;
   const d0 = dayStart(Date.now());
@@ -218,6 +218,7 @@ async function loadFlights() {
   for (const r of await Promise.all(jobs)) if (r) res.push(r); // 維持原本的機場順序（同一航班出現兩次時先到先用）
   perfMark('TDX 航班套用');
   if (gen !== AIR.gen) return; // 讀取途中金鑰被清除或又重新讀取
+  AIR.sourceError = res.length !== jobs.length;
   if (!res.length) { AIR.flights = estimateFlights(); AIR.live = false; AIR.status = 'TDX 航班讀取失敗，改用推估'; return; }
   const out = [], seen = new Set();
   for (const [ap, kind, list] of res) for (const r of list) {
@@ -238,7 +239,7 @@ async function loadFlights() {
     const al = String(r.AirlineID || ''), fn = String(r.FlightNumber || '').trim();
     const no = al + (fn.startsWith(al) ? fn.slice(al.length) : fn).trim().replace(/^0+(?=\d)/, '');
     const f = makeFlight({ no, airline: r.AirlineID, dep, arr, t, kind: isDep ? 'dep' : 'arr', both });
-    if (f) out.push(f);
+    if (f) { f.aircraft = true; f.sources = {timetable:DataSource.record('official_timetable', Date.now(), 15*60e3, {error:AIR.sourceError})}; out.push(f); }
   }
   AIR.flights = out; AIR.live = true; AIR.status = `已載入 ${out.length} 班航班`;
 }
@@ -885,7 +886,7 @@ function renderAirPick(force) {
     if (ap) now.push({ f, ap, ph: watchPhase(f, ap, m) });
   }
   now.sort((x, y) => x.ap.localeCompare(y.ap) || (x.f.no || '').localeCompare(y.f.no || ''));
-  html += now.slice(0, 80).map(({ f, ap, ph }) => `<button data-fid="${esc(f.id)}"><span class="c" style="background:${(AIR_LIVERY[f.airline] || {}).tail || TAIL_OLD[f.airline] || '#8C9AA6'}"></span><span class="n">${esc(airTitle(f))}</span><span class="d">${esc(nameOf(f.dep))} → ${esc(nameOf(f.arr))}・${esc(AC_TYPES[acTypeOf(f)].name)}</span><span class="s">${esc(AIRPORTS[ap][0])}${ph.kind === 'dep' ? '起飛' : '降落'}</span></button>`).join('');
+  html += now.slice(0, 80).map(({ f, ap, ph }) => `<button data-fid="${esc(f.id)}"><span class="c" style="background:${(AIR_LIVERY[f.airline] || {}).tail || TAIL_OLD[f.airline] || '#8C9AA6'}"></span><span class="n">${esc(airTitle(f))}</span><span class="d">${esc(nameOf(f.dep))} → ${esc(nameOf(f.arr))}・${esc(AC_TYPES[acTypeOf(f)].name)}</span><span class="s">${esc(AIRPORTS[ap][0])}${ph.kind === 'dep' ? '起飛' : '降落'}</span><small class="source">${esc(DataSource.describe(f).text)}</small></button>`).join('');
   if (!now.length) html += `<div class="empty">${q ? '沒有符合的起降班機' : '此刻沒有飛機在機場附近起降，可以先到機場等下一架'}</div>`;
   html += `<div class="empty">${AIR.live ? 'TDX 當日航班' : '班次為推估'}；鏡頭只在機場附近跟拍，飛遠了就換下一架。也可以直接點地圖上的飛機。</div>`;
   // 內容沒變就不重畫，免得按下去的那一下點不到
@@ -925,7 +926,7 @@ function renderAirCap(force) {
   if (!airCap.querySelector('#airnext')) {
     airCap.setAttribute('role', 'button'); airCap.tabIndex = 0;
     airCap.innerHTML = `<div class="strip"><span class="dot"></span><b class="nm"></b><span class="nx"></span><button class="x" id="airexit2" aria-label="離開"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
-      <div class="kicker"><span class="dot"></span><span class="kt"></span></div><h2></h2><div class="route"></div><div class="st"></div>
+      <div class="kicker"><span class="dot"></span><span class="kt"></span></div><h2></h2><div class="route"></div><div class="st"></div><small class="source"></small>
       <div class="caprow"><button class="pillbtn small" id="airnext">換一架</button><button class="pillbtn small" id="airexit">離開</button></div>`;
   }
   airCap.hidden = false;
@@ -933,6 +934,7 @@ function renderAirCap(force) {
   airCap.classList.toggle('mini', !S.capOpen);
   airCap.setAttribute('aria-expanded', String(!!S.capOpen)); airCap.setAttribute('aria-label', '飛機資訊，按下可' + (S.capOpen ? '收起' : '展開'));
   const set = (sel, t) => { const el = airCap.querySelector(sel); if (el.textContent !== t) el.textContent = t; };
+  set('.source', f ? DataSource.describe(f).text : '航跡／位置為模型推估，非實際定位');
   set('.kt', kicker); set('h2', title); set('.route', route); set('.st', status);
   set('.strip .nm', title); set('.strip .nx', status.replace(/^進場中 · /, '').replace(/^爬升中 · /, '↑ '));
   airCap.querySelector('.route').hidden = !route;
@@ -1002,7 +1004,7 @@ document.addEventListener('keydown', e => {
   b.addEventListener('click', () => { AIR.on = !AIR.on; store.set('planes', AIR.on); b.setAttribute('aria-pressed', String(AIR.on)); setPlaneVis(); });
 })();
 // 上一次還在讀就不重複排（開頁和按下連線都會觸發）
-function reloadFlights() { if (AIR.loading) return; AIR.loading = true; loadFlights().catch(e => { console.warn(e); AIR.flights = estimateFlights(); }).finally(() => { AIR.loading = false; }); }
+function reloadFlights() { if (AIR.loading) return; AIR.loading = true; loadFlights().catch(e => { console.warn(e); AIR.sourceError = true; AIR.flights = estimateFlights(); }).finally(() => { AIR.loading = false; }); }
 AIR.flights = estimateFlights();
 // TDX 佇列會控制請求頻率，不必等太久；時刻表先排進佇列，航班隨後
 setTimeout(reloadFlights, 1500);
@@ -1010,4 +1012,4 @@ setTimeout(reloadFlights, 1500);
 // 分頁在背景時不讀，回到前景後一分鐘內補讀
 setInterval(() => { if (!document.hidden && Date.now() - AIR.loadAt > 10 * 60e3 && store.get('tdx', {}).id) reloadFlights(); }, 60e3);
 $('#tdxgo').addEventListener('click', () => setTimeout(reloadFlights, 2500));
-$('#tdxclear').addEventListener('click', () => { AIR.gen++; AIR.flights = estimateFlights(); AIR.live = false; });
+$('#tdxclear').addEventListener('click', () => { AIR.gen++; AIR.sourceError = false; AIR.flights = estimateFlights(); AIR.live = false; });

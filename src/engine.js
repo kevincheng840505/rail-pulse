@@ -165,6 +165,7 @@ function buildTimes(nodes, stopFn, t0, spd, dwell, acc, curve = 1.12) {
 }
 
 function registerTrip(trip) {
+  if (!trip.sources) trip.sources = { timetable: DataSource.record('estimated_timetable'), ...(trip.sys === 'TRA' ? {delay:DataSource.record('simulated')} : {}) };
   trip.idx = TRIPS.length;
   trip.start = trip.times[0].dep;
   trip.end = trip.times[trip.times.length - 1].arr + (trip.delay || 0);
@@ -485,7 +486,7 @@ const TDX = {
       if (typeName.includes('3000')) car = 'EMU3000';
     }
     return { sys, no, type, typeName, color, car, nodes, times, origin:nodes[0].name, dest:nodes[nodes.length - 1].name,
-      delay:0, live:true, liveDelay:null };
+      delay:0, live:true, liveDelay:null, sources:{timetable:DataSource.record('official_timetable', Date.now(), 864e5)} };
   },
   async loadTimetables(cred) {
     // 台鐵與高鐵同時讀：以前要等台鐵整份（好幾 MB）下載完才開始讀高鐵
@@ -517,10 +518,10 @@ const TDX = {
     // 捷運站間時間、班距、首末班車很少變：讀到的存在瀏覽器 3 天，再開頁直接用，不必再排 15 個 TDX 請求
     const all = await Promise.all(this.METRO_OPS.map(async ([op, sys]) => {
       const key = 'metro:' + op, c = await cacheDB.get(key);
-      if (c && Date.now() - c.t < 3 * 864e5) { if (PERF) perfMark('捷運快取 ' + op); return { op, sys, s2s: c.s2s, freq: c.freq, fl: c.fl }; }
+      if (c && Date.now() - c.t < 3 * 864e5) { if (PERF) perfMark('捷運快取 ' + op); return { op, sys, updatedAt:c.t, s2s: c.s2s, freq: c.freq, fl: c.fl }; }
       const get = path => this.get(`v2/Rail/Metro/${path}/${op}`, cred, 2).catch(() => null);
       const [s2s, freq, fl] = await Promise.all([get('S2STravelTime'), get('Frequency'), get('FirstLastTimetable')]);
-      const D = { op, sys, s2s: Array.isArray(s2s) ? s2s : [], freq: Array.isArray(freq) ? freq : [], fl: Array.isArray(fl) ? fl : [] };
+      const D = { op, sys, updatedAt:Date.now(), s2s: Array.isArray(s2s) ? s2s : [], freq: Array.isArray(freq) ? freq : [], fl: Array.isArray(fl) ? fl : [] };
       // 站間時間和首末班都有才存；班距沒有（例如高雄輕軌 TDX 回 400）照存，下次也不再問
       if (D.s2s.length && D.fl.length) cacheDB.set(key, { t: Date.now(), s2s: D.s2s, freq: D.freq, fl: D.fl });
       return D;
@@ -596,7 +597,7 @@ const TDX = {
               times.push({ arr: c, dep: c + dw, stop: true }); c += dw;
             }
             trips.push({ sys: L.sys, no: '', line: L, type: L.label || L.name, color: L.color, car: '', nodes, times,
-              origin: nodes[0].name, dest: nodes[nodes.length - 1].name, delay: 0, live: true, tdxMetro: true, seq: j });
+              origin: nodes[0].name, dest: nodes[nodes.length - 1].name, delay: 0, live: true, tdxMetro: true, seq: j, sources:{timetable:DataSource.record('estimated_timetable', D.updatedAt, 3*864e5, {basis:'official_timetable', error:!D.fl.length || !D.freq.length})} });
             const h = t / 60, peak = (h >= 7 && h < 9.5) || (h >= 17 && h < 19.5);
             const hw = hwAt(t);
             if (hw) t += hw;
@@ -622,13 +623,16 @@ const TDX = {
   },
   // pre：已經先排進佇列的請求（開頁時誤點和時刻表一起排，不等捷運）
   async loadDelays(cred, isCurrent = () => true, pre) {
-    const j = await (pre || this.get('v2/Rail/TRA/LiveTrainDelay', cred, 3));
+    let j;
+    try { j = await (pre || this.get('v2/Rail/TRA/LiveTrainDelay', cred, 3)); }
+    catch (e) { if (isCurrent()) for (const t of TRIPS) if (t.sys === 'TRA' && t.live && t.sources.delay) t.sources.delay.error = true; throw e; }
     if (!isCurrent()) return 0;
     const map = new Map();
     for (const d of j) map.set(String(d.TrainNo), d.DelayTime);
     for (const t of TRIPS) if (t.sys === 'TRA' && t.live) {
-      t.liveDelay = map.has(t.no) ? map.get(t.no) : 0;
-      t.delay = t.liveDelay;
+      t.liveDelay = map.has(t.no) && Number.isFinite(map.get(t.no)) ? map.get(t.no) : null;
+      t.sources.delay = t.liveDelay == null ? null : DataSource.record('official_delay', Date.now(), 120e3);
+      t.delay = t.liveDelay || 0;
       t.end = t.times[t.times.length - 1].arr + t.delay;
     }
     this.lastDelay = Date.now();

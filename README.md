@@ -53,3 +53,9 @@ python3 build.py
 ## 部署（GitHub Pages）
 
 Settings → Pages → Build and deployment → Source 選 **Deploy from a branch**，Branch 選 `main`、資料夾 `/ (root)`，存檔後約一分鐘可在 `https://kevincheng840505.github.io/rail-pulse/` 看到。
+
+## 資料可信度
+
+選車看板、列車資訊卡與專注發車看板會顯示來源與更新時間。台鐵／高鐵官方班表、台鐵官方延誤、推估班表與模擬延誤分開記錄；缺少某班的誤點資料不代表準點。捷運依官方班距生成的逐班時刻仍屬推估。飛機即使使用官方航班時間，航跡和位置也始終是模型推估，並非實際定位。離線、資料過期、缺資料及服務錯誤會分別標示；無金鑰仍可使用推估模式。
+
+映射與專注回歸測試：`node --test tests/*.test.cjs`。
