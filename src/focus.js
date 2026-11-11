@@ -56,9 +56,9 @@ const Focus = (() => {
         const diff = Math.abs(a - D);
         if (!best || diff < best.diff) best = { i, a, diff };
       }
-      if (best) out.push({ t, i: best.i, a: best.a, score: best.diff / D - weight(t) * 0.08 + Math.random() * 0.12 });
+      if (best) out.push({ t, i: best.i, a: best.a, score: best.diff / D - weight(t) * 0.08 });
     }
-    out.sort((x, y) => x.score - y.score);
+    out.sort((x, y) => x.score - y.score || String(x.t.no || '').localeCompare(String(y.t.no || '')) || x.i - y.i);
     // 不要整頁都是同一種車
     const pick = [], seen = {};
     for (const c of out.slice(batch * 5)) { const k = c.t.sys + c.t.type; if ((seen[k] = (seen[k] || 0) + 1) > 2) continue; pick.push(c); if (pick.length >= 5) break; }
@@ -89,7 +89,7 @@ const Focus = (() => {
     const p = tripPos(c.t, curMin());
     trip = c.t;
     F.mode = 'ride';
-    F.ride = { sys: c.t.sys, no: c.t.no, origin: c.t.origin, dest: c.i, km0: p ? p.km : c.t.cum[0], from: p ? stationName(c.t, p) : c.t.origin, start: Date.now(), plan: Math.round(c.a),
+    F.ride = { sys: c.t.sys, no: c.t.no, origin: c.t.origin, lineId: c.t.line && c.t.line.id, dep0: c.t.times[0].dep, dest: c.i, km0: p ? p.km : c.t.cum[0], from: p ? stationName(c.t, p) : c.t.origin, start: Date.now(), plan: Math.round(c.a),
       // 營運日分鐘數的起點：之後用模擬時間往前加，跨午夜也不會跳回當天的分鐘數
       sim0: S.simMs, tm0: tripMinute(c.t) };
     save();
@@ -102,10 +102,11 @@ const Focus = (() => {
   }
   // 上車的地方：停在站上就是那一站，行駛中就寫「上一站」
   const stationName = (t, p) => t.nodes[p.seg].name;
-  const rideMin = () => F.ride.tm0 + (S.simMs - F.ride.sim0) / 60000;
+  // 使用牆上時鐘計算已行駛時間；重新整理後 S.simMs 會重設，不能用來恢復進度。
+  const rideMin = () => F.ride.tm0 + (Date.now() - F.ride.start) / 60000;
   const left = () => trip && F.ride ? (effTime(trip, F.ride.dest, 'arr') - rideMin()) * 60 : 0;
   function arrive() {
-    const r = F.ride, t = trip, mins = Math.max(1, Math.min(Math.round((Date.now() - r.start) / 60000), Math.round(effTime(t, r.dest, 'arr') - r.tm0))); // 重新整理晚回來也只算這趟車的時間
+    const r = F.ride, t = trip, mins = Math.max(1, Math.round((Date.now() - r.start) / 60000)); // 專注時間記錄真實經過分鐘數（包含誤點）
     const km = Math.max(0, t.cum[r.dest] - r.km0);
     F.done++; F.mins += mins; F.km += km;
     const long = F.round % 4 === 3; F.round++;
@@ -163,10 +164,15 @@ const Focus = (() => {
     }
     render();
   }
-  // 重新整理之後找回原本那班車（捷運沒有車次號碼，找不回來就結束）
-  const sameService = t => { const r = F.ride; return !!r && !!r.no && t.sys === r.sys && t.no === r.no && t.origin === r.origin; };
+  // 重新整理後找回原本列車：有車次時依車次；捷運以路線與首站發車時間辨識。
+  const sameService = t => {
+    const r = F.ride;
+    if (!r || t.sys !== r.sys || t.origin !== r.origin) return false;
+    if (r.no) return t.no === r.no;
+    return r.lineId != null && t.line && t.line.id === r.lineId && Number.isFinite(r.dep0) && Math.abs(t.times[0].dep - r.dep0) < 0.1;
+  };
   function findTrip() {
-    const r = F.ride; if (!r || !r.no) return null;
+    const r = F.ride; if (!r) return null;
     const all = TRIPS.filter(sameService);
     return all.find(t => tripPos(t, curMin())) || all[0] || null; // 已經到站的也找回來，才能補發車票
   }
