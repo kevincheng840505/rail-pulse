@@ -1,0 +1,32 @@
+{
+  "baseline": "5c74b13",
+  "baselineMetrics": {
+    "desktop": {
+      "firstInteractiveMs": 199.69999999995343,
+      "rafFps": 12.989608313350226,
+      "mapFps": 12.988959384523458,
+      "heapBytes": 61224933
+    },
+    "mobile": {
+      "firstInteractiveMs": 123.9000000001397,
+      "rafFps": 24.941387738814367,
+      "mapFps": 21.449593455380356,
+      "heapBytes": 75184328
+    }
+  },
+  "currentMetrics": {
+    "desktop": {
+      "firstInteractiveMs": 129.70000000018626,
+      "rafFps": 10.883546057188589,
+      "mapFps": 9.399426140299235,
+      "heapBytes": 82514588
+    },
+    "mobile": {
+      "firstInteractiveMs": 134.4000000001397,
+      "rafFps": 25.8693597333454,
+      "mapFps": 21.39197054872793,
+      "heapBytes": 61708949
+    }
+  },
+  "conditions": "Chromium software WebGL, empty vector fixtures, fixed 2026-11-11 10:00 Asia/Taipei; single 2s sample; GC uncontrolled"
+}

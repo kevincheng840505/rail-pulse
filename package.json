@@ -1,0 +1,14 @@
+{
+  "name": "rail-pulse",
+  "version": "1.0.0",
+  "devDependencies": {
+    "@playwright/test": "1.65.0",
+    "maplibre-gl": "4.7.1"
+  },
+  "private": true,
+  "scripts": {
+    "check": "node tools/check-js.cjs && node --test tests/*.test.cjs",
+    "test:e2e": "playwright test",
+    "test": "npm run check && npm run test:e2e"
+  }
+}

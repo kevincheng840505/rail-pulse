@@ -1523,7 +1523,9 @@ const TDX = {
   },
   /* 以官方班次取代台鐵與高鐵的推估班次 */
   applyTimetables(trips) {
-    resetTrips(t => t.sys !== 'TRA' && t.sys !== 'THSR');
+    const covered = new Set(trips.map(t => t.sys));
+    resetTrips(t => !covered.has(t.sys));
+    for (const t of TRIPS) if (['TRA','THSR'].includes(t.sys) && !covered.has(t.sys)) t.sources.timetable.error = true;
     trips.forEach(registerTrip);
   },
   /* ---------- 捷運與輕軌：TDX 站間行駛時間、班距、首末班車 ---------- */
@@ -1627,13 +1629,17 @@ const TDX = {
         });
       }
     }
-    return { trips, covered };
+    const failed = new Set(all.filter(d => !d.s2s.length || !d.fl.length).map(d => d.sys));
+    return { trips, covered, failed };
   },
   /* 以 TDX 資料產生的捷運班次取代同一路線的推估班次 */
-  applyMetro({ trips, covered }) {
+  applyMetro({ trips, covered, failed = new Set() }) {
     // 舊的 TDX 捷運班次與被取代路線的推估班次一起移除
-    resetTrips(t => !t.tdxMetro && !(t.line && covered.has(t.line)));
+    const key = t => [t.sys,t.line && t.line.id,t.origin,t.dest].join('|');
+    const replaced = new Set(trips.map(key));
+    resetTrips(t => !(t.line && covered.has(t.line)) && !(t.tdxMetro && replaced.has(key(t))));
     trips.forEach(registerTrip);
+    for (const t of TRIPS) if (failed.has(t.sys)) t.sources.timetable.error = true;
   },
   // pre：已經先排進佇列的請求（開頁時誤點和時刻表一起排，不等捷運）
   async loadDelays(cred, isCurrent = () => true, pre) {

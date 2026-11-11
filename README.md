@@ -65,3 +65,14 @@ Settings → Pages → Build and deployment → Source 選 **Deploy from a branc
 一般使用者可使用管理員提供的 HTTPS 代理網址，不必輸入 Client Secret；部署與安全限制見 [proxy/README.md](proxy/README.md)。代理未部署或無法連線時，仍可使用推估模式。管理員也能設定全站預設代理網址。
 
 舊版個人金鑰模式保留為選用。localStorage 不是安全的密鑰保管庫；同源腳本可讀取其中內容，不適合共用裝置或公開服務。公開部署請將密鑰放在代理伺服器的秘密環境變數中。
+
+## 自動化回歸測試
+
+```sh
+npm ci
+npm run check
+npx playwright install chromium
+npm run test:e2e
+```
+
+若已安裝 Chromium，可使用 `PLAYWRIGHT_CHROMIUM_EXECUTABLE=/usr/bin/chromium npm run test:e2e`。Playwright 自動啟動本機 Python 靜態伺服器；兩種尺寸為 1280×800 與 390×844。測試使用固定的空白圖磚與合成 TDX 回應，不依賴外部地圖或真實金鑰，因此通過不代表外部服務已驗證。截圖、失敗追蹤及 Performance API 數據寫入 `test-results/`。PR CI 另會檢查 `python3 build.py` 產出與提交的 `index.html` 一致。

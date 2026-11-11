@@ -46,3 +46,12 @@ test('keyless client never requests a token or sends a bearer credential',async(
  assert.equal(requests.length,1);assert.equal(requests[0].url,'https://proxy.example/tdx/v2/Rail/TRA/LiveTrainDelay');assert.equal(requests[0].opt.headers.authorization,undefined);
  assert.equal(vm.runInContext("TDX.sourceTimes.get('v2/Rail/TRA/LiveTrainDelay')",c),12345);
 });
+
+test('partial rail refresh preserves missing system with a degraded label',()=>{
+ const c=engine();vm.runInContext("generateAll();const highspeed=TRIPS.filter(t=>t.sys==='THSR');TDX.applyTimetables(highspeed)",c);
+ assert.ok(vm.runInContext("TRIPS.some(t=>t.sys==='TRA' && t.sources.timetable.error)",c));
+});
+test('failed metro refresh retains previous runs instead of deleting an operator',()=>{
+ const c=engine();vm.runInContext("generateAll();const metro=TRIPS.find(t=>t.sys==='TRTC');metro.tdxMetro=true;TDX.applyMetro({trips:[],covered:new Set(),failed:new Set(['TRTC'])})",c);
+ assert.ok(vm.runInContext('TRIPS.includes(metro)',c));assert.equal(vm.runInContext('metro.sources.timetable.error',c),true);
+});
