@@ -58,7 +58,8 @@ const Focus = (() => {
       }
       if (best) out.push({ t, i: best.i, a: best.a, score: best.diff / D - weight(t) * 0.08 });
     }
-    out.sort((x, y) => x.score - y.score || String(x.t.no || '').localeCompare(String(y.t.no || '')) || x.i - y.i);
+    const key = t => [t.sys, t.no || '', t.origin, t.dest, t.line && t.line.id || '', t.times[0].dep].join('|');
+    out.sort((x, y) => x.score - y.score || key(x.t).localeCompare(key(y.t)) || x.i - y.i);
     // 不要整頁都是同一種車
     const pick = [], seen = {};
     for (const c of out.slice(batch * 5)) { const k = c.t.sys + c.t.type; if ((seen[k] = (seen[k] || 0) + 1) > 2) continue; pick.push(c); if (pick.length >= 5) break; }
@@ -89,8 +90,8 @@ const Focus = (() => {
     const p = tripPos(c.t, curMin());
     trip = c.t;
     F.mode = 'ride';
-    F.ride = { sys: c.t.sys, no: c.t.no, origin: c.t.origin, lineId: c.t.line && c.t.line.id, dep0: c.t.times[0].dep, dest: c.i, km0: p ? p.km : c.t.cum[0], from: p ? stationName(c.t, p) : c.t.origin, start: Date.now(), plan: Math.round(c.a),
-      // 營運日分鐘數的起點：之後用模擬時間往前加，跨午夜也不會跳回當天的分鐘數
+    F.ride = { live: !!c.t.live, serviceDest: c.t.dest, destName: c.t.nodes[c.i].name, sys: c.t.sys, no: c.t.no, origin: c.t.origin, lineId: c.t.line && c.t.line.id, dep0: c.t.times[0].dep, dest: c.i, km0: p ? p.km : c.t.cum[0], from: p ? stationName(c.t, p) : c.t.origin, start: Date.now(), plan: Math.round(c.a),
+      // 保留上車時的營運日分鐘數，搭配真實經過時間跨午夜恢復
       sim0: S.simMs, tm0: tripMinute(c.t) };
     save();
     if (S.roam) setRoam(false);
@@ -149,10 +150,22 @@ const Focus = (() => {
   function stopLoop() { clearInterval(tickTimer); tickTimer = 0; }
   function tick() {
     if (F.day !== today()) { newDay(); save(); }
+    if (!S.started && TRIPS.length && (F.mode === 'ride' || F.mode === 'break')) {
+      closeIntro(() => { if (F.mode === 'break') setRoam(true); }, true);
+    }
     if (F.mode === 'ride') {
-      if (!trip) { trip = findTrip(); if (!trip) { if (TRIPS.length) endAll(); return; } if (left() <= 0) return arrive(); if (S.started && S.follow !== trip) follow(trip); }
-      // TDX 換了一份時刻表：同一班車換成新物件，跟著換過來
-      if (S.follow && S.follow !== trip && sameService(S.follow)) trip = S.follow;
+      if (!trip || !TRIPS.includes(trip)) {
+        const restored = findTrip();
+        if (!restored) { if (TRIPS.length && !(typeof TDX !== 'undefined' && TDX.loading)) endAll(); return; }
+        trip = restored;
+        const dest = trip.nodes.findIndex((n, i) => n.name === F.ride.destName && trip.times[i].stop);
+        if (dest < 0) return endAll();
+        F.ride.dest = dest;
+        save();
+        if (left() <= 0) return arrive();
+        // 只在恢復或重建班表時接回列車；一般手動換車仍視為下車。
+        if (S.started && S.follow !== trip) follow(trip);
+      }
       // 自己換了別的車或離開跟車：當作下車
       if (S.started && S.follow !== trip && !S.flying) return getOff();
       if (left() <= 0) return arrive();
@@ -167,7 +180,7 @@ const Focus = (() => {
   // 重新整理後找回原本列車：有車次時依車次；捷運以路線與首站發車時間辨識。
   const sameService = t => {
     const r = F.ride;
-    if (!r || t.sys !== r.sys || t.origin !== r.origin) return false;
+    if (!r || !r.destName || t.sys !== r.sys || t.origin !== r.origin || t.dest !== r.serviceDest || !!t.live !== r.live) return false;
     if (r.no) return t.no === r.no;
     return r.lineId != null && t.line && t.line.id === r.lineId && Number.isFinite(r.dep0) && Math.abs(t.times[0].dep - r.dep0) < 0.1;
   };

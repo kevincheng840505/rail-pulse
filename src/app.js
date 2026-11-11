@@ -1301,6 +1301,7 @@ function afterTripsChanged() {
 async function connectTDX(cred, quiet) {
   const gen = ++tdxGen, isCurrent = () => gen === tdxGen;
   clearInterval(delayTimer);
+  TDX.loading = true;
   tdxStatus('連線中…');
   try {
     // 時刻表先排進 TDX 佇列，捷運資料緊接著排（以前要等時刻表、誤點都讀完才開始讀捷運）
@@ -1335,7 +1336,7 @@ async function connectTDX(cred, quiet) {
     TDX.ok = false;
     tdxStatus(err instanceof TypeError ? '無法連到 TDX，請確認網路連線。目前繼續使用班表推估。' : esc(err.message) + '。請確認金鑰正確；目前繼續使用班表推估。');
     if (!quiet) console.warn(err);
-  }
+  } finally { if (isCurrent()) TDX.loading = false; }
 }
 // 回到前景：誤點超過一分鐘沒更新就馬上讀，跨日就重新載入當日時刻
 let delayAt = 0;
@@ -1357,12 +1358,12 @@ $('#tdxclear').addEventListener('click', () => {
 });
 
 /* ---------- 開場 ---------- */
-function closeIntro(then) {
+function closeIntro(then, resuming = false) {
   const intro = $('#intro');
   intro.classList.add('out');
   S.started = true; syncTerrain(true); // 開場畫面後面只畫平面，按下開始才開 3D 地形
   setTimeout(() => { intro.hidden = true; }, 1300);
-  if (store.get('music', true)) setMusic(true);
+  if (!resuming && store.get('music', true)) setMusic(true);
   then();
 }
 // 班次與軌道載入完成前先停用開場按鈕，避免漫遊或選車時還沒有列車
