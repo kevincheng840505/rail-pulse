@@ -71,7 +71,7 @@ const Focus = (() => {
     shown = candidates(F.D);
     $('#dlist').innerHTML = shown.length ? shown.map((c, k) => {
       const at = tripPos(c.t, curMin()), from = at ? c.t.nodes[at.seg].name : c.t.origin;
-      return `<button data-k="${k}"><i style="background:${c.t.color}"></i><b>${esc(trainTitle(c.t))}</b><span>${esc(from)} → ${esc(c.t.nodes[c.i].name)}</span><em>${Math.round(c.a)} 分</em></button>`;
+      return `<button data-k="${k}"><i style="background:${c.t.color}"></i><b>${esc(trainTitle(c.t))}</b><span>${esc(from)} → ${esc(c.t.nodes[c.i].name)}</span><em>${Math.round(c.a)} 分</em><small class="source">${esc(DataSource.describe(c.t).text)}</small></button>`;
     }).join('') : '<div class="empty">這個時段沒有剛好的列車，換個時間長度試試。</div>';
     $('#dnote').textContent = `第 ${F.round % 4 + 1} 張車票・之後休息 ${breakFor(F.round % 4 === 3)} 分`;
   }

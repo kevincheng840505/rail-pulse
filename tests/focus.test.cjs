@@ -13,6 +13,7 @@ function harness({sys = 'TRA', no = '101', live = false, saved, minute = 600, no
   let stored = saved || null;
   class Clock extends Date { static now(){return now} }
   const ctx = vm.createContext({console,Date:Clock,Math,Number,String,JSON,Set,Map,$,store:{get(k,d){return k==='focus2' && stored ? structuredClone(stored):d},set(k,v){stored=structuredClone(v)}}, S:{positions:[{trip:t,pos:{seg:0}}],simMs:now,started:true,follow:null},TRIPS:[t], document:{title:'Rail',body:{classList:{contains(){return false},toggle(){}}},addEventListener(){}},window:{addEventListener(){}},settings:$('#settings'),sky:$('#sky'),musicPanel:$('#music'),picker:$('#picker'),Music:{playing:true},setInterval(fn){intervals.add(fn);return fn},clearInterval(fn){intervals.delete(fn)},setTimeout(){},curMin:()=>minute,tripMinute:()=>minute,tripPos:()=>({seg:0,km:1}),effTime:(t,i,k)=>t.times[i][k]+t.delay,trainTitle:t=>t.sys+t.no,esc:String,closePicker(){},closeIntro(fn){fn()},follow(t){ctx.S.follow=t},setRoam(on){ctx.S.roam=on},setMusic(){},minOfDay:()=>minute,toggleClean(){}});
+  vm.runInContext(fs.readFileSync('src/sources.js','utf8'),ctx);
   vm.runInContext(fs.readFileSync('src/focus.js','utf8'),ctx);
   return {ctx,t,$, get saved(){return stored},advance(ms){now+=ms;ctx.S.simMs=now},tick(){for(const fn of [...intervals])fn()},board(){ $('#focusgo').click(); $('#dlist').click({target:{closest:()=>({dataset:{k:'0'}})}}) },mode(){return vm.runInContext('Focus.mode',ctx)}};
 }
