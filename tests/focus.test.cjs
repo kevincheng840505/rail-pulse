@@ -41,9 +41,9 @@ test('midnight and background elapsed time keep a ride running',()=>{
 });
 test('candidate ties use a stable service identity even when input order changes',()=>{
  const h=harness({sys:'TRTC',no:''});const other=structuredClone(h.t);other.line.id='blue';other.times[0].dep=589;other.idx=1;h.ctx.S.positions.push({trip:other,pos:{seg:0}});
- h.$('#focusgo').click();const first=h.$('#dlist').innerHTML;h.ctx.S.positions.reverse();h.$('#focusgo').click();assert.equal(h.$('#dlist').innerHTML,first);
+ h.$('#focusgo').click();const first=h.$('#dlist').innerHTML;h.$('#dlist').click({target:{closest:()=>({dataset:{k:'0'}})}});const firstLine=h.saved.ride.lineId;h.ctx.S.positions.reverse();h.$('#focusgo').click();assert.equal(h.$('#dlist').innerHTML,first);
  // Both anonymous services have the same title, so compare the selected object too.
- h.$('#dlist').click({target:{closest:()=>({dataset:{k:'0'}})}});assert.equal(h.ctx.S.follow,other);
+ h.$('#dlist').click({target:{closest:()=>({dataset:{k:'0'}})}});assert.equal(h.ctx.S.follow,other);assert.equal(h.saved.ride.lineId,firstLine);
 });
 
 test('official reload waits for in-flight timetable loading, then restores',()=>{
