@@ -5,16 +5,19 @@
    TDX 每段時間只會被讀一次，不會超過金鑰的頻率限制。
 
    用法：GET /api/tdx?path=v2/Rail/TRA/LiveTrainDelay
-   只允許讀取網站用得到的路徑，別人拿去當通用代理也讀不到其他東西。 */
+   只允許網站用得到的幾個固定路徑（不接受查詢參數），別人拿去當通用代理也讀不到其他東西，
+   也不能靠改參數繞過快取、耗盡金鑰的額度。 */
 
+const OPS = '(TRTC|TYMC|TMRT|KRTC|KLRT)';
 const ALLOW = [
-  // [路徑前綴, CDN 快取秒數]
-  ['v2/Rail/TRA/LiveTrainDelay', 50],
-  ['v3/Rail/TRA/DailyTrainTimetable/Today', 1800],
-  ['v2/Rail/THSR/DailyTimetable/Today', 1800],
-  ['v3/Rail/TRA/Alert', 300], ['v2/Rail/TRA/Alert', 300], ['v2/Rail/THSR/AlertInfo', 300], ['v2/Rail/Metro/Alert', 300],
-  ['v2/Rail/Metro/', 86400],
-  ['v2/Air/FIDS/Airport/', 240],
+  // [完整路徑（不接受查詢參數，避免有人換參數繞過快取、耗盡額度）, CDN 快取秒數]
+  [/^v2\/Rail\/TRA\/LiveTrainDelay$/, 50],
+  [/^v3\/Rail\/TRA\/DailyTrainTimetable\/Today$/, 1800],
+  [/^v2\/Rail\/THSR\/DailyTimetable\/Today$/, 1800],
+  [/^v3\/Rail\/TRA\/Alert$/, 300], [/^v2\/Rail\/THSR\/AlertInfo$/, 300],
+  [new RegExp('^v2/Rail/Metro/Alert/' + OPS + '$'), 300],
+  [new RegExp('^v2/Rail/Metro/(S2STravelTime|Frequency|FirstLastTimetable)/' + OPS + '$'), 86400],
+  [/^v2\/Air\/FIDS\/Airport\/(Departure|Arrival)\/(TPE|TSA|KHH|RMQ)$/, 240],
 ];
 const ORIGINS = (process.env.ALLOW_ORIGINS || 'https://kevincheng840505.github.io').split(',').map(s => s.trim()).filter(Boolean);
 
@@ -43,7 +46,7 @@ module.exports = async (req, res) => {
   if (req.method !== 'GET') { res.status(405).end(); return; }
 
   const path = String((req.query && req.query.path) || '').replace(/^\/+/, '');
-  const rule = /^[\w/]+(\?[\w$=&%.,:'() -]*)?$/.test(path) && !path.includes('..') && ALLOW.find(([p]) => path.startsWith(p));
+  const rule = ALLOW.find(([re]) => re.test(path));
   if (!rule) { res.status(400).json({ error: 'path not allowed' }); return; }
   if (!process.env.TDX_CLIENT_ID || !process.env.TDX_CLIENT_SECRET) { res.status(503).json({ error: 'TDX key not configured' }); return; }
 
@@ -51,7 +54,7 @@ module.exports = async (req, res) => {
     let tries = 0, r;
     while (true) {
       const tk = await getToken();
-      r = await fetch('https://tdx.transportdata.tw/api/basic/' + path + (path.includes('?') ? '&' : '?') + '$format=JSON', { headers: { authorization: 'Bearer ' + tk, 'accept-encoding': 'gzip' } });
+      r = await fetch('https://tdx.transportdata.tw/api/basic/' + path + '?$format=JSON', { headers: { authorization: 'Bearer ' + tk, 'accept-encoding': 'gzip' } });
       if (r.status === 401 && tries < 1) { token = null; tries++; continue; }
       if (r.status === 429 && tries < 3) { tries++; await new Promise(ok => setTimeout(ok, 600 * tries)); continue; }
       break;
