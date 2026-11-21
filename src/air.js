@@ -204,8 +204,7 @@ function estimateFlights() {
   return out;
 }
 async function loadFlights() {
-  const cred = store.get('tdx', {});
-  if (!cred.id || !cred.secret) { AIR.flights = estimateFlights(); AIR.live = false; AIR.status = '班表推估'; return; }
+  const cred = TDX_CRED;
   AIR.loadAt = Date.now();
   const gen = ++AIR.gen;
   const d0 = dayStart(Date.now());
@@ -1008,6 +1007,4 @@ AIR.flights = estimateFlights();
 setTimeout(reloadFlights, 1500);
 // 航班時間會隨延誤更新：有金鑰時每 10 分鐘重新讀一次
 // 分頁在背景時不讀，回到前景後一分鐘內補讀
-setInterval(() => { if (!document.hidden && Date.now() - AIR.loadAt > 10 * 60e3 && store.get('tdx', {}).id) reloadFlights(); }, 60e3);
-$('#tdxgo').addEventListener('click', () => setTimeout(reloadFlights, 2500));
-$('#tdxclear').addEventListener('click', () => { AIR.gen++; AIR.flights = estimateFlights(); AIR.live = false; });
+setInterval(() => { if (!document.hidden && Date.now() - AIR.loadAt > 10 * 60e3 ) reloadFlights(); }, 60e3);

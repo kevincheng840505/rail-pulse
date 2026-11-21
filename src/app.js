@@ -1055,9 +1055,7 @@ function renderCaption(force) {
   const progress = pos ? Math.min(1, pos.km / total) : (next === '已抵達終點' ? 1 : 0);
   const delay = t.sys === 'TRA' ? (t.delay ? `<span class="late">晚 ${t.delay} 分</span>` : '<span class="ok">準點</span>') : '';
   const speed = pos && !pos.atStation ? Math.round((t.cum[pos.seg + 1] - t.cum[pos.seg]) / Math.max(0.1, effTime(t, pos.seg + 1, 'arr') - effTime(t, pos.seg, 'dep')) * 60) : 0;
-  // 專注中：多一行「專注結束時大約到哪一站」（focus.js）
-  const frow = typeof Focus !== 'undefined' ? Focus.capRow(t) : '';
-  const key = [t.idx, next, eta, Math.round(progress * 200), S.followPaused, speed, t.delay, frow].join('|');
+  const key = [t.idx, next, eta, Math.round(progress * 200), S.followPaused, speed, t.delay].join('|');
   if (key === capKey && !force) return;
   capKey = key;
   cap.classList.toggle('mini', !S.capOpen);
@@ -1070,7 +1068,6 @@ function renderCaption(force) {
     <div class="next"><div><div class="lab">${pos && pos.atStation ? '此刻' : '下一站'}</div><b>${esc(next)}</b></div><span class="eta">${esc(eta)}</span></div>
     <div class="bar"><i style="width:${(progress * 100).toFixed(1)}%"></i></div>
     <div class="meta"><span>已過 ${done} / ${stops} 站</span><span>${speed ? '約 ' + speed + ' km/h' : ''}</span></div>
-    ${frow}
     <div class="caprow"><button class="pillbtn small" id="leave2">離開</button></div>`;
 }
 // 字卡預設是一條細長的列，點一下展開完整資訊，再點一下收起
@@ -1229,7 +1226,7 @@ mseek.addEventListener('input', () => { seeking = true; $('#mcur').textContent =
 mseek.addEventListener('change', () => { seeking = false; Music.seek(mseek.value / 1000 * Music.tracks[Music.index].dur); });
 $('#setbtn').addEventListener('click', () => {
   settings.hidden = !settings.hidden;
-  if (!settings.hidden) { closePicker(); sky.hidden = true; musicPanel.hidden = true; const c = store.get('tdx', {}); $('#tdxid').value = c.id || ''; $('#tdxsecret').value = c.secret || ''; }
+  if (!settings.hidden) { closePicker(); sky.hidden = true; musicPanel.hidden = true; }
 });
 function toggleBtn(id, key, apply) {
   const b = $(id); b.setAttribute('aria-pressed', String(S[key]));
@@ -1336,27 +1333,19 @@ async function connectTDX(cred, quiet) {
   } catch (err) {
     if (!isCurrent()) return;
     TDX.ok = false;
-    tdxStatus(err instanceof TypeError ? '無法連到 TDX，請確認網路連線。目前繼續使用班表推估。' : esc(err.message) + '。請確認金鑰正確；目前繼續使用班表推估。');
+    tdxStatus(err instanceof TypeError ? '無法連到 TDX，請確認網路連線。目前繼續使用班表推估。' : esc(err.message) + '。目前改用班表推估，稍後會自動重試。');
     if (!quiet) console.warn(err);
+    setTimeout(() => { if (isCurrent() && !TDX.ok) connectTDX(cred, true); }, 3 * 60e3); // 代理暫時連不上：三分鐘後再試
   }
 }
 // 回到前景：誤點超過一分鐘沒更新就馬上讀，跨日就重新載入當日時刻
 let delayAt = 0;
 document.addEventListener('visibilitychange', () => {
   if (document.hidden || !TDX.ok) return;
-  const cred = store.get('tdx', {}); if (!cred.id || !cred.secret) return;
+  const cred = TDX_CRED;
   const now = Date.now();
   if (twDate(now) !== TDX.date && minOfDay(now) >= 240) connectTDX(cred, true);
   else if (now - delayAt > 60e3) { delayAt = now; const g = tdxGen; TDX.loadDelays(cred, () => g === tdxGen).catch(() => {}); }
-});
-$('#tdxgo').addEventListener('click', () => {
-  const cred = { id: $('#tdxid').value.trim(), secret: $('#tdxsecret').value.trim() };
-  if (!cred.id || !cred.secret) { tdxStatus('請填入 Client ID 與 Client Secret。'); return; }
-  store.set('tdx', cred); connectTDX(cred);
-});
-$('#tdxclear').addEventListener('click', () => {
-  tdxGen++; store.set('tdx', {}); TDX.ok = false; clearInterval(delayTimer);
-  generateAll(); afterTripsChanged(); tdxStatus('已改回班表推估。');
 });
 
 /* ---------- 開場 ---------- */
@@ -1473,7 +1462,7 @@ async function boot() {
   startBtns.forEach(b => { b.disabled = false; });
   perfMark('開場按鈕可按');
   requestAnimationFrame(t => { last = t; frame(t); });
-  const cred = store.get('tdx', {});
-  if (cred.id && cred.secret) connectTDX(cred, true);
+  store.set('tdx', {}); // 以前存在瀏覽器裡的個人金鑰不再使用，清掉
+  connectTDX(TDX_CRED, true);
 }
 boot();
