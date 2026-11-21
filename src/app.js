@@ -1055,9 +1055,7 @@ function renderCaption(force) {
   const progress = pos ? Math.min(1, pos.km / total) : (next === '已抵達終點' ? 1 : 0);
   const delay = t.sys === 'TRA' ? (t.delay ? `<span class="late">晚 ${t.delay} 分</span>` : '<span class="ok">準點</span>') : '';
   const speed = pos && !pos.atStation ? Math.round((t.cum[pos.seg + 1] - t.cum[pos.seg]) / Math.max(0.1, effTime(t, pos.seg + 1, 'arr') - effTime(t, pos.seg, 'dep')) * 60) : 0;
-  // 專注中：多一行「專注結束時大約到哪一站」（focus.js）
-  const frow = typeof Focus !== 'undefined' ? Focus.capRow(t) : '';
-  const key = [t.idx, next, eta, Math.round(progress * 200), S.followPaused, speed, t.delay, frow].join('|');
+  const key = [t.idx, next, eta, Math.round(progress * 200), S.followPaused, speed, t.delay].join('|');
   if (key === capKey && !force) return;
   capKey = key;
   cap.classList.toggle('mini', !S.capOpen);
@@ -1070,7 +1068,6 @@ function renderCaption(force) {
     <div class="next"><div><div class="lab">${pos && pos.atStation ? '此刻' : '下一站'}</div><b>${esc(next)}</b></div><span class="eta">${esc(eta)}</span></div>
     <div class="bar"><i style="width:${(progress * 100).toFixed(1)}%"></i></div>
     <div class="meta"><span>已過 ${done} / ${stops} 站</span><span>${speed ? '約 ' + speed + ' km/h' : ''}</span></div>
-    ${frow}
     <div class="caprow"><button class="pillbtn small" id="leave2">離開</button></div>`;
 }
 // 字卡預設是一條細長的列，點一下展開完整資訊，再點一下收起
@@ -1304,6 +1301,7 @@ function afterTripsChanged() {
 async function connectTDX(cred, quiet) {
   const gen = ++tdxGen, isCurrent = () => gen === tdxGen;
   clearInterval(delayTimer);
+  TDX.loading = true;
   tdxStatus('連線中…');
   try {
     // 時刻表先排進 TDX 佇列，捷運資料緊接著排（以前要等時刻表、誤點都讀完才開始讀捷運）
@@ -1338,7 +1336,7 @@ async function connectTDX(cred, quiet) {
     TDX.ok = false;
     tdxStatus(err instanceof TypeError ? '無法連到 TDX，請確認網路連線。目前繼續使用班表推估。' : esc(err.message) + '。請確認金鑰正確；目前繼續使用班表推估。');
     if (!quiet) console.warn(err);
-  }
+  } finally { if (isCurrent()) TDX.loading = false; }
 }
 // 回到前景：誤點超過一分鐘沒更新就馬上讀，跨日就重新載入當日時刻
 let delayAt = 0;
@@ -1360,16 +1358,16 @@ $('#tdxclear').addEventListener('click', () => {
 });
 
 /* ---------- 開場 ---------- */
-function closeIntro(then) {
+function closeIntro(then, resuming = false) {
   const intro = $('#intro');
   intro.classList.add('out');
   S.started = true; syncTerrain(true); // 開場畫面後面只畫平面，按下開始才開 3D 地形
   setTimeout(() => { intro.hidden = true; }, 1300);
-  if (store.get('music', true)) setMusic(true);
+  if (!resuming && store.get('music', true)) setMusic(true);
   then();
 }
 // 班次與軌道載入完成前先停用開場按鈕，避免漫遊或選車時還沒有列車
-const startBtns = [$('#startroam'), $('#startpick')];
+const startBtns = [$('#startroam'), $('#startpick'), $('#startfocus')];
 startBtns.forEach(b => { b.disabled = true; });
 $('#startroam').addEventListener('click', () => closeIntro(() => setRoam(true)));
 $('#startpick').addEventListener('click', () => closeIntro(openPicker));

@@ -156,24 +156,72 @@ body.clean #aircap { display:none !important; }
 #precip { position:fixed; inset:0; width:100%; height:100%; pointer-events:none; z-index:2; }
 #fogveil { position:fixed; inset:0; pointer-events:none; z-index:1; opacity:0; transition:opacity 2s ease; }
 
-/* 漫遊・專注（番茄鐘）：倒數一直留在時鐘下面，不用點開任何面板 */
-#focusline { position:fixed; top:calc(env(safe-area-inset-top,0px) + 56px); left:max(16px, env(safe-area-inset-left,0px)); z-index:5; display:block; width:min(240px, calc(100% - 32px)); padding:0; border:0; background:none; text-align:left; cursor:pointer; text-shadow:0 1px 12px rgba(0,0,0,.6); --fc:var(--accent); }
-#focusline .l { display:flex; align-items:baseline; gap:8px; font-size:12.5px; white-space:nowrap; }
-#focusline .k { color:var(--fc); font-weight:700; letter-spacing:.12em; }
-#focusline .t { font-family:var(--font-mono); font-weight:700; font-size:15px; font-variant-numeric:tabular-nums; }
-#focusline .s { color:var(--muted); overflow:hidden; text-overflow:ellipsis; min-width:0; }
-#focusline .bar { display:block; height:2px; margin-top:6px; background:var(--line); border-radius:2px; overflow:hidden; }
-#focusline .bar i { display:block; height:100%; width:0; background:var(--fc); transition:width 1s linear; }
-#focusline.paused { opacity:.6; }
-body.clean #focusline { top:calc(env(safe-area-inset-top,0px) + 16px); opacity:.6; }
-#caption .frow { display:flex; gap:10px; align-items:baseline; margin-top:10px; padding-top:9px; border-top:1px solid var(--line); font-size:13px; }
-#caption .frow .fk { flex:none; color:var(--accent); font-family:var(--font-mono); font-size:12px; }
+/* 搭一班車專注：倒數就是列車到站的時間，到站給一張車票 */
+#focusgo { gap:7px; }
+#focusgo svg { opacity:.85; }
+body.riding #dock, body.riding #caption, body.resting #dock, body.resting #caption { display:none !important; }
+/* 行車中的卡：取代底部按鈕列的位置，畫面上只剩這一張 */
+#ride { position:fixed; left:50%; transform:translateX(-50%); bottom:calc(env(safe-area-inset-bottom,0px) + 18px); z-index:5; width:min(420px, calc(100% - 24px)); box-sizing:border-box;
+  border-radius:20px; padding:14px 16px 12px 18px; display:grid; grid-template-columns:auto 1fr; column-gap:16px; align-items:end; --fc:var(--accent); }
+#ride .rk { grid-column:1 / -1; display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); letter-spacing:.08em; margin-bottom:2px; }
+#ride .rk .dot { width:8px; height:8px; border-radius:50%; background:var(--fc); box-shadow:0 0 10px var(--fc); }
+#ride .rk b { color:var(--fc); font-weight:700; letter-spacing:.16em; }
+#ride .rk .x { margin-left:auto; height:26px; padding:0 10px; border-radius:999px; border:1px solid var(--line); background:transparent; color:var(--muted); font-size:12px; }
+#ride .rk .x:hover { color:var(--ink); border-color:rgba(255,255,255,.32); }
+#rt { font-family:var(--font-mono); font-weight:700; font-size:44px; line-height:1; letter-spacing:.01em; font-variant-numeric:tabular-nums; }
+#ride .rd { text-align:right; min-width:0; }
+#ride .rd small { display:block; font-size:11.5px; color:var(--muted); letter-spacing:.1em; }
+#ride .rd b { display:block; font-family:var(--font-display); font-weight:900; font-size:22px; letter-spacing:.08em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#ride .rd span { font-family:var(--font-mono); font-size:12px; color:var(--fc); }
+#ride .bar { grid-column:1 / -1; position:relative; height:3px; margin-top:12px; background:var(--line); border-radius:3px; }
+#ride .bar i { position:absolute; left:0; top:0; bottom:0; width:0; background:var(--fc); border-radius:3px; transition:width 1s linear; }
+#ride .bar i::after { content:""; position:absolute; right:-4px; top:-3px; width:9px; height:9px; border-radius:50%; background:var(--fc); box-shadow:0 0 10px var(--fc); }
+#ride .rb { grid-column:1 / -1; display:flex; justify-content:space-between; font-size:11px; color:var(--faint); margin-top:6px; }
+#ride .go { grid-column:1 / -1; margin-top:10px; display:flex; gap:8px; }
+body.clean #ride { opacity:.75; }
+/* 發車看板 */
+#depart { position:fixed; inset:auto 0 0 0; margin:0 auto; z-index:20; width:min(520px, 100%); max-height:78%; display:flex; flex-direction:column; border-radius:22px 22px 0 0; box-sizing:border-box;
+  background:var(--glass-strong); backdrop-filter:blur(22px); -webkit-backdrop-filter:blur(22px); border:1px solid var(--line); border-bottom:0;
+  padding:18px max(18px, env(safe-area-inset-right,0px)) calc(env(safe-area-inset-bottom,0px) + 14px) max(18px, env(safe-area-inset-left,0px)); }
+#depart header { display:flex; align-items:center; gap:10px; }
+#depart h3 { margin:0; flex:1; font-family:var(--font-display); font-size:20px; letter-spacing:.08em; }
+#depart .lead { color:var(--muted); font-size:13px; line-height:1.7; margin:6px 0 10px; }
+#dlist { overflow:auto; min-height:0; margin-top:8px; }
+#dlist button { display:grid; grid-template-columns:10px auto 1fr auto; gap:10px; align-items:center; width:100%; text-align:left; border:0; border-bottom:1px solid var(--line); background:transparent; padding:12px 6px; border-radius:12px; }
+#dlist button:hover, #dlist button:focus-visible { background:rgba(255,255,255,.06); }
+#dlist i { width:10px; height:10px; border-radius:50%; }
+#dlist b { white-space:nowrap; }
+#dlist span { color:var(--muted); font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+#dlist em { font-style:normal; font-family:var(--font-mono); font-size:14px; color:var(--accent); white-space:nowrap; }
+#dlist .empty { color:var(--muted); padding:18px 6px; font-size:14px; }
+#depart .foot { display:flex; justify-content:space-between; align-items:center; margin-top:10px; font-size:12px; color:var(--faint); }
+/* 到站車票 */
+#ticket { position:fixed; left:50%; top:50%; transform:translate(-50%, -50%); z-index:22; width:min(360px, calc(100% - 32px)); box-sizing:border-box; border-radius:18px; overflow:hidden;
+  background:#F3EBDD; color:#1E1A14; box-shadow:0 24px 60px rgba(0,0,0,.5); animation:tk-in .5s cubic-bezier(.2,.9,.3,1.2); }
+@keyframes tk-in { from { opacity:0; transform:translate(-50%, -44%) rotate(-2deg); } }
+#ticket .top { padding:18px 92px 14px 20px; position:relative; }
+#ticket .no { font-family:var(--font-mono); font-size:11px; letter-spacing:.14em; color:#7A6E5C; }
+#ticket .route { margin-top:10px; display:flex; align-items:center; gap:10px; font-family:var(--font-display); font-weight:900; font-size:26px; letter-spacing:.06em; }
+#ticket .route i { flex:1; height:0; border-top:2px dashed #B9AC96; min-width:16px; }
+#ticket .train { margin-top:6px; font-size:13px; color:#5B5141; }
+#ticket .stamp { position:absolute; right:16px; top:12px; width:62px; height:62px; border-radius:50%; border:2.5px solid #C2452D; color:#C2452D; display:grid; place-items:center; transform:rotate(-14deg);
+  font-family:var(--font-display); font-weight:900; font-size:15px; letter-spacing:.1em; line-height:1.1; text-align:center; opacity:.88; animation:stamp .35s .35s both cubic-bezier(.3,1.6,.5,1); }
+@keyframes stamp { from { opacity:0; transform:rotate(-14deg) scale(1.8); } }
+#ticket .stamp small { display:block; font-family:var(--font-mono); font-size:9px; letter-spacing:.02em; font-weight:700; }
+#ticket .stats { display:flex; border-top:2px dashed #CFC3AE; padding:12px 20px; gap:18px; font-size:11px; color:#7A6E5C; }
+#ticket .stats b { display:block; font-family:var(--font-mono); font-size:16px; color:#1E1A14; }
+#ticket .acts { display:flex; gap:8px; padding:12px 16px 16px; background:#E9DFCD; flex-wrap:wrap; }
+#ticket .acts button { height:38px; padding:0 14px; border-radius:999px; border:1px solid #CFC3AE; background:transparent; color:#1E1A14; font-weight:700; font-size:13.5px; }
+#ticket .acts button.primary { background:#1E1A14; color:#F3EBDD; border-color:transparent; }
+#ticket .acts button:last-child { margin-left:auto; border:0; color:#7A6E5C; font-weight:400; }
+/* 設定裡的今天紀錄 */
 #fstat { font-size:12.5px; color:var(--ink); margin-bottom:6px; }
 #flog > div { display:grid; grid-template-columns:8px auto 1fr auto; gap:8px; align-items:center; padding:6px 0; border-bottom:1px solid var(--line); font-size:12.5px; }
 #flog i { width:8px; height:8px; border-radius:50%; }
 #flog b { white-space:nowrap; }
 #flog span { color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
 #flog em { font-style:normal; font-family:var(--font-mono); font-size:12px; color:var(--accent); }
+@media (max-width: 640px) { #rt { font-size:38px; } #ride .rd b { font-size:19px; } }
 /* 開場 */
 #intro { position:fixed; inset:0; z-index:30; display:grid; place-items:center; background:radial-gradient(ellipse at 50% 60%, rgba(7,12,18,.35), rgba(7,12,18,.88)); transition:opacity 1.2s ease; padding:24px; box-sizing:border-box; }
 #intro.out { opacity:0; pointer-events:none; }
@@ -233,7 +281,22 @@ body.clean #focusline { top:calc(env(safe-area-inset-top,0px) + 16px); opacity:.
 
 <div id="brand"><div class="clock"><b id="clock">--:--</b></div></div>
 
-<button id="focusline" hidden aria-live="off"><span class="l"><span class="k"></span><span class="t"></span><span class="s"></span></span><span class="bar"><i></i></span></button>
+<section id="ride" class="glass" hidden aria-live="off">
+  <div class="rk"><span class="dot"></span><b id="rphase"></b><span id="rtrain"></span><button class="x" id="rend">下車</button></div>
+  <div id="rt">00:00</div>
+  <div class="rd"><small id="rdl"></small><b id="rdest"></b><span id="reta"></span></div>
+  <div class="bar"><i id="rbar"></i></div>
+  <div class="rb"><span id="rfrom"></span><span id="rto"></span></div>
+  <div class="go" id="rgo" hidden><button class="pillbtn small primary" id="rnow">現在出發</button></div>
+</section>
+<section id="ticket" hidden role="dialog" aria-label="到站車票"></section>
+<section id="depart" hidden aria-label="搭一班車專注">
+  <header><h3>搭一班車專注</h3><button class="ib" id="dclose" aria-label="關閉"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></header>
+  <div class="lead">選一班大約這麼久後到站的列車。上車就開始專注，列車到站就是休息時間。</div>
+  <div class="tabs" id="ddur"><button data-v="15">15 分</button><button data-v="25">25 分</button><button data-v="50">50 分</button></div>
+  <div id="dlist"></div>
+  <div class="foot"><span id="dnote"></span><button class="pillbtn small" id="dmore">換一批</button></div>
+</section>
 
 <div id="tools">
   <button class="ib" id="musicbtn" aria-pressed="false" title="音樂" aria-label="音樂"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/></svg></button>
@@ -252,6 +315,7 @@ body.clean #focusline { top:calc(env(safe-area-inset-top,0px) + 16px); opacity:.
 
 <div id="dock">
   <button class="pillbtn primary" id="pickbtn">選一列車</button>
+  <button class="pillbtn" id="focusgo" title="搭一班車專注（P）"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="13" r="7.5"/><path d="M12 9.5V13l2.5 1.8M10 2.5h4"/></svg>專注</button>
   <button class="pillbtn" id="roambtn" aria-pressed="false" title="每隔一段時間自動換一列車，偶爾去機場看飛機起降">漫遊</button>
   <button class="pillbtn small" id="viewbtn" title="切換跟車視角（V）" disabled>視角・追車</button>
 </div>
@@ -318,18 +382,11 @@ body.clean #focusline { top:calc(env(safe-area-inset-top,0px) + 16px); opacity:.
     <div class="note">預設為省電。想看 3D 地形與完整細節可以改成「高」，手機會比較耗電、發熱。</div>
   </section>
   <section>
-    <h4>漫遊・專注</h4>
+    <h4>專注</h4>
     <div id="fstat"></div>
     <div id="flog"></div>
-    <div class="row" id="fpreset" style="margin-top:10px">
-      <button data-v="off">只漫遊</button><button data-v="classic">25／5 分</button><button data-v="deep">50／10 分</button><button data-v="short">15／3 分</button>
-    </div>
-    <div class="row" style="margin-top:6px">
-      <button id="fclean" title="專注時隱藏按鈕與字卡，只留倒數；休息時回來">專注時隱藏介面</button>
-      <button id="fchime" title="專注與休息交換時響兩聲柔和的鐘聲">鐘聲</button>
-      <button id="freset" title="倒數回到第一段專注">重來</button>
-    </div>
-    <div class="note">漫遊就是番茄鐘：專注時跟著同一班長途車不換車，倒數留在時鐘下面，字卡會說結束時大約到哪一站；休息時每分鐘換一列車或去看飛機。每 4 段專注有一次長休息。點時鐘下的倒數或按 P 可以暫停。</div>
+    <div class="row" style="margin-top:8px"><button id="fchime" title="上車與到站時響兩聲柔和的鐘聲">到站鐘聲</button></div>
+    <div class="note">按底部的「專注」選一班車：倒數就是列車到站的時間，到站拿一張車票、休息幾分鐘，再搭下一班。每 4 張車票有一次長休息。</div>
   </section>
   <section>
     <h4>畫面</h4>
@@ -357,7 +414,7 @@ body.clean #focusline { top:calc(env(safe-area-inset-top,0px) + 16px); opacity:.
   </section>
   <section>
     <h4>說明</h4>
-    <div class="note">R 漫遊、V 切換視角、M 播放／暫停音樂、P 暫停／繼續專注倒數、F 隱藏介面、Esc 離開跟車。軌道與底圖 © OpenStreetMap 貢獻者，地形 © Mapzen／AWS Terrain Tiles，音樂由瀏覽器即時合成。</div>
+    <div class="note">R 漫遊、V 切換視角、M 播放／暫停音樂、P 搭一班車專注、F 隱藏介面、Esc 離開跟車。軌道與底圖 © OpenStreetMap 貢獻者，地形 © Mapzen／AWS Terrain Tiles，音樂由瀏覽器即時合成。</div>
   </section>
 </section>
 
@@ -368,8 +425,9 @@ body.clean #focusline { top:calc(env(safe-area-inset-top,0px) + 16px); opacity:.
     <div class="btns">
       <button class="pillbtn primary" id="startroam">開始漫遊</button>
       <button class="pillbtn" id="startpick">自己選一列</button>
+      <button class="pillbtn" id="startfocus">搭一班車專注</button>
     </div>
-    <small>漫遊時陪你專注：25 分鐘跟一班車，5 分鐘到處看看 · 建議開啟聲音</small>
+    <small>建議開啟聲音 · 右上角可以選歌</small>
   </div>
 </div>
 
