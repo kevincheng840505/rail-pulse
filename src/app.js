@@ -167,73 +167,29 @@ function paceOk(now) {
   return Pace.ok;
 }
 const DOT = COARSE ? 1.35 : 1; // 手機上列車圓點放大 // 這個縮放以上把列車畫成一節節車廂
-/* ---------- 列車 3D 圖層：車廂直接交給 WebGL 畫 ----------
-   以前車廂是 GeoJSON 的 fill-extrusion 圖層：每次更新都要送到背景執行緒切圖磚、再傳回來，
-   跟拍時幾乎每一格都這樣做，手機的主執行緒被佔滿，縮放就卡。
-   現在把同樣的車廂方塊（carFeatures 產生的多邊形與高度）在這裡直接變成三角形，當格上傳、當格畫出，
-   不經過背景執行緒，鏡頭和車身也一定是同一格的位置，不需要以前的雙緩衝與平移補償。
-   光線算法照 MapLibre 的 fill-extrusion，看起來跟原本一樣。 */
+/* ---------- 列車 3D 圖層：車廂、旅客的 3D 模型直接交給 WebGL 畫 ----------
+   每節車廂、每位旅客都是 models.js 做好的網格（只上傳一次），加上一個位置矩陣。
+   更新時只重算矩陣，不必重算三角形；鏡頭和車身一定是同一格的位置。 */
 const TrainGL = {
-  // 每組各自一份三角形：背景車廂、跟拍的列車、附近的列車、月台旅客
-  groups: {
-    cars: { base: 'b3', minz: CAR_ZOOM }, focus: { base: 'b3', minz: CAR_ZOOM },
-    near: { base: 'b3', minz: CAR_ZOOM }, people: { base: 'b', minz: 16 },
-  },
-  gl: null, prog: null, loc: null, colors: new Map(),
-  set(name, feats) {
+  // 每組各自一份清單：背景車廂、跟拍的列車、附近的列車、月台旅客
+  groups: { cars: { minz: CAR_ZOOM }, focus: { minz: CAR_ZOOM }, near: { minz: CAR_ZOOM }, people: { minz: 16 } },
+  gl: null, meshes: new Map(),
+  set(name, list) {
     const g = this.groups[name];
-    if (!feats.length && !g.f) return; // 已經是空的：不用重畫
-    g.f = feats.length ? feats : null; g.dirty = true;
+    if (!list.length && !g.f) return; // 已經是空的：不用重畫
+    g.f = list.length ? list : null;
     if (map) map.triggerRepaint();
   },
   has(name) { return !!this.groups[name].f; },
-  rgb(c) {
-    let v = this.colors.get(c);
-    if (!v) { const n = parseInt(c.slice(1), 16); v = [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255]; this.colors.set(c, v); }
-    return v;
+  mesh(it) {
+    let m = this.meshes.get(it.key);
+    if (!m) { m = GL3D.upload(this.gl, it.make()); this.meshes.set(it.key, m); if (this.meshes.size > 400) this.trim(); }
+    return m;
   },
-  // 多邊形（經緯度）＋底高、頂高（公尺）→ 以第一個點為原點、單位公尺的三角形（頂面與側面；底面看不到不畫）
-  build(g) {
-    const f = g.f, gl = this.gl;
-    g.dirty = false; g.n = 0;
-    if (!f || !gl) return;
-    const c0 = f[0].geometry.coordinates[0][0], R = Math.PI / 180;
-    const ox = (c0[0] + 180) / 360, oy = (1 - Math.log(Math.tan(Math.PI / 4 + c0[1] * R / 2)) / Math.PI) / 2;
-    const mpu = 40075016.686 * Math.cos(c0[1] * R); // 這個緯度上，每個墨卡托單位是幾公尺
-    let need = 0;
-    for (const q of f) need += (q.geometry.coordinates[0].length - 1) * 9 * 3; // 頂面 (n-2)*3 + 側面 n*6 ≤ n*9 個頂點
-    if (!g.P || g.P.length < need) { const cap = Math.ceil(need * 1.5); g.P = new Float32Array(cap); g.N = new Float32Array(cap); g.C = new Float32Array(cap); }
-    const P = g.P, N = g.N, C = g.C, bk = g.base;
-    let k = 0;
-    const xs = [], ys = [];
-    const vtx = (x, y, z, nx, ny, nz, col) => { P[k] = x; P[k + 1] = y; P[k + 2] = z; N[k] = nx; N[k + 1] = ny; N[k + 2] = nz; C[k] = col[0]; C[k + 1] = col[1]; C[k + 2] = col[2]; k += 3; };
-    for (const q of f) {
-      const pr = q.properties, lo = pr[bk] || 0, hi = pr.t;
-      if (!(hi - lo > 1e-3)) continue;
-      const ring = q.geometry.coordinates[0], n = ring.length - 1, col = this.rgb(pr.c);
-      let area = 0;
-      for (let i = 0; i < n; i++) {
-        const [lon, lat] = ring[i];
-        xs[i] = ((lon + 180) / 360 - ox) * mpu;
-        ys[i] = ((1 - Math.log(Math.tan(Math.PI / 4 + lat * R / 2)) / Math.PI) / 2 - oy) * mpu;
-      }
-      for (let i = 0; i < n; i++) { const j = (i + 1) % n; area += xs[i] * ys[j] - xs[j] * ys[i]; }
-      const sg = area >= 0 ? 1 : -1;
-      // 頂面：扇形三角化（車廂零件都是凸多邊形）
-      for (let i = 1; i < n - 1; i++) { vtx(xs[0], ys[0], hi, 0, 0, 1, col); vtx(xs[i], ys[i], hi, 0, 0, 1, col); vtx(xs[i + 1], ys[i + 1], hi, 0, 0, 1, col); }
-      // 側面：法向量朝外
-      for (let i = 0; i < n; i++) {
-        const j = (i + 1) % n, dx = xs[j] - xs[i], dy = ys[j] - ys[i], l = Math.hypot(dx, dy) || 1, nx = sg * dy / l, ny = -sg * dx / l;
-        vtx(xs[i], ys[i], lo, nx, ny, 0, col); vtx(xs[j], ys[j], lo, nx, ny, 0, col); vtx(xs[j], ys[j], hi, nx, ny, 0, col);
-        vtx(xs[i], ys[i], lo, nx, ny, 0, col); vtx(xs[j], ys[j], hi, nx, ny, 0, col); vtx(xs[i], ys[i], hi, nx, ny, 0, col);
-      }
-    }
-    g.n = k / 3;
-    // 模型矩陣：公尺 → 墨卡托單位，再移到原點
-    const s = 1 / mpu;
-    g.model = [s, 0, 0, 0, 0, s, 0, 0, 0, 0, s, 0, ox, oy, 0, 1];
-    if (!g.bufs) g.bufs = [gl.createBuffer(), gl.createBuffer(), gl.createBuffer()];
-    [P, N, C].forEach((arr, i) => { gl.bindBuffer(gl.ARRAY_BUFFER, g.bufs[i]); gl.bufferData(gl.ARRAY_BUFFER, arr.subarray(0, k), gl.DYNAMIC_DRAW); });
+  // 模型太多（換了很多種車、日夜切換）時，把目前沒在畫的刪掉
+  trim() {
+    const used = new Set(); for (const g of Object.values(this.groups)) for (const it of g.f || []) used.add(it.key);
+    for (const [k, m] of this.meshes) if (!used.has(k)) { m.bufs.forEach(b => this.gl.deleteBuffer(b)); this.meshes.delete(k); }
   },
   // 點選：沿著畫出來的列車每節車廂取一點投到螢幕上，找最近的一列
   pick(pt) {
@@ -252,54 +208,14 @@ const TrainGL = {
   },
   layer: {
     id: 'trains3d', type: 'custom', renderingMode: '3d',
-    onAdd(m, gl) {
-      const T = TrainGL;
-      T.gl = gl;
-      for (const g of Object.values(T.groups)) { g.bufs = null; g.dirty = true; }
-      const sh = (type, src) => { const o = gl.createShader(type); gl.shaderSource(o, src); gl.compileShader(o); return o; };
-      const prog = gl.createProgram();
-      // 與 MapLibre fill-extrusion 相同的打光（vertical-gradient 關閉時）
-      gl.attachShader(prog, sh(gl.VERTEX_SHADER, `
-        uniform mat4 u_pm; uniform vec3 u_lightpos; uniform vec3 u_lightcolor; uniform float u_lightintensity;
-        attribute vec3 a_pos; attribute vec3 a_n; attribute vec3 a_c; varying vec3 v_c;
-        void main() {
-          float cv = a_c.r * 0.2126 + a_c.g * 0.7152 + a_c.b * 0.0722;
-          float d = clamp(dot(a_n, u_lightpos), 0.0, 1.0);
-          d = mix(1.0 - u_lightintensity, max(1.0 - cv + u_lightintensity, 1.0), d);
-          v_c = clamp(a_c * d * u_lightcolor, mix(vec3(0.0), vec3(0.3), 1.0 - u_lightcolor), vec3(1.0));
-          gl_Position = u_pm * vec4(a_pos, 1.0);
-        }`));
-      gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, `precision mediump float; varying vec3 v_c; void main() { gl_FragColor = vec4(v_c, 1.0); }`));
-      gl.linkProgram(prog);
-      T.prog = prog;
-      T.loc = { pm: gl.getUniformLocation(prog, 'u_pm'), lp: gl.getUniformLocation(prog, 'u_lightpos'), lc: gl.getUniformLocation(prog, 'u_lightcolor'), li: gl.getUniformLocation(prog, 'u_lightintensity'),
-        attrs: ['a_pos', 'a_n', 'a_c'].map(a => gl.getAttribLocation(prog, a)) };
-    },
-    onRemove() { TrainGL.gl = null; TrainGL.prog = null; },
+    onAdd(m, gl) { TrainGL.gl = gl; TrainGL.meshes.clear(); },
+    onRemove() { TrainGL.gl = null; TrainGL.meshes.clear(); },
     render(gl, matrix) {
-      const T = TrainGL; if (!T.prog) return;
-      const z = map.getZoom();
+      const T = TrainGL, z = map.getZoom();
       const live = Object.values(T.groups).filter(g => g.f && z >= g.minz);
       if (!live.length) return;
-      const L = T.loc;
-      gl.useProgram(T.prog);
-      // 光線：跟地圖的 setLight 一樣（anchor: map），位置是 [半徑, 方位角, 仰角]
-      let lc = [1, 1, 1], li = 0.5, lp = [0, 0, 1.2];
-      try {
-        const lt = map.getLight() || {};
-        if (typeof lt.color === 'string' && lt.color[0] === '#') lc = T.rgb(lt.color);
-        if (typeof lt.intensity === 'number') li = lt.intensity;
-        if (Array.isArray(lt.position)) { const [r, a0, p0] = lt.position, a = (a0 + 90) * Math.PI / 180, pl = p0 * Math.PI / 180; lp = [r * Math.cos(a) * Math.sin(pl), r * Math.sin(a) * Math.sin(pl), r * Math.cos(pl)]; }
-      } catch {}
-      gl.uniform3fv(L.lp, lp); gl.uniform3fv(L.lc, lc); gl.uniform1f(L.li, li);
-      gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(true); gl.disable(gl.CULL_FACE); gl.disable(gl.BLEND);
-      for (const g of live) {
-        if (g.dirty) T.build(g);
-        if (!g.n) continue;
-        gl.uniformMatrix4fv(L.pm, false, new Float32Array(PlaneGLmul(matrix, g.model)));
-        g.bufs.forEach((b, i) => { gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.enableVertexAttribArray(L.attrs[i]); gl.vertexAttribPointer(L.attrs[i], 3, gl.FLOAT, false, 0, 0); });
-        gl.drawArrays(gl.TRIANGLES, 0, g.n);
-      }
+      const p = GL3D.begin(gl);
+      for (const g of live) for (const it of g.f) GL3D.draw(gl, p, T.mesh(it), matrix, it.m);
     },
   },
 };
@@ -768,7 +684,7 @@ function pushFocus() {
   if (map.getZoom() >= 16 && !Quality.low) { // 省電畫質不畫旅客，也不計算（切到省電時下面送一次空資料清掉）
     const now = performance.now();
     if (!S.pplSt || now - S.pplSt.at > 1000) { const c = map.getCenter(), [cx, cy] = proj(c.lat, c.lng); S.pplSt = { at: now, list: NODES.filter(n => Math.hypot(n.x - cx, n.y - cy) < 0.5).sort((a, b) => Math.hypot(a.x - cx, a.y - cy) - Math.hypot(b.x - cx, b.y - cy)) }; }
-    const cap = (COARSE ? 140 : 260) * 6;
+    const cap = COARSE ? 140 : 260; // 最多畫幾位旅客
     for (const n of S.pplSt.list) for (const [R, idx] of stationReps(n)) stationPeople(n, R, idx, m, ppl, cap);
   }
   TrainGL.set('people', ppl);

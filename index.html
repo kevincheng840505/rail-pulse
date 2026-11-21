@@ -1909,6 +1909,431 @@ const Music = (() => {
   return api;
 })();
 </script>
+<script>/* ===== 3D 模型：列車、飛機、旅客 =====
+   以前每個東西都是「多邊形往上擠出」的方塊疊出來的。現在改成真正的 3D 網格：
+   車身是沿著車長把圓角斷面一段段接起來（loft），車頭依實車輪廓收窄、壓低，最前端再用圓頂封起來；
+   機身是圓形斷面旋轉體，主翼、尾翼用 NACA 翼型斷面，發動機、輪子、旅客的四肢都是圓柱與橢球。
+   法向量是平滑的，所以曲面會有明暗漸層；顏色（腰帶、車窗、塗裝）跟著網格的格線切，邊界是乾淨的直線。
+
+   每個模型只在第一次用到時產生，上傳到顯示卡後重複使用；每一節車廂、每架飛機、每個人只是一個
+   「位置＋方向」的矩陣，畫的時候一次一個，不用每格重算三角形。
+   座標：x 往前（車頭／機頭）、y 往右、z 往上，單位公尺。 */
+
+const MESH_HEX = new Map();
+// 顏色：[r, g, b, 自發光]。自發光 1 = 不受日夜光線影響（亮著的車窗、車燈）
+function mcol(hex, e = 0) {
+  let v = MESH_HEX.get(hex);
+  if (!v) { const n = parseInt(hex.slice(1), 16); v = [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255]; MESH_HEX.set(hex, v); }
+  return [v[0], v[1], v[2], e];
+}
+const MB = () => ({ P: [], N: [], C: [] });
+function mbDone(mb) { return { P: new Float32Array(mb.P), N: new Float32Array(mb.N), C: new Float32Array(mb.C), n: mb.P.length / 3 }; }
+
+/* 格狀曲面：rows[i][j] 是點，相鄰四點組成一格；color(i, j) 回傳那一格的顏色。
+   法向量 = 周圍各格法向量的平均（平滑）；wrap 表示每一列頭尾相接（圓周）。
+   最後依「法向量大多朝外」自動翻正（以所有點的中心判斷，車身、機身這類封閉形狀都適用） */
+function surf(mb, rows, color, wrap = false, center = null) {
+  const R = rows.length, Cn = rows[0].length;
+  const N = rows.map(r => r.map(() => [0, 0, 0]));
+  for (let i = 0; i < R - 1; i++) for (let j = 0; j < Cn - 1; j++) {
+    const a = rows[i][j], b = rows[i + 1][j], c = rows[i + 1][j + 1], d = rows[i][j + 1];
+    const ux = c[0] - a[0], uy = c[1] - a[1], uz = c[2] - a[2], vx = d[0] - b[0], vy = d[1] - b[1], vz = d[2] - b[2];
+    const n = [uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx];
+    for (const q of [N[i][j], N[i + 1][j], N[i + 1][j + 1], N[i][j + 1]]) { q[0] += n[0]; q[1] += n[1]; q[2] += n[2]; }
+  }
+  if (wrap) for (let i = 0; i < R; i++) { const a = N[i][0], b = N[i][Cn - 1]; for (let k = 0; k < 3; k++) a[k] = b[k] = a[k] + b[k]; }
+  // 收成一點的列（圓頂尖端）：整列共用一個法向量
+  for (const i of [0, R - 1]) {
+    const r = rows[i], p = r[0];
+    if (r.every(q => Math.abs(q[0] - p[0]) + Math.abs(q[1] - p[1]) + Math.abs(q[2] - p[2]) < 1e-6)) { const s = [0, 0, 0]; for (const q of N[i]) { s[0] += q[0]; s[1] += q[1]; s[2] += q[2]; } for (const q of N[i]) { q[0] = s[0]; q[1] = s[1]; q[2] = s[2]; } }
+  }
+  let cx = 0, cy = 0, cz = 0, cnt = 0;
+  if (center) [cx, cy, cz] = center; else { for (const r of rows) for (const p of r) { cx += p[0]; cy += p[1]; cz += p[2]; cnt++; } cx /= cnt; cy /= cnt; cz /= cnt; }
+  let sg = 0;
+  for (let i = 0; i < R; i++) for (let j = 0; j < Cn; j++) { const n = N[i][j], l = Math.hypot(n[0], n[1], n[2]) || 1; n[0] /= l; n[1] /= l; n[2] /= l; const p = rows[i][j]; sg += n[0] * (p[0] - cx) + n[1] * (p[1] - cy) + n[2] * (p[2] - cz); }
+  const f = sg < 0 ? -1 : 1;
+  const P = mb.P, NN = mb.N, C = mb.C;
+  const v = (i, j, c) => { const p = rows[i][j], n = N[i][j]; P.push(p[0], p[1], p[2]); NN.push(n[0] * f, n[1] * f, n[2] * f); C.push(c[0], c[1], c[2], c[3]); };
+  for (let i = 0; i < R - 1; i++) for (let j = 0; j < Cn - 1; j++) {
+    const c = color(i, j); if (!c) continue;
+    v(i, j, c); v(i + 1, j, c); v(i + 1, j + 1, c);
+    v(i, j, c); v(i + 1, j + 1, c); v(i, j + 1, c);
+  }
+}
+// 圓管（可兩端不同半徑、兩端封口）：輪子、桿件、四肢
+function tube(mb, p0, p1, r0, r1, seg, col, caps = true, rz0 = r0, rz1 = r1) {
+  const d = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]], L = Math.hypot(...d) || 1, u = d.map(x => x / L);
+  const t = Math.abs(u[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+  let a = [u[1] * t[2] - u[2] * t[1], u[2] * t[0] - u[0] * t[2], u[0] * t[1] - u[1] * t[0]]; const la = Math.hypot(...a); a = a.map(x => x / la);
+  const b = [u[1] * a[2] - u[2] * a[1], u[2] * a[0] - u[0] * a[2], u[0] * a[1] - u[1] * a[0]];
+  const ring = (p, r, rz) => { const o = []; for (let j = 0; j <= seg; j++) { const g = j / seg * Math.PI * 2, c = Math.cos(g) * r, s = Math.sin(g) * rz; o.push([p[0] + a[0] * c + b[0] * s, p[1] + a[1] * c + b[1] * s, p[2] + a[2] * c + b[2] * s]); } return o; };
+  const rows = [];
+  if (caps) rows.push(ring(p0, 0, 0), ring(p0, r0 * 0.92, rz0 * 0.92));
+  rows.push(ring(p0, r0, rz0), ring(p1, r1, rz1));
+  if (caps) rows.push(ring(p1, r1 * 0.92, rz1 * 0.92), ring(p1, 0, 0));
+  surf(mb, rows, () => col, true, [(p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2]);
+}
+// 橢球（rx 前後、ry 左右、rz 上下）；p 讓形狀介於橢球（2）與圓角柱（越大越方）之間
+function ellipsoid(mb, c, rx, ry, rz, col, nu = 10, nv = 7, p = 2) {
+  const e = 2 / p, sp = (x, k) => Math.sign(x) * Math.pow(Math.abs(x), k);
+  const rows = [];
+  for (let i = 0; i <= nv; i++) {
+    const th = -Math.PI / 2 + Math.PI * i / nv, cz = sp(Math.sin(th), e), cr = sp(Math.cos(th), e), row = [];
+    for (let j = 0; j <= nu; j++) { const g = j / nu * Math.PI * 2; row.push([c[0] + rx * cr * sp(Math.cos(g), e), c[1] + ry * cr * sp(Math.sin(g), e), c[2] + rz * cz]); }
+    rows.push(row);
+  }
+  surf(mb, rows, () => col, true, c);
+}
+
+/* ---------- 列車車廂 ----------
+   斷面：下緣圓角、側面微微內傾、車頂圓弧。側面的點刻意放在腰帶、車窗帶的高度上，色帶邊界才會是直線。
+   車頭：沿用 NOSE_SHAPE 的輪廓參數，越往前越窄、越低、越圓，最前端用圓頂收起來。 */
+const BAND_Z = [0.24, 0.33, 0.37, 0.40, 0.42, 0.50, 0.52, 0.56, 0.60, 0.77, 0.80, 0.82, 0.88];
+function carSection(a, zb, zt, s, h, zlist) {
+  const H = zt - zb, rt = Math.min(a * 0.9, H * 0.45) * (0.32 + 0.55 * s), rb = Math.min(a * 0.6, H * 0.3) * (0.18 + 0.4 * s);
+  const tum = z => 1 - 0.055 * Math.max(0, (z - 0.5 * h) / (0.55 * h)) ** 2; // 上半部微微往內收
+  const half = [[0, zb]];
+  for (let k = 0; k <= 3; k++) { const g = -Math.PI / 2 + Math.PI / 2 * k / 3; half.push([(a - rb) + Math.cos(g) * rb, zb + rb + Math.sin(g) * rb]); }
+  const lo = zb + rb, hi = zt - rt;
+  for (const zr of zlist) { const z = Math.min(hi, Math.max(lo, zr * h)); half.push([a * tum(z), z]); }
+  const at = a * tum(hi);
+  for (let k = 0; k <= 4; k++) { const g = Math.PI / 2 * k / 4; half.push([(at - rt) + Math.cos(g) * rt, hi + Math.sin(g) * rt]); }
+  half.push([(at - rt) * 0.5, zt + H * 0.004], [0, zt + H * 0.006]);
+  // 右半邊（y > 0）由下往上，再接左半邊由上往下
+  const ring = half.slice();
+  for (let k = half.length - 2; k >= 0; k--) ring.push([-half[k][0], half[k][1]]);
+  return ring;
+}
+/* 一節車廂的網格。o：front/back 是 'nose'（流線車頭）或 'end'（接下一節的平端），
+   lampF/lampB 車燈顏色，lit 夜裡車窗亮著，detail 跟拍的列車才有一格格車窗、車門與轉向架細節 */
+function carMesh(L, key, o) {
+  const mb = MB(), S = NOSE_SHAPE[key] || NOSE_SHAPE.EMU900;
+  const w = L.w * EX, h = L.h * EX, a0 = w / 2, len = L.len, xb = -len / 2, xf = len / 2;
+  const zb0 = 0.2 * h, zt0 = 1.04 * h;
+  const nl = L.nose || 1.4, det = o.detail;
+  const zlist = det ? BAND_Z : BAND_Z.filter(z => z !== 0.24 && z !== 0.82 && z !== 0.88 && z !== 0.60 && z !== 0.77);
+  const nDoor = DOORS[key] || 2, doorW = L.len > 15 ? 1.4 : 1.1;
+  const win = mcol('#141C26'), pane = o.lit ? mcol(o.lit, 1) : mcol('#3A5068'), door = mcol(mixHex(L.body, '#2A3038', 0.16)), under = mcol('#24282E');
+  const body = mcol(L.body), roof = mcol(L.roof), cab = L.cab ? mcol(L.cab) : body;
+  const st1 = L.stripe ? mcol(L.stripe) : null, st2 = L.stripe2 ? mcol(L.stripe2) : null, line = !L.stripe && o.line ? mcol(o.line) : null;
+  const sWin = nl >= 6 ? 0.42 : 1.01;
+  // 車門與車窗沿車長的位置（跟 trainDoors 一樣排法）
+  const bodyF = o.front === 'nose' ? xf - nl : xf, bodyB = o.back === 'nose' ? xb + nl : xb, span = bodyF - bodyB;
+  const doors = [];
+  for (let j = 0; j < nDoor; j++) doors.push(bodyB + span * (nDoor === 1 ? 0.9 : nDoor === 2 ? (j ? 0.85 : 0.15) : (j + 0.5) / nDoor));
+  const panes = [];
+  if (det) {
+    const nw = Math.max(2, Math.round(span / 3.4));
+    for (let k = 0; k < nw; k++) {
+      const pa = bodyB + span * (k + 0.18) / nw, pb = bodyB + span * (k + 0.82) / nw;
+      if (doors.some(dc => pb > dc - doorW * 0.7 && pa < dc + doorW * 0.7)) continue;
+      panes.push([pa, pb]);
+    }
+  }
+  // 沿車長的斷面位置：[x, s（車頭內的比例 0~1）, 圓頂縮放 k（1 = 不縮）]
+  const xs = [];
+  const noseS = det ? [0, 0.08, 0.17, 0.27, 0.38, 0.5, 0.61, 0.71, 0.8, 0.88, 0.94, 0.98, 1] : [0, 0.25, 0.5, 0.72, 0.88, 1];
+  const domeK = det ? [0.96, 0.86, 0.7, 0.48, 0.22, 0] : [0.85, 0.5, 0];
+  const tipA = a0 * S.tipW, bulge = Math.max(0.15, Math.min(1.2, tipA * (1.15 - S.tipW) * 0.85));
+  const endCap = (x, dir) => [[x, 0, 0.0], [x, 0, 0.55], [x + dir * 0.02, 0, 0.93], [x + dir * 0.1, 0, 1]];
+  if (o.back === 'nose') {
+    for (let k = domeK.length - 1; k >= 0; k--) xs.push([xb - bulge * Math.sqrt(1 - domeK[k] ** 2), 1, domeK[k], 'dome']);
+    for (let k = noseS.length - 1; k >= 0; k--) xs.push([xb + nl * (1 - noseS[k]), noseS[k], 1, 'nose']);
+  } else xs.push(...endCap(xb, 1).map(p => [...p, 'end']));
+  const lowB = o.back === 'nose' ? bodyB : xb + 0.1, highF = o.front === 'nose' ? bodyF : xf - 0.1;
+  const mids = [lowB, highF];
+  if (det) { for (const d of doors) mids.push(d - doorW / 2, d + doorW / 2, d - doorW * 0.14, d + doorW * 0.14); for (const [pa, pb] of panes) mids.push(pa, pb); }
+  else for (let k = 1; k < 4; k++) mids.push(bodyB + span * k / 4);
+  [...new Set(mids.map(x => +x.toFixed(4)))].sort((p, q) => p - q).forEach(x => { if (x > lowB + 1e-3 && x < highF - 1e-3) xs.push([x, 0, 1, 'body']); });
+  if (o.front === 'nose') {
+    for (const s of noseS) xs.push([xf - nl * (1 - s), s, 1, 'nose']);
+    for (const k of domeK) xs.push([xf + bulge * Math.sqrt(1 - k * k), 1, k, 'dome']);
+  } else xs.push(...endCap(xf, -1).reverse().map(p => [...p, 'end']));
+  const rows = [], meta = [];
+  for (const [x, s, k, zone] of xs) {
+    const a = a0 * (S.tipW + (1 - S.tipW) * Math.pow(Math.max(0, 1 - Math.pow(s, S.wp)), 1 / S.wp));
+    const zt = h * (1.04 - (1.04 - S.tipH) * Math.pow(s, S.hp)), zb = zb0 + 0.04 * h * s * s;
+    const ring = carSection(a, zb, Math.max(zb + 0.3, zt), s, h, zlist), zc = (zb + zt) / 2;
+    // 圓頂：寬度依 k 縮小，高度只夾在逐漸變窄的範圍內，色帶的分界才會一直是水平線
+    const hz = (zt - zb) / 2 * Math.sqrt(k) + 0.004 * (k > 0);
+    rows.push(ring.map(([y, z]) => [x, y * k, k >= 1 ? z : Math.min(zc + hz, Math.max(zc - hz, z))]));
+    meta.push({ s, zone, a });
+  }
+  const inPane = x => panes.some(([pa, pb]) => x > pa && x < pb);
+  const inDoor = x => doors.some(d => Math.abs(x - d) < doorW / 2);
+  const inDoorWin = x => doors.some(d => Math.abs(x - d) < doorW * 0.14);
+  surf(mb, rows, (i, j) => {
+    const A = rows[i][j], B = rows[i + 1][j + 1], x = (A[0] + B[0]) / 2, y = (A[1] + B[1]) / 2, z = (A[2] + B[2]) / 2, r = z / h;
+    const m0 = meta[i], m1 = meta[i + 1], s = Math.max(m0.s, m1.s), zone = m0.zone === 'dome' || m1.zone === 'dome' ? 'dome' : m0.zone === 'end' || m1.zone === 'end' ? 'end' : s > 0 ? 'nose' : 'body';
+    const aa = Math.max(m0.a, m1.a), side = Math.abs(y) > aa * 0.72;
+    const isFront = x > 0;
+    if (zone === 'end') return r < 0.25 ? under : r > 0.95 ? roof : body;
+    if (r < zb0 / h + 0.015 && !side) return under;
+    if (zone === 'dome' || zone === 'nose') {
+      const lamp = isFront ? o.lampF : o.lampB;
+      if (lamp && r > 0.15 && r < 0.31 && Math.abs(y) > aa * 0.3 && Math.abs(y) < aa * 0.8 && (zone === 'dome' || s > 0.9)) return mcol(lamp, 1);
+      // 擋風玻璃：短車頭是整片前窗；高鐵這種長鼻子只有鼻根上方一小塊駕駛艙窗
+      if (nl >= 6 ? (!side && s > 0.12 && s < sWin && r > 0.62 && Math.abs(y) < aa * 0.8) : (r > 0.5 && r < 0.95 && (zone === 'dome' || !side || s > 0.35))) return win;
+    }
+    if (st2 && r > 0.33 && r < 0.37) return st2;
+    if (st1 && r > 0.40 && r < 0.50) return st1;
+    if (line && r > 0.42 && r < 0.52) return line;
+    if (det && side && zone === 'body' && inDoor(x) && r > 0.21 && r < 0.82) return inDoorWin(x) && r > 0.56 && r < 0.8 ? pane : door;
+    if (r > 0.56 && r < 0.80 && side) return det && zone === 'body' && r > 0.6 && r < 0.77 && inPane(x) ? pane : win;
+    if (r > 0.95 && !side) return roof;
+    if (s > 0 && r < 0.56 && L.cab) return cab;
+    return body;
+  }, true, [0, 0, h * 0.6]);
+  // 貫通道（接下一節的那一端）：深色的伸縮風擋
+  if (L.gap > 0) for (const [x0, dir, kind] of [[xb, -1, o.back], [xf, 1, o.front]]) {
+    if (kind !== 'end') continue;
+    const x1 = x0 + dir * (L.gap / 2 + 0.03), r = [];
+    for (const x of [x0 - dir * 0.05, x1]) r.push(carSection(a0 * 0.36, 0.3 * h, 0.92 * h, 0.4, h, [0.5]).map(([y, z]) => [x, y, z]));
+    surf(mb, r, () => mcol('#2A2E33'), true, [x0, 0, 0.6 * h]);
+  }
+  // 車底：轉向架與車底設備
+  const gauge = (key === 'THSR' || /^(TRTC|TYMC|TMRT|KRTC)$/.test(key) ? 0.72 : 0.54) * EX;
+  for (const u of [0.13, 0.87]) {
+    const bx = xb + len * u, bl = Math.min(2.8, len * 0.16);
+    ellipsoid(mb, [bx, 0, 0.55], bl / 2, gauge + 0.12, 0.24, mcol('#1A1D21'), det ? 12 : 6, det ? 5 : 3, 6);
+    if (det) for (const wx of [-bl * 0.38, bl * 0.38]) for (const sy of [-1, 1]) tube(mb, [bx + wx, sy * (gauge - 0.07), 0.43], [bx + wx, sy * (gauge + 0.07), 0.43], 0.43, 0.43, 14, mcol('#3B4046'));
+  }
+  { const ua = xb + len * 0.13 + 1.8, ub = xb + len * 0.87 - 1.8; if (ub > ua) ellipsoid(mb, [(ua + ub) / 2, 0, zb0 - 0.12], (ub - ua) / 2, a0 * 0.7, 0.2, mcol('#2B2F35'), det ? 10 : 6, 4, 6); }
+  // 集電弓（台鐵電聯車、高鐵）
+  if (o.panto && det) {
+    const px = xb + len * 0.7, z0 = zt0 + 0.02, g = mcol('#4A5058'), up = 1.35;
+    for (const sy of [-0.45, 0.45]) { tube(mb, [px - 0.8, sy, z0 + 0.12], [px + 0.2, sy * 0.5, z0 + up * 0.55], 0.04, 0.04, 6, g, false); tube(mb, [px + 0.2, sy * 0.5, z0 + up * 0.55], [px - 0.3, sy * 0.4, z0 + up], 0.035, 0.035, 6, g, false); }
+    tube(mb, [px - 0.3, -0.9, z0 + up], [px - 0.3, 0.9, z0 + up], 0.05, 0.05, 6, mcol('#2C3036'));
+    ellipsoid(mb, [px - 0.6, 0, z0 + 0.06], 0.7, 0.55, 0.08, g, 8, 3, 6);
+  }
+  return mbDone(mb);
+}
+// 打開的車門：兩側各一片深色門洞，寬度 1 公尺，用模型矩陣的 x 縮放成實際打開的寬度
+function doorGapMesh(L) {
+  const mb = MB(), h = L.h * EX, a = L.w * EX / 2 * (1 - 0.055 * 0.02) + 0.03;
+  for (const sy of [-1, 1]) {
+    const rows = [0.21, 0.82].map(r => [[-0.5, sy * a, r * h], [0.5, sy * a, r * h]]);
+    surf(mb, rows, () => mcol('#0B0F14'), false, [0, 0, 0.5 * h]);
+  }
+  // 平面的法向量要朝外
+  for (let i = 0; i < mb.N.length; i += 3) { const y = mb.P[i + 1]; mb.N[i] = 0; mb.N[i + 1] = Math.sign(y); mb.N[i + 2] = 0; }
+  return mbDone(mb);
+}
+
+/* ---------- 旅客 ----------
+   沿用原本的人體比例（鞋、小腿、大腿、骨盆、胸腔、肩、上臂、前臂、脖子、頭），每段改成圓角的橢球。
+   走路的姿勢先量化成 16 個相位，各做一個模型重複使用 */
+function personMesh(phase, walk) {
+  const mb = MB(), k = EX;
+  const shirt = mcol(PERSON_COLOR), pants = mcol('#2E3540'), skin = mcol('#D9A988'), hair = mcol('#22201E'), shoe = mcol('#1B1D20');
+  const ell = (fwd, lat, rf, rl, b, t, col, p = 2.6) => ellipsoid(mb, [fwd * k, lat * k, (b + t) / 2 * k], rf * k, rl * k, Math.max(0.02, (t - b) / 2) * k, col, 6, 3, p);
+  const sw = Math.sin(phase) * walk, vel = Math.cos(phase) * walk;
+  const bob = (1 - Math.abs(Math.cos(phase))) * walk * 0.035, lean = walk * 0.035;
+  for (const [side, f, v] of [[1, sw, vel], [-1, -sw, -vel]]) {
+    const foot = f * 0.21, swing = Math.max(0, v), lift = swing * 0.07, lat = side * 0.085;
+    ell(foot + 0.04, lat, 0.12, 0.05, lift, lift + 0.08, shoe, 3);
+    ell(foot * 0.75 - swing * 0.06, lat, 0.055, 0.055, lift + 0.05, 0.49 + lift * 0.6, pants);
+    ell(foot * 0.38, lat * 0.95, 0.07, 0.07, 0.43 + lift * 0.6, 0.88 + bob, pants);
+  }
+  ell(lean * 0.5, 0, 0.11, 0.165, 0.8 + bob, 0.98 + bob, pants);
+  ell(lean, 0, 0.12, 0.18, 0.93 + bob, 1.3 + bob, shirt, 3);
+  ell(lean * 1.2, 0, 0.1, 0.205, 1.2 + bob, 1.36 + bob, shirt, 3);
+  for (const [side, a] of [[1, -sw], [-1, sw]]) {
+    const lat = side * 0.235;
+    ell(lean * 1.2 + a * 0.06, lat, 0.05, 0.05, 1.0 + bob, 1.34 + bob, shirt);
+    ell(lean + a * 0.17, lat * 0.97, 0.042, 0.042, 0.73 + bob, 1.03 + bob, skin);
+  }
+  ell(lean * 1.3, 0, 0.045, 0.045, 1.32 + bob, 1.45 + bob, skin);
+  ellipsoid(mb, [(lean * 1.4 + 0.01) * k, 0, (1.55 + bob) * k], 0.105 * k, 0.095 * k, 0.125 * k, skin, 9, 6);
+  ellipsoid(mb, [(lean * 1.4 - 0.01) * k, 0, (1.6 + bob) * k], 0.11 * k, 0.1 * k, 0.1 * k, hair, 9, 4);
+  return mbDone(mb);
+}
+
+/* ---------- 飛機 ----------
+   機身：圓形斷面的旋轉體，機頭圓鈍、機尾變細上翹；一格格的客艙窗、駕駛艙擋風玻璃、腰線與機腹塗裝。
+   主翼、水平尾翼、垂直尾翼、小翼與吊架：NACA 對稱翼型斷面，沿翼展漸細、後掠、上反。
+   發動機：短艙旋轉體，前緣深色進氣口；ATR 是翼上的短艙加螺旋槳盤。 */
+// 翼面：secs 是沿翼展的斷面 [{x 前緣, y, z, c 弦長, t 厚度比}]，thick 指厚度方向（'z' 主翼、'y' 垂直尾翼）
+function foil(mb, secs, thick, color, NC = 12) {
+  const cs = [];
+  for (let i = 0; i <= NC; i++) cs.push((1 - Math.cos(Math.PI * i / NC)) / 2); // 前緣附近密一點
+  const tk = (c, t) => 5 * t * (0.2969 * Math.sqrt(c) - 0.126 * c - 0.3516 * c * c + 0.2843 * c ** 3 - 0.1036 * c ** 4);
+  const loop = [];
+  for (let i = NC; i >= 0; i--) loop.push([cs[i], 1]);
+  for (let i = 1; i <= NC; i++) loop.push([cs[i], -1]);
+  const rows = secs.map(S => loop.map(([c, sd]) => { const d = tk(c, S.t) * S.c * sd; return thick === 'z' ? [S.x - c * S.c, S.y, S.z + d] : [S.x - c * S.c, S.y + d, S.z]; }));
+  // 翼尖收口：最後一個斷面壓扁成一條線
+  const last = secs[secs.length - 1];
+  rows.push(loop.map(([c]) => [last.x - c * last.c, last.y, last.z]));
+  const cx = secs.reduce((s, q) => s + q.x - q.c / 2, 0) / secs.length, cy = secs.reduce((s, q) => s + q.y, 0) / secs.length, cz = secs.reduce((s, q) => s + q.z, 0) / secs.length;
+  surf(mb, rows, (i, j) => color(i, j, secs.length), false, [cx, cy, cz]);
+}
+function planeMesh(type, airline, gearDown, lo = false) {
+  const T = AC_TYPES[type], Lv = AIR_LIVERY[airline] || {}, mb = MB();
+  const body = mcol(Lv.body || '#EEF1F4'), belly = mcol(Lv.belly || Lv.body || '#E2E6EA'), tail = mcol(Lv.tail || TAIL_OLD[airline] || '#8C9AA6');
+  const tail2 = Lv.tail2 ? mcol(Lv.tail2) : null, stripe = Lv.stripe ? mcol(Lv.stripe) : null;
+  const dark = mcol('#1E2630'), wingC = mcol(mixHex(Lv.body || '#EEF1F4', '#9AA3AD', 0.25)), metal = mcol('#B7C0C8'), gearC = mcol('#3A4148'), tire = mcol('#202326');
+  const z0 = gearDown ? T.gear : 0, NCf = lo ? 7 : 12;
+  const L = T.L, D = T.D, R = D / 2, nose = L / 2, tailEnd = -L / 2;
+  const noseLen = D * 1.9, tailLen = L * 0.24;
+  const prof = fw => {
+    if (fw > nose - noseLen) { const k = Math.min(1, (fw - (nose - noseLen)) / noseLen); const e = Math.sqrt(Math.max(0, 1 - k * k)); return { r: R * e, lo: R * (1 - e) * 0.55, hi: D - R * (1 - e) * 0.62 }; }
+    if (fw < tailEnd + tailLen) { const k = Math.min(1, 1 - (fw - tailEnd) / tailLen); return { r: R * (1 - 0.84 * k ** 1.2), lo: D * 0.66 * k * k, hi: D - D * 0.06 * k }; }
+    return { r: R, lo: 0, hi: D };
+  };
+  // 機身斷面位置：機頭、機尾密一點；客艙每 0.53 公尺一格（窗、窗間柱交錯）
+  const xs = [], cabinF = nose - noseLen * 0.95, cabinA = tailEnd + tailLen * 0.9, pitchW = lo ? 2.4 : T.prop ? 0.48 : 0.53;
+  for (let i = 0; i <= 8; i++) xs.push(tailEnd + tailLen * (i / 8) ** 1.3);
+  for (let x = tailEnd + tailLen + pitchW / 2; x < nose - noseLen; x += pitchW / 2) xs.push(x);
+  for (let i = 0; i <= 14; i++) xs.push(nose - noseLen + noseLen * Math.sin(Math.PI / 2 * i / 14));
+  xs.sort((a, b) => a - b);
+  const SEG = lo ? 14 : 24, rows = [], info = [];
+  for (const x of xs) {
+    const P = prof(x), h = P.hi - P.lo, rz = h / 2, zc = P.lo + rz, row = [];
+    for (let j = 0; j <= SEG; j++) { const g = -Math.PI / 2 + j / SEG * Math.PI * 2; row.push([x, Math.cos(g) * P.r, z0 + zc + Math.sin(g) * rz]); }
+    rows.push(row); info.push({ x, zc: z0 + zc, rz, r: P.r });
+  }
+  const winZ = 0.62, stripeZ = 0.36;
+  surf(mb, rows, (i, j) => {
+    const A = rows[i][j], B = rows[i + 1][j + 1], x = (A[0] + B[0]) / 2, y = (A[1] + B[1]) / 2, z = (A[2] + B[2]) / 2, I = info[i];
+    const rel = I.rz > 0.01 ? (z - I.zc) / I.rz : 0, hz = (rel + 1) / 2; // 0 機腹 ~ 1 機頂
+    if (x > nose - noseLen * 0.78 && x < nose - noseLen * 0.42 && hz > 0.6 && hz < 0.86 && Math.abs(y) < I.r * 0.85 && Math.abs(y) > I.r * 0.08) return dark;
+    if (x < cabinF && x > cabinA && Math.abs(hz - winZ) < 0.055 && Math.abs(y) > I.r * 0.5) {
+      if (lo) return dark; // 遠看：窗戶連成一條線
+      const ph = ((x - (tailEnd + tailLen)) / pitchW) % 1;
+      if (ph > 0.15 && ph < 0.65) return dark;
+    }
+    if (stripe && x < cabinF + noseLen * 0.4 && x > cabinA - tailLen * 0.3 && Math.abs(hz - stripeZ) < 0.05) return stripe;
+    if (hz < 0.3) return belly;
+    if (tail2 && x < tailEnd + tailLen * 0.5 && hz > 0.75) return tail; // 機尾上緣延續尾翼顏色
+    return body;
+  }, true, [0, 0, z0 + R]);
+
+  // 主翼
+  const semi = T.b / 2, rootLE = nose - L * T.wx, tanSw = Math.tan(T.sw / DEG);
+  const wingZ = z0 + (T.prop ? D * 0.95 : D * 0.16), dih = T.prop ? 0.02 : 0.09;
+  const le = y => rootLE - (y - R) * tanSw, ch = y => T.cr + (T.ct - T.cr) * Math.max(0, y - R) / (semi - R);
+  const wz = y => wingZ + Math.max(0, y - R) * dih;
+  for (const s of [-1, 1]) {
+    const ys = [R * 0.55, R, R + (semi - R) * 0.15, R + (semi - R) * 0.35, R + (semi - R) * 0.6, R + (semi - R) * 0.85, semi];
+    foil(mb, ys.map(y => ({ x: le(y) + (y < R ? 0.4 : 0), y: s * y, z: wz(y), c: ch(y) * (y < R ? 1.08 : 1), t: 0.13 - 0.04 * (y - R) / semi })), 'z', () => wingC, NCf);
+    // 小翼：從翼尖往上翹
+    if (T.wl) { const c = ch(semi) * 0.85, x0 = le(semi) - ch(semi) * 0.05; foil(mb, [0, 0.5, 1].map(u => ({ x: x0 - u * T.wl * 0.6, y: s * (semi + 0.05 + u * 0.35), z: wz(semi) + 0.05 + u * T.wl, c: c * (1 - 0.55 * u), t: 0.08 })), 'y', () => tail, NCf); }
+    // 發動機
+    const ey = R + (semi - R) * T.ey, er = T.de / 2;
+    if (T.prop) {
+      const ef = le(ey) + T.le * 0.25, ezc = wingZ + er * 0.35, ea = ef - T.le;
+      const nr = [];
+      for (let i = 0; i <= 10; i++) { const u = i / 10, x = ea + (ef - ea) * u, r = er * (u < 0.15 ? 0.5 + u / 0.15 * 0.5 : u > 0.8 ? Math.sqrt(Math.max(0, 1 - ((u - 0.8) / 0.2) ** 2)) * 0.9 + 0.1 : 1); const row = []; for (let j = 0; j <= 14; j++) { const g = j / 14 * Math.PI * 2; row.push([x, s * ey + Math.cos(g) * r * 0.8, ezc + Math.sin(g) * r]); } nr.push(row); }
+      surf(mb, nr, () => body, true, [(ea + ef) / 2, s * ey, ezc]);
+      tube(mb, [ef + 0.05, s * ey, ezc], [ef + 0.12, s * ey, ezc], 1.95, 1.95, 24, mcol('#4C5560'));
+      tube(mb, [ef, s * ey, ezc], [ef + 0.55, s * ey, ezc], er * 0.32, 0.02, 10, mcol('#2A2F35'), false);
+    } else {
+      const ef = le(ey) + T.le * 0.55, ea = ef - T.le, ezc = wz(ey) - er - 0.3;
+      const nr = [];
+      const prf = u => u < 0.1 ? 0.88 + 0.12 * Math.sin(u / 0.1 * Math.PI / 2) : u < 0.45 ? 1 : 1 - 0.32 * ((u - 0.45) / 0.55) ** 1.4;
+      for (let i = 0; i <= 14; i++) { const u = i / 14, x = ef - T.le * u, r = er * prf(u), row = []; for (let j = 0; j <= 18; j++) { const g = j / 18 * Math.PI * 2; row.push([x, s * ey + Math.cos(g) * r, ezc + Math.sin(g) * r]); } nr.push(row); }
+      surf(mb, nr, i => i === 0 ? dark : metal, true, [(ea + ef) / 2, s * ey, ezc]);
+      tube(mb, [ef - 0.25, s * ey, ezc], [ef - 0.2, s * ey, ezc], er * 0.86, er * 0.86, 18, dark); // 進氣口內的風扇
+      tube(mb, [ea + 0.2, s * ey, ezc], [ea - T.le * 0.18, s * ey, ezc], er * 0.5, 0.05, 10, mcol('#5B636B'), false); // 尾錐
+      foil(mb, [0, 1].map(u => ({ x: ef - T.le * 0.25 + u * 0.4, y: s * ey, z: ezc + er * 0.8 + (wz(ey) - ezc - er * 0.8 + 0.2) * u, c: T.le * 0.75, t: 0.12 })), 'y', () => metal, NCf);
+    }
+  }
+  // 翼身整流罩
+  if (!T.prop) ellipsoid(mb, [rootLE - T.cr * 0.45, 0, z0 + D * 0.16], T.cr * 0.75, R * 0.98, D * 0.2, belly, 16, 6, 2.4);
+  // 尾翼
+  const finRoot = T.cr * 1.05, finLE = tailEnd + tailLen * 0.62, finTanSw = Math.tan((T.prop ? 30 : 40) / DEG);
+  const finBase = z0 + prof(finLE - finRoot / 2).hi - 0.25;
+  foil(mb, [0, 0.25, 0.5, 0.75, 1].map(u => ({ x: finLE + 0.6 * (1 - u) - u * T.fin * finTanSw, y: 0, z: finBase + u * T.fin, c: finRoot * (1 - 0.6 * u) + (u === 0 ? 0.8 : 0), t: 0.12 - 0.03 * u })), 'y', (i, j, n) => tail2 && i >= n - 2 ? tail2 : tail, NCf);
+  const hsZ = T.prop ? finBase + T.fin * 0.97 : z0 + D * 0.42, hsLE = T.prop ? finLE - T.fin * finTanSw + 0.2 : tailEnd + tailLen * 0.42, hsC = T.cr * 0.5, hsTan = Math.tan((T.prop ? 8 : 32) / DEG);
+  for (const s of [-1, 1]) foil(mb, [0, 0.35, 0.7, 1].map(u => ({ x: hsLE - u * T.hs * hsTan, y: s * (0.3 + u * (T.hs - 0.3)), z: hsZ + u * T.hs * (T.prop ? 0 : 0.08), c: hsC * (1 - 0.55 * u), t: 0.1 })), 'z', () => wingC, NCf);
+  // 起落架
+  if (gearDown) {
+    const g = T.gear, nx = nose - noseLen * 1.05, wr = Math.min(0.62, g * 0.32);
+    tube(mb, [nx, 0, z0 + 0.3], [nx, 0, wr], 0.12, 0.1, 8, gearC, false);
+    for (const sy of [-1, 1]) tube(mb, [nx, sy * 0.12, wr], [nx, sy * 0.38, wr], wr * 0.85, wr * 0.85, 12, tire);
+    const big = T.L > 55, y0 = R * (T.prop ? 0.95 : 1.1), gf = rootLE - T.cr * 0.72;
+    for (const s of [-1, 1]) {
+      tube(mb, [gf, s * y0, z0 + D * 0.2], [gf, s * y0, wr * 1.2], 0.2, 0.17, 8, gearC, false);
+      for (const dx of big ? [-0.75, 0.75] : [0]) for (const dy of [-0.32, 0.32]) tube(mb, [gf + dx, s * y0 + dy - 0.16, wr * 1.05], [gf + dx, s * y0 + dy + 0.16, wr * 1.05], wr * 1.05, wr * 1.05, 14, tire);
+    }
+  }
+  return mbDone(mb);
+}
+
+/* ---------- 共用的繪製程式 ----------
+   打光：主光（跟地圖的日夜、方位一樣）＋天空與地面的環境光＋一點點亮面反光，曲面才看得出立體；
+   自發光的部分（亮著的車窗、車燈）不受光線影響 */
+const GL3D = {
+  progs: new WeakMap(),
+  prog(gl) {
+    let p = this.progs.get(gl); if (p) return p;
+    const sh = (type, src) => { const o = gl.createShader(type); gl.shaderSource(o, src); gl.compileShader(o); if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) console.warn(gl.getShaderInfoLog(o)); return o; };
+    const prog = gl.createProgram();
+    gl.attachShader(prog, sh(gl.VERTEX_SHADER, `
+      uniform mat4 u_pm; uniform mat3 u_r; uniform vec3 u_light; uniform vec3 u_lc; uniform float u_li;
+      attribute vec3 a_pos; attribute vec3 a_n; attribute vec4 a_c; varying vec3 v_c;
+      void main() {
+        vec3 n = normalize(u_r * a_n);
+        float d = max(dot(n, u_light), 0.0);
+        float sky = 0.5 + 0.5 * n.z;
+        float k = (mix(0.34, 0.62, sky) + 0.62 * d) * clamp(0.3 + u_li * 2.3, 0.45, 1.05);
+        vec3 hv = normalize(u_light + vec3(0.0, 0.0, 1.0));
+        float sp = pow(max(dot(n, hv), 0.0), 28.0) * 0.22 * clamp(u_li * 3.0, 0.0, 1.0);
+        vec3 lit = a_c.rgb * mix(vec3(1.0), u_lc, 0.35) * k + sp * u_lc;
+        v_c = mix(lit, a_c.rgb, a_c.a);
+        gl_Position = u_pm * vec4(a_pos, 1.0);
+      }`));
+    gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, `precision mediump float; varying vec3 v_c; void main() { gl_FragColor = vec4(clamp(v_c, 0.0, 1.0), 1.0); }`));
+    gl.linkProgram(prog);
+    p = { prog, pm: gl.getUniformLocation(prog, 'u_pm'), r: gl.getUniformLocation(prog, 'u_r'), light: gl.getUniformLocation(prog, 'u_light'), lc: gl.getUniformLocation(prog, 'u_lc'), li: gl.getUniformLocation(prog, 'u_li'),
+      attrs: ['a_pos', 'a_n', 'a_c'].map(a => gl.getAttribLocation(prog, a)) };
+    this.progs.set(gl, p); return p;
+  },
+  upload(gl, d) {
+    return { n: d.n, bufs: [d.P, d.N, d.C].map(arr => { const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, arr, gl.STATIC_DRAW); return b; }) };
+  },
+  // 地圖目前的光線：方向（墨卡托座標，z 朝上）、顏色、強度
+  light() {
+    let lc = [1, 1, 1], li = 0.3, dir = [0.4, -0.3, 0.86];
+    try {
+      const lt = map.getLight() || {};
+      if (typeof lt.color === 'string' && lt.color[0] === '#') lc = mcol(lt.color).slice(0, 3);
+      if (typeof lt.intensity === 'number') li = lt.intensity;
+      if (Array.isArray(lt.position)) { const a = lt.position[1] / DEG, pl = lt.position[2] / DEG; dir = [Math.sin(pl) * Math.sin(a), -Math.sin(pl) * Math.cos(a), Math.cos(pl)]; }
+    } catch {}
+    return { lc, li, dir };
+  },
+  begin(gl) {
+    const p = this.prog(gl), L = this.light();
+    gl.useProgram(p.prog);
+    gl.uniform3fv(p.light, L.dir); gl.uniform3fv(p.lc, L.lc); gl.uniform1f(p.li, L.li);
+    gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(true); gl.disable(gl.CULL_FACE); gl.disable(gl.BLEND);
+    p.bound = null;
+    return p;
+  },
+  // matrix：地圖的投影矩陣；m：模型矩陣（本地公尺 → 墨卡托），兩者用雙精度相乘
+  draw(gl, p, mesh, matrix, m) {
+    const PM = PlaneGLmul(matrix, m);
+    const sx = Math.hypot(m[0], m[1], m[2]) || 1, sy = Math.hypot(m[4], m[5], m[6]) || 1, sz = Math.hypot(m[8], m[9], m[10]) || 1;
+    gl.uniformMatrix4fv(p.pm, false, new Float32Array(PM));
+    gl.uniformMatrix3fv(p.r, false, new Float32Array([m[0] / sx, m[1] / sx, m[2] / sx, m[4] / sy, m[5] / sy, m[6] / sy, m[8] / sz, m[9] / sz, m[10] / sz]));
+    if (p.bound !== mesh) {
+      mesh.bufs.forEach((b, i) => { gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.enableVertexAttribArray(p.attrs[i]); gl.vertexAttribPointer(p.attrs[i], i === 2 ? 4 : 3, gl.FLOAT, false, 0, 0); });
+      p.bound = mesh;
+    }
+    gl.drawArrays(gl.TRIANGLES, 0, mesh.n);
+  },
+  // 模型矩陣：ll 經緯度、alt 高度（公尺）、brg 方位角（弧度，0 = 北，順時針）、pitch 抬頭角（弧度）、sx 沿 x 縮放
+  model(ll, alt, brg, pitch = 0, sx = 1) {
+    const mc = maplibregl.MercatorCoordinate.fromLngLat(ll, alt), s = mc.meterInMercatorCoordinateUnits();
+    const fw = [Math.sin(brg), -Math.cos(brg)], rt = [Math.cos(brg), Math.sin(brg)];
+    const cp = Math.cos(pitch), sp = Math.sin(pitch);
+    const F = [fw[0] * cp, fw[1] * cp, sp], U = [-fw[0] * sp, -fw[1] * sp, cp];
+    return [F[0] * s * sx, F[1] * s * sx, F[2] * s * sx, 0, rt[0] * s, rt[1] * s, 0, 0, U[0] * s, U[1] * s, U[2] * s, 0, mc.x, mc.y, mc.z, 1];
+  },
+};
+</script>
 <script>/* ===== 場景：3D 車廂模型、跟車視角、光線與天氣 ===== */
 
 /* ---------- 車廂造型 ----------
@@ -2008,97 +2433,39 @@ function rawCenter(trip, km) {
   return segPoint(trip.nodes[lo], trip.nodes[hi], (km - c[lo]) / span);
 }
 
-/* 把一列車拆成多節車廂的 3D 方塊：車身、窗帶、腰帶、車頂，車頭做成流線收窄 */
+/* 把一列車拆成一節節車廂的 3D 模型（models.js 的 carMesh）：每節車廂是一個剛體，
+   擺在車頭到車尾兩個軌道點的連線上，依坡度抬頭或低頭。停站時車門位置疊上打開的門洞 */
+const LIVERY_KEY = new Map(Object.entries(LIVERY).map(([k, v]) => [v, k]));
+const PANTO = { THSR: [2, 8], TEMU2000: [1, 5], TEMU1000: [1, 5], EMU3000: [2, 8], EMU900: [1, 6], E1000: [0] };
 function carFeatures(trip, pos, P, out, detail) {
-  const L = liveryOf(trip), key = Object.keys(LIVERY).find(k => LIVERY[k] === L);
+  const L = liveryOf(trip), key = LIVERY_KEY.get(L);
   const nDoor = DOORS[key] || 2, doorW = (L.len > 15 ? 1.4 : 1.1) / 1000;
   // 車門開合：停站一開始門向兩側滑開，快開車前關上（0 = 關、1 = 全開）
   const sm = x => x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x);
   const doorOpen = pos.atStation ? sm((pos.dwell - 0.03) / 0.07) * sm((0.97 - pos.dwell) / 0.07) : 0;
-  const doorColor = mixHex(L.body, '#2A3038', 0.16), under = '#24282E';
-  const w = L.w * EX / 1000, h = L.h * EX;
-  const winColor = '#141C26', paneColor = P.lit ? P.winLit : '#3A5068';
-  const quad = (a, b, wa, wb) => {
-    // 一節車廂是剛體：兩端都用車頭到車尾連線的方向，跨過彎道時不會扭成交叉的形狀
-    const d = Math.hypot(b.x - a.x, b.y - a.y), h = d > 1e-6 ? Math.atan2(b.y - a.y, b.x - a.x) : a.heading;
-    const ca = Math.cos(h), sa = Math.sin(h), cb = ca, sb = sa;
-    // 前後兩端各自用當地的軌道方向算出左右兩點，彎道上車廂也貼著軌道
-    const r = [unproj(a.x - sa * wa, a.y + ca * wa), unproj(b.x - sb * wb, b.y + cb * wb), unproj(b.x + sb * wb, b.y - cb * wb), unproj(a.x + sa * wa, a.y - ca * wa)];
-    r.push(r[0]); return [r];
-  };
-  // 3D 方塊整體抬高 0.6 公尺，避免與地形表面深度衝突（手機上特別明顯）；b 仍記原始值，b=0 代表車身底面
-  const add = (geom, base, top, color, e = 0) => out.push({ type: 'Feature', properties: { b: base, b3: base + LIFT + e, t: top + LIFT + e, c: color }, geometry: { type: 'Polygon', coordinates: geom } });
-  // 上下坡：每個零件抬到它所在位置的軌道高度；長條的車身在坡上切成幾小段，看起來是斜的而不是一階一階
+  const lit = P.lit ? P.winLit : '', line = !L.stripe ? trip.color || '' : '';
+  const lampF = P.lit ? '#FFF6DC' : '#E9E4D2', lampB = P.lit ? '#FF2D2D' : '#B3262A';
   const sloped = !!elevProfile(trip), E = k => sloped ? elevAt(trip, k) : 0;
+  const total = trip.cum[trip.cum.length - 1], panto = PANTO[key] || [];
   let km = pos.km;
-  const total = trip.cum[trip.cum.length - 1];
   for (let i = 0; i < L.n; i++) {
     const front = km, back = km - L.len / 1000;
     km = back - L.gap / 1000;
-    const lead = i === 0, tail = i === L.n - 1;
-    const nose = L.nose / 1000;
+    const lead = i === 0, tail = i === L.n - 1 && L.n > 1;
     const f = trackPoint(trip, Math.min(front, total + 0.02)), bk = trackPoint(trip, back);
-    // 整節車廂的零件（車門、車窗、轉向架、車頭）都放在車頭到車尾這條直線上，
-    // 彎道上才不會有零件沿著弧線跑出車身之外
-    const span0 = front - back, cp = k => { const t = (k - back) / span0; return { x: bk.x + (f.x - bk.x) * t, y: bk.y + (f.y - bk.y) * t, heading: f.heading }; };
-    // 車身主體（去掉車頭流線段）
-    const kF = lead && nose ? front - nose : front, kB = tail && nose ? back + nose : back;
-    const band = (wd, base, top, color) => {
-      const ef = E(kF), eb = E(kB), n = Math.abs(ef - eb) < 0.03 ? 1 : Math.min(12, Math.ceil(Math.abs(ef - eb) / 0.03));
-      if (n === 1) return add(quad(cp(kF), cp(kB), wd, wd), base, top, color, (ef + eb) / 2);
-      for (let j = 0; j < n; j++) { const k1 = kF + (kB - kF) * j / n, k2 = kF + (kB - kF) * (j + 1) / n; add(quad(cp(k1), cp(k2), wd, wd), base, top, color, E((k1 + k2) / 2)); }
-    };
-    // 車身底下留一段深色車底，看起來才像架在轉向架上
-    band(w * 0.42, 0, h * 0.12, under);
-    band(w / 2, h * 0.1, h, L.body);
-    // 窗帶與腰帶：比車身寬一點點，蓋在側面
-    const iw = w / 2 + 0.00008;
-    band(iw, h * 0.56, h * 0.8, winColor);
-    // 車門：跟拍的列車一定畫；其他列車停站時也畫，旅客上下車才是從門口進出，不會穿過車身
-    const span = (front - back) - (lead && nose ? nose : 0) - (tail && nose ? nose : 0);
-    const k0 = back + (tail && nose ? nose : 0);
-    const doors = [];
-    if (detail || pos.atStation) {
-      // 一節平均分布（單門、雙門的車型放在兩端）
-      for (let j = 0; j < nDoor; j++) doors.push(k0 + span * (nDoor === 1 ? 0.9 : nDoor === 2 ? (j ? 0.85 : 0.15) : (j + 0.5) / nDoor));
-      for (const dc of doors) {
-        const e = E(dc), half = doorW / 2, slide = doorOpen * half;
-        // 門洞：門打開多少就露出多少車廂內部
-        if (doorOpen > 0.02) add(quad(cp(dc - slide), cp(dc + slide), iw + 0.00004, iw + 0.00004), h * 0.12, h * 0.82, '#0B0F14', e);
-        // 兩片門板沿著車身往左右滑開
-        for (const sd of [-1, 1]) {
-          const c0 = dc + sd * (half / 2 + slide), a = cp(c0 - half / 2), b = cp(c0 + half / 2);
-          add(quad(a, b, iw + 0.00007, iw + 0.00007), h * 0.12, h * 0.82, doorColor, e);
-          if (detail) { const a2 = cp(c0 - half * 0.28), b2 = cp(c0 + half * 0.28); add(quad(a2, b2, iw + 0.00009, iw + 0.00009), h * 0.56, h * 0.78, paneColor, e); }
-        }
+    const hd = Math.atan2(f.y - bk.y, f.x - bk.x), ef = E(front), eb = E(back);
+    const pitch = Math.atan2(ef - eb, (front - back) * 1000), brg = hd + Math.PI / 2;
+    const o = { front: lead ? 'nose' : 'end', back: tail ? 'nose' : 'end', lampF: lead ? lampF : '', lampB: tail ? lampB : '', lit: detail ? lit : '', line, detail, panto: panto.includes(i) && !lead && !tail };
+    const mk = key + '|' + o.front + o.back + '|' + o.lampF + o.lampB + '|' + o.lit + '|' + line + '|' + (detail ? 1 : 0) + (o.panto ? 'p' : '');
+    out.push({ key: mk, make: () => carMesh(L, key, o), m: GL3D.model(unproj((f.x + bk.x) / 2, (f.y + bk.y) / 2), LIFT + (ef + eb) / 2, brg, pitch) });
+    // 打開的車門：門洞的寬度跟著開門的程度
+    if (doorOpen > 0.02 && (detail || pos.atStation)) {
+      const nose = L.nose / 1000, k0 = back + (tail && nose ? nose : 0), span = (front - back) - (lead && nose ? nose : 0) - (tail && nose ? nose : 0);
+      for (let j = 0; j < nDoor; j++) {
+        const dc = k0 + span * (nDoor === 1 ? 0.9 : nDoor === 2 ? (j ? 0.85 : 0.15) : (j + 0.5) / nDoor), u = (dc - back) / (front - back);
+        out.push({ key: 'gap|' + key, make: () => doorGapMesh(L), m: GL3D.model(unproj(bk.x + (f.x - bk.x) * u, bk.y + (f.y - bk.y) * u), LIFT + eb + (ef - eb) * u + 0.005, brg, pitch, doorOpen * doorW * 1000) });
       }
     }
-    // 近看時把窗帶切成一格格車窗，夜裡會亮
-    if (detail) {
-      // 車窗：避開車門的位置
-      const nw = Math.max(2, Math.round(span * 1000 / 3.4));
-      for (let k = 0; k < nw; k++) {
-        const ka = k0 + span * (k + 0.18) / nw, kb = k0 + span * (k + 0.82) / nw;
-        if (doors.some(dc => kb > dc - doorW * 0.7 && ka < dc + doorW * 0.7)) continue;
-        add(quad(cp(kb), cp(ka), iw + 0.00003, iw + 0.00003), h * 0.6, h * 0.77, paneColor, E((ka + kb) / 2));
-      }
-      // 轉向架（車頂不放冷氣機方塊：從上面跟拍時看起來像一塊塊灰色色塊）
-      for (const u of [0.13, 0.87]) {
-        const c = back + (front - back) * u, a = cp(c - 0.0013), b = cp(c + 0.0013);
-        add(quad(a, b, w * 0.47, w * 0.47), 0, h * 0.14, '#1A1D21', E(c));
-      }
-      // 車廂之間的貫通道
-      if (!tail && L.gap > 0) {
-        const a = cp(back - L.gap / 1000 - 0.0002), b = cp(back + 0.0002);
-        add(quad(a, b, w * 0.4, w * 0.4), h * 0.15, h * 0.9, under, E(back - L.gap / 2000));
-      }
-    }
-    if (L.stripe) band(iw + 0.00002, h * 0.4, h * 0.5, L.stripe);
-    if (L.stripe2) band(iw + 0.00002, h * 0.33, h * 0.37, L.stripe2);
-    band(w * 0.36, h, h * 1.07, L.roof);
-    if (!L.stripe && trip.color) band(iw + 0.00002, h * 0.42, h * 0.52, trip.color);
-    if (lead && nose) { const e = E(front - nose / 2); noseFeatures(trip, L, cp(front - nose), cp(front), nose, w, h, detail, (g, b, t, c) => add(g, b, t, c, e), winColor, trip.color, P.lit ? '#FFF6DC' : '#E9E4D2'); }
-    if (tail && nose && L.n > 1) { const e = E(back + nose / 2); noseFeatures(trip, L, cp(back + nose), cp(back), nose, w, h, detail, (g, b, t, c) => add(g, b, t, c, e), winColor, trip.color, P.lit ? '#FF2D2D' : '#B3262A'); }
   }
 }
 
@@ -2138,34 +2505,9 @@ function railBand(trip, k0, k1, o0, o1) {
    走路時：前後腳交錯，往前邁的那隻腳會抬起來、膝蓋彎（小腿落在大腿後面），
    手臂跟同側的腳反向擺、前臂擺得比上臂多；身體每一步上下起伏一點、微微前傾。 */
 function personFig(out, x, y, base, hd, phase, walk) {
-  const c = Math.cos(hd), s = Math.sin(hd), k = EX / 1000;
-  // 以人為中心的橢圓柱：fwd 前後、lat 左右（公尺），rf/rl 兩個半徑，b/t 底與頂的高度
-  const ell = (fwd, lat, rf, rl, b, t, n = 6) => {
-    const cx = x + (c * fwd - s * lat) * k, cy = y + (s * fwd + c * lat) * k, r = [];
-    for (let i = 0; i <= n; i++) { const a = (i % n) / n * Math.PI * 2 + Math.PI / n, u = Math.cos(a) * rf, v = Math.sin(a) * rl; r.push(unproj(cx + (c * u - s * v) * k, cy + (s * u + c * v) * k)); }
-    out.push(sfeat(r, base + b * EX, base + t * EX, PERSON_COLOR));
-  };
-  const sw = Math.sin(phase) * walk, vel = Math.cos(phase) * walk;
-  const bob = (1 - Math.abs(Math.cos(phase))) * walk * 0.035, lean = walk * 0.035;
-  // 腿：L 是左腳（lat > 0）。腳往前移動的那一隻在擺盪，抬腳、膝蓋往後彎
-  for (const [side, f, v] of [[1, sw, vel], [-1, -sw, -vel]]) {
-    const foot = f * 0.21, swing = Math.max(0, v), lift = swing * 0.07;
-    const lat = side * 0.085;
-    ell(foot + 0.04, lat, 0.12, 0.05, lift, lift + 0.07);                              // 鞋子（前端比較長）
-    ell(foot * 0.75 - swing * 0.06, lat, 0.05, 0.05, lift + 0.06, 0.47 + lift * 0.6);   // 小腿
-    ell(foot * 0.38, lat * 0.95, 0.065, 0.065, 0.45 + lift * 0.6, 0.86 + bob);          // 大腿
-  }
-  ell(lean * 0.5, 0, 0.1, 0.16, 0.8 + bob, 0.97 + bob, 8);                              // 骨盆
-  ell(lean, 0, 0.11, 0.17, 0.95 + bob, 1.22 + bob, 8);                                  // 胸腔
-  ell(lean * 1.2, 0, 0.1, 0.205, 1.2 + bob, 1.34 + bob, 8);                             // 肩膀
-  // 手臂：跟同側的腳反向擺
-  for (const [side, a] of [[1, -sw], [-1, sw]]) {
-    const lat = side * 0.235;
-    ell(lean * 1.2 + a * 0.06, lat, 0.045, 0.045, 1.0 + bob, 1.33 + bob);               // 上臂
-    ell(lean + a * 0.17, lat * 0.97, 0.04, 0.04, 0.74 + bob, 1.02 + bob);               // 前臂與手
-  }
-  ell(lean * 1.3, 0, 0.045, 0.045, 1.33 + bob, 1.44 + bob);                             // 脖子
-  ell(lean * 1.4 + 0.01, 0, 0.115, 0.1, 1.42 + bob, 1.68 + bob, 8);                     // 頭
+  // 走路的姿勢量化成 16 個相位，同一個相位共用一個模型
+  const q = walk ? ((Math.round(phase / (Math.PI / 8)) % 16) + 16) % 16 : -1;
+  out.push({ key: 'person|' + q, make: () => personMesh(q < 0 ? 0 : q * Math.PI / 8, q < 0 ? 0 : 1), m: GL3D.model(unproj(x, y), base, hd + Math.PI / 2) });
 }
 // 沿著折線走 d 公尺後的位置與方向
 function alongPath(pts, d) {
@@ -2414,55 +2756,6 @@ function stationPeople(node, R, idx, m, out, cap) {
       const d = standAt(nowS);
       if (d < Lp) walker(out, path, d, base);
       else personFig(out, spot[0], spot[1], base, Math.atan2(face[1] - spot[1], face[0] - spot[0]), 0, 0);
-    }
-  }
-}
-
-/* 車頭：以平滑的俯視輪廓一層層往上疊。每一層的頂面高度越高、往前伸得越短，
-   疊起來就是一個往前下斜的圓弧車鼻；腰帶、窗帶的顏色也跟著繞過車頭 */
-function noseFeatures(trip, L, root, tip, nose, w, h, detail, add, winColor, lineColor, lamp) {
-  const key = Object.keys(LIVERY).find(k => LIVERY[k] === L);
-  const S = NOSE_SHAPE[key] || NOSE_SHAPE.EMU900;
-  const len = Math.hypot(tip.x - root.x, tip.y - root.y) || nose;
-  const ux = (tip.x - root.x) / len, uy = (tip.y - root.y) / len; // 往車頭方向
-  const nx = -uy, ny = ux;                                           // 側向
-  const pt = (s, y) => unproj(root.x + ux * s * len + nx * y, root.y + uy * s * len + ny * y);
-  const halfW = s => (w / 2) * (S.tipW + (1 - S.tipW) * Math.pow(Math.max(0, 1 - Math.pow(s, S.wp)), 1 / S.wp));
-  const reach = r => r <= S.tipH ? 1 : Math.pow((1 - r) / (1 - S.tipH), 1 / S.hp); // 高度比例 r 的那一層能伸到哪
-  // 分層：顏色交界一定要切，上半部再多切幾層讓斜面更平滑
-  const cuts = new Set([0, 0.1, 0.56, 0.8, 1]);
-  if (L.stripe) { cuts.add(0.4); cuts.add(0.5); }
-  if (L.stripe2) { cuts.add(0.33); cuts.add(0.37); }
-  if (!L.stripe && lineColor) { cuts.add(0.42); cuts.add(0.52); }
-  for (const r of detail ? [0.25, 0.66, 0.73, 0.87, 0.93, 0.97] : [0.68, 0.9]) cuts.add(r);
-  const H = [...cuts].sort((a, b) => a - b);
-  const nSide = detail ? 8 : 4, nFront = detail ? 7 : 3;
-  const colorAt = m => m < 0.1 ? '#24282E'
-    : L.stripe2 && m > 0.33 && m < 0.37 ? L.stripe2
-    : L.stripe && m > 0.4 && m < 0.5 ? L.stripe
-    : !L.stripe && lineColor && m > 0.42 && m < 0.52 ? lineColor
-    : m > 0.56 && m < 0.8 ? winColor
-    : m < 0.56 && L.cab ? L.cab : L.body;
-  for (let i = 0; i < H.length - 1; i++) {
-    const b0 = H[i], b1 = H[i + 1], m = (b0 + b1) / 2;
-    const sk = reach(b1), Wk = halfW(sk);
-    if (sk <= 0.001) continue;
-    // 俯視輪廓：左側弧線 → 前端圓角 → 右側弧線
-    const ring = [];
-    for (let j = 0; j <= nSide; j++) { const s = sk * j / nSide; ring.push(pt(s, halfW(s))); }
-    const bulge = Math.min(Wk * 0.45, (1 - sk) * len + Wk * 0.25);
-    for (let j = 1; j < nFront; j++) { const a = Math.PI / 2 - Math.PI * j / nFront; ring.push(pt(sk + bulge * Math.cos(a) / len, Wk * Math.sin(a))); }
-    for (let j = nSide; j >= 0; j--) { const s = sk * j / nSide; ring.push(pt(s, -halfW(s))); }
-    ring.push(ring[0]);
-    add([ring], h * b0, h * b1, colorAt(m));
-  }
-  // 車燈：車頭兩側各一顆小燈（車頭暖白、車尾紅），是車身的一部分，會被前面的東西擋住
-  if (lamp) {
-    const W = halfW(1), lo = 0.15, hi = Math.min(S.tipH, 0.34) - 0.03;
-    const s0 = 1 - 0.3 / 1000 / len, s1 = 1 + (W * 0.22 + 0.00005) / len;
-    for (const sd of [-1, 1]) {
-      const y0 = sd * W * 0.4, y1 = sd * W * 0.72;
-      add([[pt(s0, y0), pt(s1, y0), pt(s1, y1), pt(s0, y1), pt(s0, y0)]], h * lo, h * Math.max(lo + 0.05, hi), lamp);
     }
   }
 }
@@ -2768,73 +3061,29 @@ function paceOk(now) {
   return Pace.ok;
 }
 const DOT = COARSE ? 1.35 : 1; // 手機上列車圓點放大 // 這個縮放以上把列車畫成一節節車廂
-/* ---------- 列車 3D 圖層：車廂直接交給 WebGL 畫 ----------
-   以前車廂是 GeoJSON 的 fill-extrusion 圖層：每次更新都要送到背景執行緒切圖磚、再傳回來，
-   跟拍時幾乎每一格都這樣做，手機的主執行緒被佔滿，縮放就卡。
-   現在把同樣的車廂方塊（carFeatures 產生的多邊形與高度）在這裡直接變成三角形，當格上傳、當格畫出，
-   不經過背景執行緒，鏡頭和車身也一定是同一格的位置，不需要以前的雙緩衝與平移補償。
-   光線算法照 MapLibre 的 fill-extrusion，看起來跟原本一樣。 */
+/* ---------- 列車 3D 圖層：車廂、旅客的 3D 模型直接交給 WebGL 畫 ----------
+   每節車廂、每位旅客都是 models.js 做好的網格（只上傳一次），加上一個位置矩陣。
+   更新時只重算矩陣，不必重算三角形；鏡頭和車身一定是同一格的位置。 */
 const TrainGL = {
-  // 每組各自一份三角形：背景車廂、跟拍的列車、附近的列車、月台旅客
-  groups: {
-    cars: { base: 'b3', minz: CAR_ZOOM }, focus: { base: 'b3', minz: CAR_ZOOM },
-    near: { base: 'b3', minz: CAR_ZOOM }, people: { base: 'b', minz: 16 },
-  },
-  gl: null, prog: null, loc: null, colors: new Map(),
-  set(name, feats) {
+  // 每組各自一份清單：背景車廂、跟拍的列車、附近的列車、月台旅客
+  groups: { cars: { minz: CAR_ZOOM }, focus: { minz: CAR_ZOOM }, near: { minz: CAR_ZOOM }, people: { minz: 16 } },
+  gl: null, meshes: new Map(),
+  set(name, list) {
     const g = this.groups[name];
-    if (!feats.length && !g.f) return; // 已經是空的：不用重畫
-    g.f = feats.length ? feats : null; g.dirty = true;
+    if (!list.length && !g.f) return; // 已經是空的：不用重畫
+    g.f = list.length ? list : null;
     if (map) map.triggerRepaint();
   },
   has(name) { return !!this.groups[name].f; },
-  rgb(c) {
-    let v = this.colors.get(c);
-    if (!v) { const n = parseInt(c.slice(1), 16); v = [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255]; this.colors.set(c, v); }
-    return v;
+  mesh(it) {
+    let m = this.meshes.get(it.key);
+    if (!m) { m = GL3D.upload(this.gl, it.make()); this.meshes.set(it.key, m); if (this.meshes.size > 400) this.trim(); }
+    return m;
   },
-  // 多邊形（經緯度）＋底高、頂高（公尺）→ 以第一個點為原點、單位公尺的三角形（頂面與側面；底面看不到不畫）
-  build(g) {
-    const f = g.f, gl = this.gl;
-    g.dirty = false; g.n = 0;
-    if (!f || !gl) return;
-    const c0 = f[0].geometry.coordinates[0][0], R = Math.PI / 180;
-    const ox = (c0[0] + 180) / 360, oy = (1 - Math.log(Math.tan(Math.PI / 4 + c0[1] * R / 2)) / Math.PI) / 2;
-    const mpu = 40075016.686 * Math.cos(c0[1] * R); // 這個緯度上，每個墨卡托單位是幾公尺
-    let need = 0;
-    for (const q of f) need += (q.geometry.coordinates[0].length - 1) * 9 * 3; // 頂面 (n-2)*3 + 側面 n*6 ≤ n*9 個頂點
-    if (!g.P || g.P.length < need) { const cap = Math.ceil(need * 1.5); g.P = new Float32Array(cap); g.N = new Float32Array(cap); g.C = new Float32Array(cap); }
-    const P = g.P, N = g.N, C = g.C, bk = g.base;
-    let k = 0;
-    const xs = [], ys = [];
-    const vtx = (x, y, z, nx, ny, nz, col) => { P[k] = x; P[k + 1] = y; P[k + 2] = z; N[k] = nx; N[k + 1] = ny; N[k + 2] = nz; C[k] = col[0]; C[k + 1] = col[1]; C[k + 2] = col[2]; k += 3; };
-    for (const q of f) {
-      const pr = q.properties, lo = pr[bk] || 0, hi = pr.t;
-      if (!(hi - lo > 1e-3)) continue;
-      const ring = q.geometry.coordinates[0], n = ring.length - 1, col = this.rgb(pr.c);
-      let area = 0;
-      for (let i = 0; i < n; i++) {
-        const [lon, lat] = ring[i];
-        xs[i] = ((lon + 180) / 360 - ox) * mpu;
-        ys[i] = ((1 - Math.log(Math.tan(Math.PI / 4 + lat * R / 2)) / Math.PI) / 2 - oy) * mpu;
-      }
-      for (let i = 0; i < n; i++) { const j = (i + 1) % n; area += xs[i] * ys[j] - xs[j] * ys[i]; }
-      const sg = area >= 0 ? 1 : -1;
-      // 頂面：扇形三角化（車廂零件都是凸多邊形）
-      for (let i = 1; i < n - 1; i++) { vtx(xs[0], ys[0], hi, 0, 0, 1, col); vtx(xs[i], ys[i], hi, 0, 0, 1, col); vtx(xs[i + 1], ys[i + 1], hi, 0, 0, 1, col); }
-      // 側面：法向量朝外
-      for (let i = 0; i < n; i++) {
-        const j = (i + 1) % n, dx = xs[j] - xs[i], dy = ys[j] - ys[i], l = Math.hypot(dx, dy) || 1, nx = sg * dy / l, ny = -sg * dx / l;
-        vtx(xs[i], ys[i], lo, nx, ny, 0, col); vtx(xs[j], ys[j], lo, nx, ny, 0, col); vtx(xs[j], ys[j], hi, nx, ny, 0, col);
-        vtx(xs[i], ys[i], lo, nx, ny, 0, col); vtx(xs[j], ys[j], hi, nx, ny, 0, col); vtx(xs[i], ys[i], hi, nx, ny, 0, col);
-      }
-    }
-    g.n = k / 3;
-    // 模型矩陣：公尺 → 墨卡托單位，再移到原點
-    const s = 1 / mpu;
-    g.model = [s, 0, 0, 0, 0, s, 0, 0, 0, 0, s, 0, ox, oy, 0, 1];
-    if (!g.bufs) g.bufs = [gl.createBuffer(), gl.createBuffer(), gl.createBuffer()];
-    [P, N, C].forEach((arr, i) => { gl.bindBuffer(gl.ARRAY_BUFFER, g.bufs[i]); gl.bufferData(gl.ARRAY_BUFFER, arr.subarray(0, k), gl.DYNAMIC_DRAW); });
+  // 模型太多（換了很多種車、日夜切換）時，把目前沒在畫的刪掉
+  trim() {
+    const used = new Set(); for (const g of Object.values(this.groups)) for (const it of g.f || []) used.add(it.key);
+    for (const [k, m] of this.meshes) if (!used.has(k)) { m.bufs.forEach(b => this.gl.deleteBuffer(b)); this.meshes.delete(k); }
   },
   // 點選：沿著畫出來的列車每節車廂取一點投到螢幕上，找最近的一列
   pick(pt) {
@@ -2853,54 +3102,14 @@ const TrainGL = {
   },
   layer: {
     id: 'trains3d', type: 'custom', renderingMode: '3d',
-    onAdd(m, gl) {
-      const T = TrainGL;
-      T.gl = gl;
-      for (const g of Object.values(T.groups)) { g.bufs = null; g.dirty = true; }
-      const sh = (type, src) => { const o = gl.createShader(type); gl.shaderSource(o, src); gl.compileShader(o); return o; };
-      const prog = gl.createProgram();
-      // 與 MapLibre fill-extrusion 相同的打光（vertical-gradient 關閉時）
-      gl.attachShader(prog, sh(gl.VERTEX_SHADER, `
-        uniform mat4 u_pm; uniform vec3 u_lightpos; uniform vec3 u_lightcolor; uniform float u_lightintensity;
-        attribute vec3 a_pos; attribute vec3 a_n; attribute vec3 a_c; varying vec3 v_c;
-        void main() {
-          float cv = a_c.r * 0.2126 + a_c.g * 0.7152 + a_c.b * 0.0722;
-          float d = clamp(dot(a_n, u_lightpos), 0.0, 1.0);
-          d = mix(1.0 - u_lightintensity, max(1.0 - cv + u_lightintensity, 1.0), d);
-          v_c = clamp(a_c * d * u_lightcolor, mix(vec3(0.0), vec3(0.3), 1.0 - u_lightcolor), vec3(1.0));
-          gl_Position = u_pm * vec4(a_pos, 1.0);
-        }`));
-      gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, `precision mediump float; varying vec3 v_c; void main() { gl_FragColor = vec4(v_c, 1.0); }`));
-      gl.linkProgram(prog);
-      T.prog = prog;
-      T.loc = { pm: gl.getUniformLocation(prog, 'u_pm'), lp: gl.getUniformLocation(prog, 'u_lightpos'), lc: gl.getUniformLocation(prog, 'u_lightcolor'), li: gl.getUniformLocation(prog, 'u_lightintensity'),
-        attrs: ['a_pos', 'a_n', 'a_c'].map(a => gl.getAttribLocation(prog, a)) };
-    },
-    onRemove() { TrainGL.gl = null; TrainGL.prog = null; },
+    onAdd(m, gl) { TrainGL.gl = gl; TrainGL.meshes.clear(); },
+    onRemove() { TrainGL.gl = null; TrainGL.meshes.clear(); },
     render(gl, matrix) {
-      const T = TrainGL; if (!T.prog) return;
-      const z = map.getZoom();
+      const T = TrainGL, z = map.getZoom();
       const live = Object.values(T.groups).filter(g => g.f && z >= g.minz);
       if (!live.length) return;
-      const L = T.loc;
-      gl.useProgram(T.prog);
-      // 光線：跟地圖的 setLight 一樣（anchor: map），位置是 [半徑, 方位角, 仰角]
-      let lc = [1, 1, 1], li = 0.5, lp = [0, 0, 1.2];
-      try {
-        const lt = map.getLight() || {};
-        if (typeof lt.color === 'string' && lt.color[0] === '#') lc = T.rgb(lt.color);
-        if (typeof lt.intensity === 'number') li = lt.intensity;
-        if (Array.isArray(lt.position)) { const [r, a0, p0] = lt.position, a = (a0 + 90) * Math.PI / 180, pl = p0 * Math.PI / 180; lp = [r * Math.cos(a) * Math.sin(pl), r * Math.sin(a) * Math.sin(pl), r * Math.cos(pl)]; }
-      } catch {}
-      gl.uniform3fv(L.lp, lp); gl.uniform3fv(L.lc, lc); gl.uniform1f(L.li, li);
-      gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(true); gl.disable(gl.CULL_FACE); gl.disable(gl.BLEND);
-      for (const g of live) {
-        if (g.dirty) T.build(g);
-        if (!g.n) continue;
-        gl.uniformMatrix4fv(L.pm, false, new Float32Array(PlaneGLmul(matrix, g.model)));
-        g.bufs.forEach((b, i) => { gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.enableVertexAttribArray(L.attrs[i]); gl.vertexAttribPointer(L.attrs[i], 3, gl.FLOAT, false, 0, 0); });
-        gl.drawArrays(gl.TRIANGLES, 0, g.n);
-      }
+      const p = GL3D.begin(gl);
+      for (const g of live) for (const it of g.f) GL3D.draw(gl, p, T.mesh(it), matrix, it.m);
     },
   },
 };
@@ -3369,7 +3578,7 @@ function pushFocus() {
   if (map.getZoom() >= 16 && !Quality.low) { // 省電畫質不畫旅客，也不計算（切到省電時下面送一次空資料清掉）
     const now = performance.now();
     if (!S.pplSt || now - S.pplSt.at > 1000) { const c = map.getCenter(), [cx, cy] = proj(c.lat, c.lng); S.pplSt = { at: now, list: NODES.filter(n => Math.hypot(n.x - cx, n.y - cy) < 0.5).sort((a, b) => Math.hypot(a.x - cx, a.y - cy) - Math.hypot(b.x - cx, b.y - cy)) }; }
-    const cap = (COARSE ? 140 : 260) * 6;
+    const cap = COARSE ? 140 : 260; // 最多畫幾位旅客
     for (const n of S.pplSt.list) for (const [R, idx] of stationReps(n)) stationPeople(n, R, idx, m, ppl, cap);
   }
   TrainGL.set('people', ppl);
@@ -4585,97 +4794,6 @@ function acTypeOf(f) {
   return (f.ac = t);
 }
 
-/* 依機型與塗裝組出機身各部位：每個部位是一個四邊形往上擠出的柱體。
-   座標以公尺計：fw 以機身中點為 0、往機頭為正；rt 往右為正；z 從起落架輪子（或收起時的機腹）算起 */
-function planeParts(type, airline, gearDown) {
-  const T = AC_TYPES[type], Lv = AIR_LIVERY[airline] || {}, out = [];
-  const body = Lv.body || '#EEF1F4', belly = Lv.belly || body, tail = Lv.tail || TAIL_OLD[airline] || '#8C9AA6', tail2 = Lv.tail2 || body, stripe = Lv.stripe || null;
-  const dark = '#27303A', metal = '#B7C0C8', gearC = '#3A4148';
-  const detail = true;
-  const z0 = gearDown ? T.gear : 0;
-  const add = (c, fwc, zb, zt, col) => out.push({ c, b: z0 + zb, t: z0 + zt, col });
-  const box = (f1, f2, r1, r2, zb, zt, col) => add([[f1, r1], [f2, r1], [f2, r2], [f1, r2]], 0, zb, zt, col);
-  const L = T.L, D = T.D, R = D / 2, nose = L / 2, tailEnd = -L / 2;
-  const layers = 12, segs = 28;
-  // 機身平面與側面輪廓：機頭以橢圓收窄、下緣往上收；機尾變細並上翹
-  const noseLen = D * 1.9, tailLen = L * 0.24;
-  const prof = fw => {
-    if (fw > nose - noseLen) { const k = (fw - (nose - noseLen)) / noseLen; const e = Math.sqrt(Math.max(0, 1 - k * k)); return { r: R * (0.12 + 0.88 * e), lo: R * (1 - e) * 0.55, hi: D - R * (1 - e) * 0.25 }; }
-    if (fw < tailEnd + tailLen) { const k = 1 - (fw - tailEnd) / tailLen; return { r: R * (1 - 0.78 * k), lo: D * 0.62 * k * k, hi: D - D * 0.08 * k }; }
-    return { r: R, lo: 0, hi: D };
-  };
-  // 切成 segs 段，每段再依圓形切面分 layers 層
-  const cabinF = nose - noseLen * 0.9, cabinA = tailEnd + tailLen * 0.85;
-  for (let i = 0; i < segs; i++) {
-    const f1 = tailEnd + L * i / segs, f2 = tailEnd + L * (i + 1) / segs, fm = (f1 + f2) / 2, P = prof(fm);
-    const h = P.hi - P.lo, rc = h / 2, zc = P.lo + rc;
-    for (let k = 0; k < layers; k++) {
-      const za = P.lo + h * k / layers, zb2 = P.lo + h * (k + 1) / layers, zm = (za + zb2) / 2;
-      const w = P.r * Math.sqrt(Math.max(0.04, 1 - ((zm - zc) / rc) ** 2));
-      box(f1, f2, -w, w, za, zb2, zm < zc - rc * 0.35 ? belly : body);
-    }
-    // 窗戶列與腰線：比機身稍寬一點的細長條
-    if (fm < cabinF && fm > cabinA) {
-      const wz = P.lo + h * 0.62, ww = P.r * Math.sqrt(1 - ((wz - zc) / rc) ** 2) + 0.03;
-      box(f1, f2, -ww, ww, wz - 0.18, wz + 0.18, dark);
-      if (stripe) { const sz = P.lo + h * 0.38, sw2 = P.r * Math.sqrt(1 - ((sz - zc) / rc) ** 2) + 0.03; box(f1, f2, -sw2, sw2, sz - 0.22, sz + 0.22, stripe); }
-    }
-  }
-  // 駕駛艙擋風玻璃
-  { const fc = nose - noseLen * 0.55, P = prof(fc), wz = P.lo + (P.hi - P.lo) * 0.7; box(fc - D * 0.18, fc + D * 0.18, -P.r * 0.8, P.r * 0.8, wz - 0.2, wz + 0.25, dark); }
-
-  // 主翼：後掠、上反角，分三段往外逐漸變薄、變高
-  const semi = T.b / 2, rootLE = nose - L * T.wx, tanSw = Math.tan(T.sw / DEG);
-  const wingZ = T.prop ? D * 0.95 : D * 0.12, dih = T.prop ? 0.02 : 0.09;
-  const le = y => rootLE - (y - R) * tanSw, ch = y => T.cr + (T.ct - T.cr) * (y - R) / (semi - R);
-  const spans = detail ? [R, R + (semi - R) * 0.3, R + (semi - R) * 0.6, R + (semi - R) * 0.85, semi] : [R, R + (semi - R) * 0.5, semi];
-  for (const s of [-1, 1]) {
-    for (let i = 0; i < spans.length - 1; i++) {
-      const y1 = spans[i], y2 = spans[i + 1], ym = (y1 + y2) / 2;
-      const zt0 = wingZ + (ym - R) * dih, th = Math.max(0.18, 0.55 * (1 - (ym - R) / semi) * (D / 4));
-      add([[le(y1), s * y1], [le(y2), s * y2], [le(y2) - ch(y2), s * y2], [le(y1) - ch(y1), s * y1]], le(ym) - ch(ym) / 2, zt0, zt0 + th, body);
-    }
-    // 機翼與機身接合處的整流罩
-    if (!T.prop) box(le(R) - T.cr * 0.95, le(R) + 0.3, -R * 1.02, R * 1.02, 0, D * 0.18, belly);
-    // 翼尖小翼
-    if (T.wl) { const zt0 = wingZ + (semi - R) * dih; add([[le(semi) - ch(semi) * 0.05, s * semi], [le(semi) - ch(semi), s * semi], [le(semi) - ch(semi), s * (semi + 0.12)], [le(semi) - ch(semi) * 0.05, s * (semi + 0.12)]], le(semi) - ch(semi) / 2, zt0, zt0 + T.wl, tail); }
-    // 發動機：翼下吊掛的圓筒（ATR 是翼上的短艙加螺旋槳）
-    const ey = R + (semi - R) * T.ey, ef = le(ey) + T.le * (T.prop ? 0.25 : 0.55), ea = ef - T.le;
-    const er = T.de / 2, ezc = T.prop ? wingZ + er * 0.6 : wingZ + (ey - R) * dih - er - 0.35;
-    const eL = 8;
-    for (let k = 0; k < eL; k++) {
-      const za = ezc - er + 2 * er * k / eL, zb2 = ezc - er + 2 * er * (k + 1) / eL, w = er * Math.sqrt(Math.max(0.05, 1 - (((za + zb2) / 2 - ezc) / er) ** 2));
-      box(ea, ef, s * ey - w, s * ey + w, za, zb2, T.prop ? body : metal);
-    }
-    if (T.prop) {
-      // 螺旋槳旋轉時看起來是一片半透明的圓盤：用深色薄片表示
-      box(ef + 0.05, ef + 0.18, s * ey - 1.95, s * ey + 1.95, ezc - 1.95, ezc + 1.95, '#5A6470');
-    } else {
-      box(ef - 0.02, ef + 0.02, s * ey - er * 0.8, s * ey + er * 0.8, ezc - er * 0.8, ezc + er * 0.8, dark); // 進氣口
-      box(le(ey) - ch(ey) * 0.4, le(ey) + 0.2, s * ey - 0.25, s * ey + 0.25, ezc + er * 0.6, wingZ + (ey - R) * dih, metal); // 吊架
-    }
-  }
-  // 水平尾翼（ATR 是 T 型尾翼，裝在垂直尾翼頂端）
-  const finRoot = T.cr * 1.05, finLE = tailEnd + tailLen * 0.62, finTanSw = Math.tan((T.prop ? 30 : 40) / DEG);
-  const finTop = prof(finLE - finRoot / 2).hi;
-  const hsZ = T.prop ? finTop + T.fin * 0.95 : D * 0.42, hsLE = T.prop ? finLE - T.fin * finTanSw : tailEnd + tailLen * 0.42, hsC = T.cr * 0.5;
-  for (const s of [-1, 1]) add([[hsLE, s * 0.3], [hsLE - T.hs * 0.55, s * T.hs], [hsLE - T.hs * 0.55 - hsC * 0.45, s * T.hs], [hsLE - hsC, s * 0.3]], hsLE - hsC / 2, hsZ, hsZ + 0.3, body);
-  // 垂直尾翼：分層往後移，做出後掠；下半主色、上緣第二色
-  const fl = 8;
-  for (let k = 0; k < fl; k++) {
-    const h1 = T.fin * k / fl, h2 = T.fin * (k + 1) / fl, hm = (h1 + h2) / 2;
-    const c = finRoot * (1 - 0.62 * hm / T.fin), lead = finLE - hm * finTanSw;
-    box(lead - c, lead, -0.22, 0.22, finTop - 0.3 + h1, finTop - 0.3 + h2, k === fl - 1 && tail2 !== body ? tail2 : tail);
-  }
-  // 起落架
-  if (gearDown) {
-    const g = T.gear;
-    box(nose - noseLen * 1.1 - 0.3, nose - noseLen * 1.1 + 0.3, -0.25, 0.25, -g, 0.05, gearC);
-    for (const s of [-1, 1]) { const y = R * (T.prop ? 0.9 : 1.15), gf = rootLE - T.cr * 0.75; box(gf - 0.7, gf + 0.7, s * y - 0.45, s * y + 0.45, -g, 0.05, gearC); }
-  }
-  return out;
-}
-
 /* ---------- 機場：跑道、滑行道、停機坪、航廈、塔台 ----------
    跑道位置與 AIRPORTS 相同（飛機就是沿著它起降），航廈與塔台的位置是依實際配置大略擺放。
    side：航廈在跑道的哪一側（+1 為跑道方向的右手邊，0 為兩條平行跑道中間）；
@@ -4784,37 +4902,11 @@ const PlaneGL = {
     if (now - PlaneGL.kickAt < gap) return;
     PlaneGL.kickAt = now; map.triggerRepaint();
   },
-  hex(c) { const n = parseInt(c.slice(1), 16); return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255]; },
-  // 把部位清單變成三角形：每個柱體有頂面、底面與四個側面，各自帶法向量與顏色
-  build(parts) {
-    const P = [], N = [], C = [];
-    const tri = (a, b, c, n, col) => { for (const v of [a, b, c]) { P.push(v[0], v[1], v[2]); N.push(n[0], n[1], n[2]); C.push(col[0], col[1], col[2]); } };
-    for (const q of parts) {
-      if (q.t - q.b < 1e-3) continue;
-      const col = PlaneGL.hex(q.col), c = q.c;
-      const lo = c.map(([x, y]) => [x, y, q.b]), hi = c.map(([x, y]) => [x, y, q.t]);
-      tri(hi[0], hi[1], hi[2], [0, 0, 1], col); tri(hi[0], hi[2], hi[3], [0, 0, 1], col);
-      tri(lo[0], lo[2], lo[1], [0, 0, -1], col); tri(lo[0], lo[3], lo[2], [0, 0, -1], col);
-      for (let i = 0; i < 4; i++) {
-        const j = (i + 1) % 4, dx = c[j][0] - c[i][0], dy = c[j][1] - c[i][1], l = Math.hypot(dx, dy) || 1;
-        // 法向量朝外：依四邊形繞行方向決定正負
-        const area = (c[1][0] - c[0][0]) * (c[2][1] - c[0][1]) - (c[1][1] - c[0][1]) * (c[2][0] - c[0][0]);
-        const sg = area >= 0 ? 1 : -1, n = [sg * dy / l, -sg * dx / l, 0];
-        tri(lo[i], lo[j], hi[j], n, col); tri(lo[i], hi[j], hi[i], n, col);
-      }
-    }
-    return { P: new Float32Array(P), N: new Float32Array(N), C: new Float32Array(C), n: P.length / 3 };
-  },
-  mesh(type, airline, gear) { return PlaneGL.meshFor(type + '|' + airline + '|' + gear, () => planeParts(type, airline, gear)); },
-  // 依 key 快取模型；parts() 只在第一次用到時呼叫
-  meshFor(key, parts) {
+  // 飛機模型（models.js 的 planeMesh），依機型、航空公司、起落架放下與否快取
+  mesh(type, airline, gear, lo) { return PlaneGL.meshFor(type + '|' + airline + '|' + gear + (lo ? '|lo' : ''), () => planeMesh(type, airline, gear, lo)); },
+  meshFor(key, make) {
     let m = PlaneGL.meshes.get(key);
-    if (!m) {
-      // parts() 可回傳部位清單，或已經算好的三角形
-      const raw = parts(), d = raw && raw.P ? raw : PlaneGL.build(raw), gl = PlaneGL.gl;
-      m = { n: d.n, bufs: [d.P, d.N, d.C].map(arr => { const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, arr, gl.STATIC_DRAW); return b; }) };
-      PlaneGL.meshes.set(key, m);
-    }
+    if (!m) { m = GL3D.upload(PlaneGL.gl, make()); PlaneGL.meshes.set(key, m); }
     return m;
   },
   // 模型矩陣：本地 x 往機頭、y 往右、z 往上（公尺），換到 Web 墨卡托座標
@@ -4844,53 +4936,20 @@ const PlaneGL = {
   },
   layer: {
     id: 'planes3d', type: 'custom', renderingMode: '3d',
-    onAdd(m, gl) {
-      PlaneGL.gl = gl; PlaneGL.meshes.clear();
-      const sh = (type, src) => { const o = gl.createShader(type); gl.shaderSource(o, src); gl.compileShader(o); return o; };
-      const prog = gl.createProgram();
-      gl.attachShader(prog, sh(gl.VERTEX_SHADER, `
-        uniform mat4 u_pm; uniform mat4 u_m; uniform vec3 u_light; uniform vec3 u_lc; uniform float u_li;
-        attribute vec3 a_pos; attribute vec3 a_n; attribute vec3 a_c; varying vec3 v_c;
-        void main() {
-          vec3 n = normalize(mat3(u_m) * a_n);
-          float d = max(dot(n, u_light), 0.0);
-          float k = (0.72 + 0.3 * d) * clamp(0.3 + u_li * 2.3, 0.45, 1.05);
-          v_c = a_c * mix(vec3(1.0), u_lc, 0.35) * k;
-          gl_Position = u_pm * vec4(a_pos, 1.0);
-        }`));
-      gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, `precision mediump float; varying vec3 v_c; void main() { gl_FragColor = vec4(v_c, 1.0); }`));
-      gl.linkProgram(prog);
-      PlaneGL.prog = prog;
-      PlaneGL.loc = { pm: gl.getUniformLocation(prog, 'u_pm'), m: gl.getUniformLocation(prog, 'u_m'), light: gl.getUniformLocation(prog, 'u_light'), lc: gl.getUniformLocation(prog, 'u_lc'), li: gl.getUniformLocation(prog, 'u_li'),
-        attrs: ['a_pos', 'a_n', 'a_c'].map(a => gl.getAttribLocation(prog, a)) };
-    },
+    onAdd(m, gl) { PlaneGL.gl = gl; PlaneGL.meshes.clear(); },
     onRemove() { PlaneGL.gl = null; PlaneGL.meshes.clear(); },
     render(gl, matrix) {
       PlaneGL.last = matrix;
       // 飛機關掉時不畫
       const list = AIR.on ? PlaneGL.draw : [];
-      if (!list.length || !PlaneGL.prog) return;
-      const L = PlaneGL.loc;
-      gl.useProgram(PlaneGL.prog);
-      // 光線跟著地圖的日夜設定
-      let lc = [1, 1, 1], li = 0.3, dir = [0.4, -0.3, 0.86];
-      try {
-        const lt = map.getLight() || {};
-        if (typeof lt.color === 'string' && lt.color[0] === '#') lc = PlaneGL.hex(lt.color);
-        if (typeof lt.intensity === 'number') li = lt.intensity;
-        if (Array.isArray(lt.position)) { const a = lt.position[1] / DEG, pl = lt.position[2] / DEG; dir = [Math.sin(pl) * Math.sin(a), -Math.sin(pl) * Math.cos(a), Math.cos(pl)]; }
-      } catch {}
-      gl.uniform3fv(L.light, dir); gl.uniform3fv(L.lc, lc); gl.uniform1f(L.li, li);
-      gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(true); gl.disable(gl.CULL_FACE); gl.disable(gl.BLEND);
+      if (!list.length || !PlaneGL.gl) return;
+      const p = GL3D.begin(gl);
+      // 遠看（畫面上不到約 140 像素長）用比較簡單的模型
+      const mpp = 40075016.686 * Math.cos(map.getCenter().lat / DEG) / (512 * Math.pow(2, map.getZoom())), cam = map.getCenter();
       for (const d of list) {
-        const mesh = d.mesh ? d.mesh() : PlaneGL.mesh(acTypeOf(d.f), d.f.airline || '', d.p.alt < 450);
-        const m = PlaneGL.model(d.p, d.ll), PM = PlaneGL.mul(matrix, m);
-        // 只保留旋轉（去掉縮放）給法向量用
-        const s = Math.hypot(m[0], m[1], m[2]) || 1;
-        gl.uniformMatrix4fv(L.pm, false, new Float32Array(PM));
-        gl.uniformMatrix4fv(L.m, false, new Float32Array([m[0] / s, m[1] / s, m[2] / s, 0, m[4] / s, m[5] / s, m[6] / s, 0, m[8] / s, m[9] / s, m[10] / s, 0, 0, 0, 0, 1]));
-        mesh.bufs.forEach((b, i) => { gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.enableVertexAttribArray(L.attrs[i]); gl.vertexAttribPointer(L.attrs[i], 3, gl.FLOAT, false, 0, 0); });
-        gl.drawArrays(gl.TRIANGLES, 0, mesh.n);
+        const T = !d.mesh && AC_TYPES[acTypeOf(d.f)], far = T && (Math.hypot((d.ll[0] - cam.lng) * 101e3, (d.ll[1] - cam.lat) * 111e3) > 2500 || T.L / mpp < 140);
+        const mesh = d.mesh ? d.mesh() : PlaneGL.mesh(acTypeOf(d.f), d.f.airline || '', d.p.alt < 450, far);
+        GL3D.draw(gl, p, mesh, matrix, PlaneGL.model(d.p, d.ll));
       }
     },
   },
