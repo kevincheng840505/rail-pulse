@@ -147,8 +147,6 @@ function trainDoors(trip, headKm) {
 }
 
 const PERSON_COLOR = '#3F6FB8';
-const sfeat = (ring, b, t, c) => ({ type: 'Feature', properties: { b, t, c }, geometry: { type: 'Polygon', coordinates: [ring] } });
-const sngon = (x, y, r, n) => { const o = []; for (let i = 0; i <= n; i++) { const a = i / n * Math.PI * 2; o.push(unproj(x + Math.cos(a) * r / 1000, y + Math.sin(a) * r / 1000)); } return o; };
 // 中心線上 km 處的位置與方向
 function railFrame(trip, km) {
   const p = centerPoint(trip, km), a = centerPoint(trip, km - 0.008), b = centerPoint(trip, km + 0.008);
@@ -258,17 +256,22 @@ function elevAt(trip, km) {
   const e0 = r0 > 0 ? (h0 - base) * ss(1 - (km - g0) / r0) : 0, e1 = r1 > 0 ? (h1 - base) * ss((km - (g1 - r1)) / r1) : 0;
   return base + Math.max(e0, e1);
 }
-// 高架橋：在軌道下面畫橋面（每 4 公尺一段，跟著坡度一段段升高）和橋墩
-function viaductFeatures(trip, k0, k1, P, out, seen) {
-  const o = Math.abs(sideOffset(trip)), w = liveryOf(trip).w * EX / 1000, half = o + w / 2 + 0.0007;
-  const deck = mixHex('#A8ACAE', P.land, 0.3), pier = mixHex('#8E9397', P.land, 0.3), step = 0.004;
+// 高架橋：箱型梁橋面沿著軌道放樣（跟著坡度升降），每 24 公尺一支圓柱橋墩
+function viaductFeatures(trip, k0, k1, P, mb, seen, O) {
+  const o = Math.abs(sideOffset(trip)), w = liveryOf(trip).w * EX / 1000, half = (o + w / 2 + 0.0007) * 1000;
+  const deck = mcol(mixHex('#A8ACAE', P.land, 0.3)), pier = mcol(mixHex('#8E9397', P.land, 0.3)), step = 0.004;
+  const sec = [[-half, -0.02], [half, -0.02], [half, -0.9], [half * 0.55, -1.05], [half * 0.4, -2.2], [-half * 0.4, -2.2], [-half * 0.55, -1.05], [-half, -0.9]];
+  let run = [];
+  const flush = () => { if (run.length > 1) loftPath(mb, run, sec, () => deck); run = []; };
   for (let i = Math.floor(k0 / step); i * step < k1; i++) {
-    const k = i * step, e = elevAt(trip, k + step / 2); if (e < 0.05) continue;
-    const f = railFrame(trip, k + step / 2), key = levelKey(trip) + Math.round(f.x * 250) + ',' + Math.round(f.y * 250);
-    if (seen.has(key)) continue; seen.add(key);
-    out.push(sfeat(railBand(trip, k, k + step, -half, half), Math.max(0, e - 0.9), e - 0.02, deck));
-    if (e > 2.5 && i % 6 === 0) out.push(sfeat(sngon(f.x, f.y, 0.9, 8), 0, e - 0.9, pier));
+    const k = i * step, e = elevAt(trip, k); if (e < 0.05) { flush(); continue; }
+    const f = railFrame(trip, k), key = levelKey(trip) + Math.round(f.x * 250) + ',' + Math.round(f.y * 250);
+    if (seen.has(key)) { flush(); continue; } seen.add(key);
+    const x = (f.x - O.x) * 1000, y = (f.y - O.y) * 1000;
+    run.push([x, y, f.nx, f.ny, e]);
+    if (e > 2.5 && i % 6 === 0) { tube(mb, [x, y, 0], [x, y, e - 2.1], 0.95, 0.85, 12, pier, false); ellipsoid(mb, [x, y, e - 2.15], 1.4, half * 0.5, 0.25, pier, 10, 3, 4); }
   }
+  flush();
 }
 
 /* ---------- 車站：月台、雨棚、樓梯、站名牌 ----------
@@ -303,40 +306,48 @@ function platformGeom(node, trip, idx, s) {
   const stairs = [0.35, 0.65].map(u => ka + (kb - ka) * u);
   return { spec, kS, ka, kb, inner, pw, outer, same, sg, at, stairs, e: elevAt(trip, kS), base: elevAt(trip, kS) + spec.h };
 }
-function stationFeatures(node, trip, idx, P, out, seen) {
+function stationFeatures(node, trip, idx, P, mb, seen, O) {
   const spec = platformSpec(trip), sg = Math.sign(sideOffset(trip)) || 1, hub = isHub(node);
-  const accent = spec.accent || trip.color || '#888888', concrete = mixHex('#B9B5AC', P.land, 0.3), roof = mixHex(spec.roof, P.bld, 0.15);
+  const accent = mcol(spec.accent || trip.color || '#888888'), concrete = mcol(mixHex('#B9B5AC', P.land, 0.3)), side = mcol(mixHex('#9C988F', P.land, 0.3));
+  const roof = mcol(mixHex(spec.roof, P.bld, 0.15)), yellow = mcol('#E8C547'), metal = mcol('#7A8288'), rail = mcol('#8A9096'), dark = mcol('#2E3338');
+  const pt = (k, lat, s) => { const f = railFrame(trip, k); return [(f.x + f.nx * s * lat - O.x) * 1000, (f.y + f.ny * s * lat - O.y) * 1000]; };
+  const path = (ka, kb, e, st = 0.005) => { const n = Math.max(1, Math.ceil((kb - ka) / st)), out = []; for (let i = 0; i <= n; i++) { const f = railFrame(trip, ka + (kb - ka) * i / n); out.push([(f.x - O.x) * 1000, (f.y - O.y) * 1000, f.nx, f.ny, e]); } return out; };
   for (const s of [sg, -sg]) {
-    const G = platformGeom(node, trip, idx, s), { ka, kb, inner, outer, e } = G, H = spec.h;
-    const F = (ring, b, t, c) => out.push(sfeat(ring, b + e, t + e, c));
-    F(railBand(trip, ka, kb, s * inner, s * outer), e > 0 ? -0.6 : -e, H, concrete);
-    F(railBand(trip, ka, kb, s * (inner + 0.0002), s * (inner + 0.0006)), H, H + 0.03, '#E8C547');
-    // 高架的月台底下有一排柱子撐著
-    if (e > 1) for (let k = ka + 0.004; k < kb; k += 0.012) { const [x, y] = G.at(k, (inner + outer) / 2); out.push(sfeat(sngon(x, y, 0.4, 8), 0, e - 0.6, mixHex('#9AA0A4', P.land, 0.3))); }
-    // 樓梯口：月台靠外側的一個開口加上兩側扶手，旅客從這裡上下
+    const G = platformGeom(node, trip, idx, s), { ka, kb, e } = G, H = spec.h, I = G.inner * 1000 * s, U = G.outer * 1000 * s, bz = e > 0 ? -0.6 : -e;
+    const m = v => v * s; // 往月台外側為正
+    // 月台：側面、月台邊的白線與黃色導盲磚、主要地坪，邊緣倒角
+    const sec = [[I, bz], [I, H - 0.12], [I + m(0.06), H], [I + m(0.3), H], [I + m(0.6), H], [U - m(0.08), H], [U, H - 0.1], [U, bz]];
+    loftPath(mb, path(ka, kb, e), sec, (i, j, c) => c ? side : j === 2 ? mcol('#E6E3DC') : j === 3 ? yellow : j === 4 ? concrete : side);
+    // 高架的月台底下有一排圓柱
+    if (e > 1) for (let k = ka + 0.004; k < kb; k += 0.012) { const [x, y] = pt(k, (G.inner + G.outer) / 2, s); tube(mb, [x, y, 0], [x, y, e - 0.6], 0.4, 0.4, 10, mcol(mixHex('#9AA0A4', P.land, 0.3)), false); }
+    // 樓梯口：月台上的深色開口，三面欄杆
     for (const k of G.stairs) {
-      F(railBand(trip, k - 0.0035, k + 0.0035, s * (outer - 0.0022), s * (outer - 0.0003)), H, H + 0.04, '#2E3338');
-      F(railBand(trip, k - 0.0035, k + 0.0035, s * (outer - 0.0023), s * (outer - 0.0021)), H, H + 1.0, '#8A9096');
-      F(railBand(trip, k - 0.0035, k + 0.0035, s * (outer - 0.0004), s * (outer - 0.0002)), H, H + 1.0, '#8A9096');
-      F(railBand(trip, k + 0.0033, k + 0.0036, s * (outer - 0.0023), s * (outer - 0.0002)), H, H + 1.0, '#8A9096');
+      loftPath(mb, path(k - 0.0035, k + 0.0035, e, 0.0035), [[U - m(2.2), H + 0.005], [U - m(0.3), H + 0.005], [U - m(0.3), H + 0.03], [U - m(2.2), H + 0.03]], () => dark);
+      for (const lat of [2.3, 0.2]) {
+        const a = pt(k - 0.0035, G.outer - lat / 1000, s), b = pt(k + 0.0035, G.outer - lat / 1000, s);
+        tube(mb, [a[0], a[1], e + H + 1.0], [b[0], b[1], e + H + 1.0], 0.04, 0.04, 6, rail, false);
+        for (const p of [a, b]) tube(mb, [p[0], p[1], e + H], [p[0], p[1], e + H + 1.0], 0.035, 0.035, 5, rail, false);
+      }
+      { const a = pt(k + 0.0035, G.outer - 0.0023, s), b = pt(k + 0.0035, G.outer - 0.0002, s); tube(mb, [a[0], a[1], e + H + 1.0], [b[0], b[1], e + H + 1.0], 0.04, 0.04, 6, rail, false); }
     }
-    // 雨棚只有多層的轉乘站才有，而且只蓋月台靠外側，從上面看得到停靠的列車
+    // 雨棚：多層的轉乘站才有，弧形屋頂架在一排圓柱上，只蓋月台靠外側，從上面看得到停靠的列車
     if (hub) {
-      const ca = ka + (kb - ka) * 0.12, cb = kb - (kb - ka) * 0.12, ci = inner + G.pw * 0.4;
-      F(railBand(trip, ca, cb, s * ci, s * (outer + 0.0004)), H + 3.4, H + 3.65, roof);
-      F(railBand(trip, ca, cb, s * ci, s * (ci + 0.0003)), H + 3.1, H + 3.65, accent);
-      for (let k = ca; k <= cb; k += 0.016) { const [x, y] = G.at(k, outer - 0.0012); out.push(sfeat(sngon(x, y, 0.18, 6), H + e, H + 3.4 + e, '#7A8288')); }
+      const ca = ka + (kb - ka) * 0.12, cb = kb - (kb - ka) * 0.12, ci = (G.inner + G.pw * 0.4) * 1000 * s, co = U + m(0.4);
+      const arc = [], N = 8;
+      for (let i = 0; i <= N; i++) { const t = i / N; arc.push([ci + (co - ci) * t, H + 3.45 + 0.35 * Math.sin(Math.PI * t)]); }
+      for (let i = N; i >= 0; i--) { const t = i / N; arc.push([ci + (co - ci) * t, H + 3.2 + 0.35 * Math.sin(Math.PI * t)]); }
+      loftPath(mb, path(ca, cb, e), arc, (i, j) => j === N * 2 || j === 0 ? accent : roof);
+      for (let k = ca; k <= cb; k += 0.016) { const [x, y] = pt(k, G.outer - 0.0012, s); tube(mb, [x, y, e + H], [x, y, e + H + 3.5], 0.16, 0.14, 8, metal, false); }
     }
     // 站名牌：沿軌道方向的一塊線色看板，立在一根柱子上
     for (const u of [0.2, 0.8]) {
-      const f = railFrame(trip, ka + (kb - ka) * u), lo = s * (outer - 0.0012), cx = f.x + f.nx * lo, cy = f.y + f.ny * lo;
-      const r = [[1.8, 0.08], [-1.8, 0.08], [-1.8, -0.08], [1.8, -0.08], [1.8, 0.08]].map(([a, b]) => unproj(cx + (f.ux * a + f.nx * b) / 1000, cy + (f.uy * a + f.ny * b) / 1000));
-      F(r, H + 2.0, H + 2.7, accent);
-      out.push(sfeat(sngon(cx, cy, 0.07, 6), H + e, H + 2.0 + e, '#7A8288'));
+      const k = ka + (kb - ka) * u, lo = U - m(1.2);
+      loftPath(mb, path(k - 0.0018, k + 0.0018, e, 0.0018), [[lo - 0.08, H + 2.0], [lo + 0.08, H + 2.0], [lo + 0.08, H + 2.7], [lo - 0.08, H + 2.7]], () => accent);
+      const [x, y] = pt(k, G.outer - 0.0012, s); tube(mb, [x, y, e + H], [x, y, e + H + 2.0], 0.07, 0.07, 6, metal, false);
     }
   }
   // 高架段的橋面與橋墩（坡道一路畫到落地）
-  if (elevProfile(trip)) { const r = platHalf(trip) + 1.0; viaductFeatures(trip, trip.cum[idx] - r, trip.cum[idx] + r, P, out, seen); }
+  if (elevProfile(trip)) { const r = platHalf(trip) + 1.0; viaductFeatures(trip, trip.cum[idx] - r, trip.cum[idx] + r, P, mb, seen, O); }
 }
 
 /* ---------- 月台上的旅客 ----------

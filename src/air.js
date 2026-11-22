@@ -346,28 +346,65 @@ function airportFeatures() {
       if (site.side === 0) {
         box(a - tl / 2 - 120, a + tl / 2 + 120, -td / 2 - 260, td / 2 + 260, 0, 0.24, AP_COL.apron);
       } else box(a - tl / 2 - 80, a + tl / 2 + 80, Math.min(apronR - tSide * 150, base), Math.max(apronR - tSide * 150, base), 0, 0.24, AP_COL.apron);
-      const r1 = base - td / 2, r2 = base + td / 2;
-      box(a - tl / 2, a + tl / 2, r1, r2, 0, th * 0.55, AP_COL.glass);
-      box(a - tl / 2, a + tl / 2, r1, r2, th * 0.55, th, AP_COL.term);
-      box(a - tl / 2 + 10, a + tl / 2 - 10, r1 + 10, r2 - 10, th, th + 3, AP_COL.roof);
-      // 廊橋：從航廈伸向停機坪
-      const dirs = site.side === 0 ? [-1, 1] : [-tSide];
-      for (const d of dirs) for (let k = 0; k < site.piers * 2; k++) {
-        const pa = a - tl / 2 + (k + 0.5) * tl / (site.piers * 2), from = base + d * td / 2;
-        box(pa - 2.5, pa + 2.5, Math.min(from, from + d * 38), Math.max(from, from + d * 38), 4, 7.5, AP_COL.roof);
-      }
     }
-    // 塔台：細高的塔身加上玻璃管制室
-    { const a = site.tower[0] * 1000, h = site.tower[1], r = base + (site.side === 0 ? 300 : site.side * 140);
-      box(a - 5, a + 5, r - 5, r + 5, 0, h - 9, AP_COL.tower);
-      box(a - 9, a + 9, r - 9, r + 9, h - 9, h - 2, AP_COL.cab);
-      box(a - 10, a + 10, r - 10, r + 10, h - 2, h, AP_COL.tower);
-      box(a - 0.4, a + 0.4, r - 0.4, r + 0.4, h, h + 8, AP_COL.cab); }
-    // 修護棚廠
-    { const a = -(site.tower[0] * 1000) - 300 * Math.sign(site.tower[0] || 1), r = base + (site.side === 0 ? -320 : site.side * 120);
-      box(a - 50, a + 50, r - 40, r + 40, 0, 22, AP_COL.hangar); box(a + 60, a + 140, r - 35, r + 35, 0, 18, AP_COL.hangar); }
   }
   return (AIRPORT_FC = { type: 'FeatureCollection', features: out });
+}
+
+/* 機場建築的 3D 模型：航廈（玻璃帷幕＋弧形屋頂）、登機廊橋、塔台、修護棚廠。
+   每座機場合成一個網格，本地座標 x 沿跑道方向、y 往右（公尺），用 GL3D.model(機場中心, 0, 跑道航向) 擺上地圖 */
+function airportMeshes() {
+  const list = [];
+  for (const code of Object.keys(AIRPORTS)) {
+    const A = AIRPORTS[code], site = AIRPORT_SITE[code] || { w: 45, side: 1, gap: 0.45, term: [[0.1, 200, 70, 14]], piers: 1, tower: [0.45, 30] };
+    const mb = MB(), C = k => mcol(AP_COL[k]);
+    const glass = C('glass'), term = C('term'), roof = C('roof'), frame = mcol('#8D969E'), dark = mcol('#2B3036');
+    const tSide = site.side === 0 ? 0 : site.side, base = site.side === 0 ? 0 : site.side * site.gap * 1000;
+    for (const [ta, tl, td, th] of site.term) {
+      const a = ta * 1000, x0 = a - tl / 2, x1 = a + tl / 2;
+      // 航廈本體：沿跑道方向放樣，下半是玻璃帷幕（每 12 公尺一支窗框），上半實牆，頂上一道弧形大屋頂
+      const path = []; for (let x = x0; x < x1 - 0.5; x += 12) { path.push([x, base, 0, 1, 0]); path.push([Math.min(x + 11.2, x1), base, 0, 1, 0]); } path.push([x1, base, 0, 1, 0]);
+      const g = th * 0.55, arc = [];
+      for (let i = 0; i <= 10; i++) { const t = i / 10; arc.push([td / 2 + 8 - (td + 16) * t, th + 1 + 7 * Math.sin(Math.PI * t)]); }
+      const sec = [[-td / 2, 0], [td / 2, 0], [td / 2, g], [td / 2, th], [td / 2 + 8, th + 0.4]].concat(arc).concat([[-td / 2 - 8, th + 0.4], [-td / 2, th], [-td / 2, g]]);
+      const nArc = arc.length;
+      loftPath(mb, path, sec, (i, j, c) => {
+        if (c) return term;
+        const glassJ = j === 1 || j === sec.length - 1;
+        if (glassJ) return i % 2 ? frame : glass;
+        if (j >= 4 && j < 4 + nArc + 1) return roof;
+        return term;
+      });
+      // 登機廊橋：從航廈伸向停機坪的方管，末端一支升降柱和接機艙
+      const dirs = site.side === 0 ? [-1, 1] : [-tSide];
+      for (const d of dirs) for (let k = 0; k < site.piers * 2; k++) {
+        const pa = x0 + (k + 0.5) * tl / (site.piers * 2), from = base + d * td / 2, to = from + d * 38;
+        loftPath(mb, [[pa, from, 1, 0, 0], [pa, to, 1, 0, 0]], [[-1.6, 4.4], [1.6, 4.4], [1.6, 7.2], [1.2, 7.6], [-1.2, 7.6], [-1.6, 7.2]], (i, j) => j === 1 || j === 5 ? glass : roof);
+        tube(mb, [pa, to - d * 4, 0], [pa, to - d * 4, 4.4], 0.45, 0.45, 8, frame, false);
+        ellipsoid(mb, [pa, to - d * 4, 0.35], 1.1, 0.6, 0.35, dark, 8, 3);
+        loftPath(mb, [[pa - 2.4, to, 0, 1, 0], [pa + 2.4, to, 0, 1, 0]], [[-1.2, 4.2], [1.2, 4.2], [1.2, 7.8], [-1.2, 7.8]], () => frame);
+      }
+    }
+    // 塔台：往上收窄的圓塔身、外擴的玻璃管制室、圓頂與天線
+    { const a = site.tower[0] * 1000, h = site.tower[1], r = base + (site.side === 0 ? 300 : site.side * 140), tw = C('tower');
+      tube(mb, [a, r, 0], [a, r, h - 11], 6.5, 3.6, 18, tw, false);
+      tube(mb, [a, r, h - 11], [a, r, h - 9], 3.6, 8.5, 18, tw, false);
+      tube(mb, [a, r, h - 9], [a, r, h - 2.5], 8.5, 9.6, 18, C('cab'), false);
+      tube(mb, [a, r, h - 2.5], [a, r, h - 1.6], 10.4, 10.4, 18, tw, true);
+      ellipsoid(mb, [a, r, h - 1.6], 8.5, 8.5, 2.2, tw, 14, 4);
+      tube(mb, [a, r, h], [a, r, h + 9], 0.35, 0.12, 6, frame, false);
+      tube(mb, [a, r, 0], [a, r, 6], 13, 13, 18, mcol('#C9CED3'), true); }
+    // 修護棚廠：拱形鐵皮屋頂，正面大門
+    { const a = -(site.tower[0] * 1000) - 300 * Math.sign(site.tower[0] || 1), r = base + (site.side === 0 ? -320 : site.side * 120), hg = C('hangar');
+      for (const [ha, hl, hw, hh] of [[a, 100, 80, 22], [a + 100, 80, 70, 18]]) {
+        const arc = []; for (let i = 0; i <= 12; i++) { const t = i / 12; arc.push([hw / 2 - hw * t, hh * 0.45 + hh * 0.55 * Math.sin(Math.PI * t)]); }
+        const sec = [[-hw / 2, 0], [hw / 2, 0]].concat(arc);
+        loftPath(mb, [[r, ha - hl / 2, 1, 0, 0], [r, ha + hl / 2, 1, 0, 0]].map(([y, x, nx, ny, z]) => [x, y, 0, 1, z]), sec, (i, j, c) => c ? mcol('#8E979F') : hg);
+      }
+    }
+    list.push({ code, ll: [A[2], A[1]], brg: A[3] / DEG, data: mbDone(mb) });
+  }
+  return list;
 }
 
 /* ---------- 3D 飛機：WebGL 自訂圖層 ----------
@@ -431,10 +468,16 @@ const PlaneGL = {
   },
   layer: {
     id: 'planes3d', type: 'custom', renderingMode: '3d',
-    onAdd(m, gl) { PlaneGL.gl = gl; PlaneGL.meshes.clear(); },
-    onRemove() { PlaneGL.gl = null; PlaneGL.meshes.clear(); },
+    onAdd(m, gl) { PlaneGL.gl = gl; PlaneGL.meshes.clear(); PlaneGL.sites = null; },
+    onRemove() { PlaneGL.gl = null; PlaneGL.meshes.clear(); PlaneGL.sites = null; },
     render(gl, matrix) {
       PlaneGL.last = matrix;
+      // 機場建築（航廈、塔台、棚廠）：不管飛機開不開都畫，第一次畫時才建網格
+      if (PlaneGL.gl && map.getZoom() >= 10.5) {
+        if (!PlaneGL.sites) PlaneGL.sites = airportMeshes().map(s => ({ mesh: GL3D.upload(gl, s.data), m: GL3D.model(s.ll, 0, s.brg) }));
+        const p = GL3D.begin(gl);
+        for (const s of PlaneGL.sites) GL3D.draw(gl, p, s.mesh, matrix, s.m);
+      }
       // 飛機關掉時不畫
       const list = AIR.on ? PlaneGL.draw : [];
       if (!list.length || !PlaneGL.gl) return;

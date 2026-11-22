@@ -373,9 +373,9 @@ const GL3D = {
         v_c = mix(lit, a_c.rgb, a_c.a);
         gl_Position = u_pm * vec4(a_pos, 1.0);
       }`));
-    gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, `precision mediump float; varying vec3 v_c; void main() { gl_FragColor = vec4(clamp(v_c, 0.0, 1.0), 1.0); }`));
+    gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, `precision mediump float; uniform float u_alpha; varying vec3 v_c; void main() { gl_FragColor = vec4(clamp(v_c, 0.0, 1.0), u_alpha); }`));
     gl.linkProgram(prog);
-    p = { prog, pm: gl.getUniformLocation(prog, 'u_pm'), r: gl.getUniformLocation(prog, 'u_r'), light: gl.getUniformLocation(prog, 'u_light'), lc: gl.getUniformLocation(prog, 'u_lc'), li: gl.getUniformLocation(prog, 'u_li'),
+    p = { prog, pm: gl.getUniformLocation(prog, 'u_pm'), r: gl.getUniformLocation(prog, 'u_r'), light: gl.getUniformLocation(prog, 'u_light'), lc: gl.getUniformLocation(prog, 'u_lc'), li: gl.getUniformLocation(prog, 'u_li'), alpha: gl.getUniformLocation(prog, 'u_alpha'),
       attrs: ['a_pos', 'a_n', 'a_c'].map(a => gl.getAttribLocation(prog, a)) };
     this.progs.set(gl, p); return p;
   },
@@ -393,11 +393,13 @@ const GL3D = {
     } catch {}
     return { lc, li, dir };
   },
-  begin(gl) {
+  // alpha < 1：半透明（城市建築，隔著建築也看得到列車）
+  begin(gl, alpha = 1) {
     const p = this.prog(gl), L = this.light();
     gl.useProgram(p.prog);
-    gl.uniform3fv(p.light, L.dir); gl.uniform3fv(p.lc, L.lc); gl.uniform1f(p.li, L.li);
-    gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(true); gl.disable(gl.CULL_FACE); gl.disable(gl.BLEND);
+    gl.uniform3fv(p.light, L.dir); gl.uniform3fv(p.lc, L.lc); gl.uniform1f(p.li, L.li); gl.uniform1f(p.alpha, alpha);
+    gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(true); gl.disable(gl.CULL_FACE);
+    if (alpha < 1) { gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); } else gl.disable(gl.BLEND);
     p.bound = null;
     return p;
   },
@@ -422,3 +424,97 @@ const GL3D = {
     return [F[0] * s * sx, F[1] * s * sx, F[2] * s * sx, 0, rt[0] * s, rt[1] * s, 0, 0, U[0] * s, U[1] * s, U[2] * s, 0, mc.x, mc.y, mc.z, 1];
   },
 };
+
+/* ===== 場景：車站、高架橋、城市建築、行道樹、路燈、機場 =====
+   這些東西不會動，附近的全部合成一個大網格、一次畫完；鏡頭移動夠遠才重建。
+   座標以某個原點為中心：x 往東、y 往南、z 往上（公尺），用 GL3D.model(原點, 0, π/2) 擺到地圖上。 */
+
+// 沿路徑放樣：path 是 [x, y, nx, ny, z0]（位置、單位法向量、整體抬高），sec 是封閉斷面 [側向, 高度]；
+// color(i, j) 依沿路徑第 i 段、斷面第 j 段決定顏色。兩端封口
+function loftPath(mb, path, sec, color, caps = true) {
+  if (path.length < 2) return;
+  let sl = 0, sz = 0; for (const [l, z] of sec) { sl += l; sz += z; } sl /= sec.length; sz /= sec.length;
+  const ring = (p, k) => sec.concat([sec[0]]).map(([l, z]) => { const L = sl + (l - sl) * k, Z = sz + (z - sz) * k + (p[4] || 0); return [p[0] + p[2] * L, p[1] + p[3] * L, Z]; });
+  const rows = [];
+  if (caps) rows.push(ring(path[0], 0), ring(path[0], 0.97));
+  for (const p of path) rows.push(ring(p, 1));
+  if (caps) rows.push(ring(path[path.length - 1], 0.97), ring(path[path.length - 1], 0));
+  const off = caps ? 2 : 0, n = path.length - 1;
+  surf(mb, rows, (i, j) => color(Math.max(0, Math.min(n - 1, i - off)), j, i < off || i >= off + n));
+}
+// 一片牆：a→b（平面座標）、高度 zs（由下往上）、沿牆的切點 us（0~1）；center 是建築內部的一點，法向量朝外
+function panel(mb, a, b, zs, us, color, center) {
+  const rows = zs.map(z => us.map(u => [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u, z]));
+  surf(mb, rows, color, false, center);
+}
+// 平面多邊形（屋頂、樓板）：扇形三角化，凸多邊形與大部分建築外框都適用；up 決定法向量朝上或朝下
+function capPoly(mb, pts, z, col, up = true) {
+  let cx = 0, cy = 0; for (const p of pts) { cx += p[0]; cy += p[1]; } cx /= pts.length; cy /= pts.length;
+  const nz = up ? 1 : -1;
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length];
+    for (const p of [[cx, cy], a, b]) { mb.P.push(p[0], p[1], z); mb.N.push(0, 0, nz); mb.C.push(col[0], col[1], col[2], col[3]); }
+  }
+}
+
+/* 一棟大樓：外牆每層一列窗（窗框、玻璃、樓板線分開上色），一樓是店面玻璃，屋頂有女兒牆。
+   pts 是外框（公尺，不含重複的終點），h 樓頂高、b0 起始高度，detail 為 false 時只畫樓層帶不切窗 */
+function buildingMesh(mb, pts, h, b0, o) {
+  const n = pts.length; if (n < 3) return;
+  let cx = 0, cy = 0; for (const p of pts) { cx += p[0]; cy += p[1]; } cx /= n; cy /= n;
+  const center = [cx, cy, (h + b0) / 2], FL = 3.4, nF = Math.max(1, Math.floor((h - b0) / FL));
+  const wall = mcol(o.wall), band = mcol(o.band), rim = mcol(o.rim);
+  for (let i = 0; i < n; i++) {
+    const a = pts[i], b = pts[(i + 1) % n], Lw = Math.hypot(b[0] - a[0], b[1] - a[1]); if (Lw < 0.5) continue;
+    const zs = [b0], us = [0];
+    // 樓層：窗台、窗頂兩條切線
+    for (let k = 0; k < nF; k++) { const z = b0 + k * FL; zs.push(z + (k ? 0.9 : 0.4), z + (k ? 2.6 : 2.9)); }
+    zs.push(h);
+    const nw = o.detail ? Math.max(1, Math.round(Lw / 3.2)) : 1;
+    for (let k = 0; k < nw; k++) { if (o.detail) us.push((k + 0.18) / nw, (k + 0.82) / nw); }
+    us.push(1);
+    const uniq = arr => [...new Set(arr.map(v => +v.toFixed(5)))].sort((p, q) => p - q);
+    const Z = uniq(zs).filter(z => z <= h), U = uniq(us);
+    panel(mb, a, b, Z, U, (r, c) => {
+      const z = (Z[r] + Z[r + 1]) / 2, k = Math.floor((z - b0) / FL), inF = z - b0 - k * FL;
+      const winRow = k === 0 ? inF > 0.4 && inF < 2.9 : inF > 0.9 && inF < 2.6;
+      const u = (U[c] + U[c + 1]) / 2, inCol = !o.detail || (u * nw % 1 > 0.18 && u * nw % 1 < 0.82);
+      if (z > b0 + nF * FL - 0.2 && z > h - 1.2) return rim;
+      if (winRow && inCol && k < nF) {
+        const hsh = o.hash(i * 131 + k * 17 + Math.floor(u * nw));
+        return o.lit && hsh < o.on ? mcol(hsh < o.on * 0.25 ? '#FF9E45' : '#FFC25A', 1) : mcol(k === 0 && b0 === 0 ? o.shop : o.glass);
+      }
+      return k % 4 === 0 && inF < 0.3 ? band : wall;
+    }, center);
+  }
+  // 屋頂與女兒牆
+  capPoly(mb, pts, h, mcol(o.roof));
+  const inner = pts.map(([x, y]) => { const d = Math.hypot(x - cx, y - cy) || 1, k = Math.max(0, 1 - 0.35 / d); return [cx + (x - cx) * k, cy + (y - cy) * k]; });
+  for (let i = 0; i < n; i++) panel(mb, inner[(i + 1) % n], inner[i], [h, h + 0.9], [0, 1], () => rim, center);
+}
+// 樹：樹幹＋兩三團樹冠
+function treeMesh(mb, x, y, h, r, leaf, trunk, seed) {
+  tube(mb, [x, y, 0], [x, y, h * 0.55], 0.2, 0.14, 6, trunk, false);
+  ellipsoid(mb, [x, y, h * 0.68], r, r, h * 0.3, leaf, 8, 5, 2.2);
+  ellipsoid(mb, [x + r * 0.35 * Math.cos(seed * 9), y + r * 0.35 * Math.sin(seed * 9), h * 0.88], r * 0.62, r * 0.62, h * 0.2, leaf, 7, 4, 2.2);
+}
+// 路燈：燈桿彎出一支燈臂，燈頭夜裡發光
+function lampMesh(mb, x, y, ax, ay, lit, pole) {
+  tube(mb, [x, y, 0], [x, y, 7], 0.11, 0.08, 7, pole, false);
+  tube(mb, [x, y, 7], [x + ax * 1.4, y + ay * 1.4, 7.25], 0.06, 0.06, 6, pole, false);
+  ellipsoid(mb, [x + ax * 1.6, y + ay * 1.6, 7.15], 0.4, 0.4, 0.13, lit ? mcol('#FFE3A0', 1) : pole, 8, 3);
+}
+// 頂樓水塔：架子＋不鏽鋼圓桶
+function tankMesh(mb, x, y, z, steel, legs) {
+  for (const [dx, dy] of [[-0.6, -0.6], [0.6, -0.6], [0.6, 0.6], [-0.6, 0.6]]) tube(mb, [x + dx, y + dy, z], [x + dx, y + dy, z + 1.05], 0.05, 0.05, 5, legs, false);
+  tube(mb, [x, y, z + 1.0], [x, y, z + 2.9], 1.0, 1.0, 14, steel);
+}
+// 頂樓鐵皮加蓋：斜屋頂的棚子
+function shedMesh(mb, pts, z, sheet, wall) {
+  let cx = 0, cy = 0; for (const p of pts) { cx += p[0]; cy += p[1]; } cx /= pts.length; cy /= pts.length;
+  const n = pts.length;
+  for (let i = 0; i < n; i++) panel(mb, pts[i], pts[(i + 1) % n], [z, z + 2.2], [0, 1], () => wall, [cx, cy, z + 1]);
+  // 屋面中央拱起一點，看起來像浪板屋頂
+  const rows = [pts.concat([pts[0]]).map(([x, y]) => [x, y, z + 2.2]), pts.concat([pts[0]]).map(([x, y]) => [cx + (x - cx) * 0.5, cy + (y - cy) * 0.5, z + 2.75]), pts.concat([pts[0]]).map(() => [cx, cy, z + 2.9])];
+  surf(mb, rows, () => sheet, true, [cx, cy, z]);
+}

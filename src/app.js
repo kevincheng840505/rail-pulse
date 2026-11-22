@@ -181,6 +181,15 @@ const TrainGL = {
     if (map) map.triggerRepaint();
   },
   has(name) { return !!this.groups[name].f; },
+  /* 不會動的場景（車站、城市）：整片合成一個網格，換新的時候把舊的從顯示卡刪掉 */
+  statics: new Map(),
+  setStatic(name, data, ll) {
+    const old = this.statics.get(name);
+    if (old && old.mesh && this.gl) old.mesh.bufs.forEach(b => this.gl.deleteBuffer(b));
+    this.statics.delete(name);
+    if (data && data.n && this.gl) this.statics.set(name, { mesh: GL3D.upload(this.gl, data), m: GL3D.model(ll, 0, Math.PI / 2) });
+    if (map) map.triggerRepaint();
+  },
   mesh(it) {
     let m = this.meshes.get(it.key);
     if (!m) { m = GL3D.upload(this.gl, it.make()); this.meshes.set(it.key, m); if (this.meshes.size > 400) this.trim(); }
@@ -208,14 +217,26 @@ const TrainGL = {
   },
   layer: {
     id: 'trains3d', type: 'custom', renderingMode: '3d',
-    onAdd(m, gl) { TrainGL.gl = gl; TrainGL.meshes.clear(); },
-    onRemove() { TrainGL.gl = null; TrainGL.meshes.clear(); },
+    onAdd(m, gl) { TrainGL.gl = gl; TrainGL.meshes.clear(); TrainGL.statics.clear(); },
+    onRemove() { TrainGL.gl = null; TrainGL.meshes.clear(); TrainGL.statics.clear(); },
     render(gl, matrix) {
       const T = TrainGL, z = map.getZoom();
-      const live = Object.values(T.groups).filter(g => g.f && z >= g.minz);
-      if (!live.length) return;
+      const live = Object.values(T.groups).filter(g => g.f && z >= g.minz), st = T.statics.get('stations');
+      if (!live.length && !st) return;
       const p = GL3D.begin(gl);
+      if (st && z >= FACADE_ZOOM) GL3D.draw(gl, p, st.mesh, matrix, st.m);
       for (const g of live) for (const it of g.f) GL3D.draw(gl, p, T.mesh(it), matrix, it.m);
+    },
+  },
+  // 城市建築、行道樹、路燈：畫在列車之後、半透明，隔著大樓也看得到列車
+  cityLayer: {
+    id: 'city3d', type: 'custom', renderingMode: '3d',
+    render(gl, matrix) {
+      const c = TrainGL.statics.get('city');
+      if (!c || !S.buildings || map.getZoom() < FACADE_ZOOM) return;
+      const p = GL3D.begin(gl);
+      GL3D.draw(gl, p, c.mesh, matrix, c.m);
+      gl.disable(gl.BLEND);
     },
   },
 };
@@ -269,12 +290,8 @@ function initMap() {
         'circle-radius': ['interpolate', ['exponential', 1.6], ['zoom'], 12, ['*', 1, ['get', 'k']], 16, ['*', 3, ['get', 'k']], 19, ['*', 10, ['get', 'k']]] } }, 'trains3d');
     // 半透明建築要畫在車廂之後：先畫的 3D 圖層會擋住後畫的，這樣隔著建築也看得到列車
     try { map.moveLayer('buildings'); } catch {}
-    map.addSource('facade', { type: 'geojson', data: EMPTY });
-    map.addLayer({ id: 'facade', type: 'fill-extrusion', source: 'facade', minzoom: FACADE_ZOOM,
-      paint: { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 't'], 'fill-extrusion-base': ['get', 'b'], 'fill-extrusion-opacity': 0.8, 'fill-extrusion-vertical-gradient': false } });
-    const solid = { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 't'], 'fill-extrusion-base': ['get', 'b'], 'fill-extrusion-opacity': 1, 'fill-extrusion-vertical-gradient': false };
-    map.addSource('platforms', { type: 'geojson', data: EMPTY });
-    map.addLayer({ id: 'platforms', type: 'fill-extrusion', source: 'platforms', minzoom: FACADE_ZOOM, paint: solid }, 'trains3d');
+    // 附近的大樓、行道樹、路燈（3D 模型，見 Facade 與 TrainGL.cityLayer）；車站月台、雨棚、高架橋畫在 trains3d 裡
+    map.addLayer(TrainGL.cityLayer);
     map.addSource('lamps', { type: 'geojson', data: EMPTY });
     map.addLayer({ id: 'lamp-glow', type: 'circle', source: 'lamps', minzoom: FACADE_ZOOM,
       paint: { 'circle-color': '#FFD48A', 'circle-blur': 1, 'circle-pitch-alignment': 'map', 'circle-opacity': 0,
@@ -290,7 +307,7 @@ function initMap() {
       paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, ['case', ['get', 'sel'], 6, ['==', ['get', 'g'], 'mrt'], 2.4 * DOT, 3 * DOT], 12, ['case', ['get', 'sel'], 9, 5.5]],
         'circle-color': ['get', 'color'], 'circle-stroke-color': '#FFFFFF', 'circle-stroke-width': ['case', ['get', 'sel'], 2, 0.6], 'circle-pitch-alignment': 'map' } });
     map.setLayoutProperty('buildings', 'visibility', S.buildings ? 'visible' : 'none');
-    for (const l of ['facade', 'lamp-glow']) map.setLayoutProperty(l, 'visibility', S.buildings ? 'visible' : 'none');
+    for (const l of ['city3d', 'lamp-glow']) map.setLayoutProperty(l, 'visibility', S.buildings ? 'visible' : 'none');
     S.mapReady = true;
     perfMark('地圖樣式就緒');
     applyQuality();
@@ -339,7 +356,7 @@ function applyQuality() {
   const low = Quality.low, vis = on => on ? 'visible' : 'none';
   try { if (map.getPixelRatio() !== Quality.pixelRatio) map.setPixelRatio(Quality.pixelRatio); } catch {}
   try { map.setLayoutProperty('hills', 'visibility', vis(!low)); } catch {}
-  for (const l of ['facade', 'lamp-glow']) try { map.setLayoutProperty(l, 'visibility', vis(S.buildings && !low)); } catch {}
+  for (const l of ['city3d', 'lamp-glow']) try { map.setLayoutProperty(l, 'visibility', vis(S.buildings && !low)); } catch {}
   syncTerrain(true); Facade.soon(true); pushTrains(true);
 }
 function renderQualityBtns() {
@@ -353,7 +370,7 @@ function setQuality(v) { Quality.pref = v === 'high' ? 'high' : 'low'; store.set
 const FACADE_ZOOM = 15.5;
 const Facade = (() => {
   let timer = 0, last = null;
-  const R = COARSE ? 0.3 : 0.45, FLOOR = 0.0034, MAX_FEAT = COARSE ? 2500 : 5000, MAX_TREES = COARSE ? 400 : 900;
+  const R = COARSE ? 0.3 : 0.45, MAX_VERT = COARSE ? 350e3 : 900e3, DETAIL_N = COARSE ? 25 : 60, MAX_TREES = COARSE ? 300 : 700;
   // 把外框往外推 d 公里（每個頂點沿兩條邊的外法線平均方向）
   function outset(pts, d) {
     let a = 0;
@@ -377,37 +394,36 @@ const Facade = (() => {
   const rect = (x, y, ux, uy, a, b) => { const vx = -uy, vy = ux, A = a / 2000, B = b / 2000; return [[1, 1], [-1, 1], [-1, -1], [1, -1], [1, 1]].map(([i, j]) => unproj(x + ux * A * i + vx * B * j, y + uy * A * i + vy * B * j)); };
   const SHEET = ['#4F7FA8', '#5E8F86', '#A8674A', '#C5CBD0', '#6E8FB0'];
   /* 台灣街景的屋頂：不鏽鋼水塔、頂樓鐵皮加蓋，外牆掛冷氣室外機 */
-  function roofs(cand, out, P) {
-    const steel = mixHex('#D9DEE3', P.bld, 0.25), legs = '#5A6068', acc = mixHex('#E4E6E8', P.bld, 0.2);
+  function roofs(cand, mb, P, L) {
+    const steel = mcol(mixHex('#D9DEE3', P.bld, 0.25)), legs = mcol('#5A6068'), acc = mcol(mixHex('#E4E6E8', P.bld, 0.2));
     for (const B of cand) {
-      if (out.length > MAX_FEAT * 1.4) break;
+      if (mb.P.length > MAX_VERT * 3 * 1.3) break;
       const seed = hash(B.key + 'r'), pts = B.pts, n = pts.length - 1;
       let gx = 0, gy = 0; for (let i = 0; i < n; i++) { gx += pts[i][0]; gy += pts[i][1]; } gx /= n; gy /= n;
       const top = B.h;
       // 鐵皮加蓋：中低樓層的建築才有，把外框往中心縮成一圈較小的棚子
       const shed = B.h < 40 && seed < 0.55;
       if (shed) {
-        const k = 0.55 + seed * 0.4, ring = pts.map(([x, y]) => unproj(gx + (x - gx) * k, gy + (y - gy) * k));
-        out.push(poly(ring, top, top + 2.6, mixHex(SHEET[Math.floor(seed * 100) % SHEET.length], P.bld, P.lit ? 0.5 : 0.15)));
+        const k = 0.55 + seed * 0.4, ring = pts.slice(0, n).map(([x, y]) => L(gx + (x - gx) * k, gy + (y - gy) * k));
+        shedMesh(mb, ring, top, mcol(mixHex(SHEET[Math.floor(seed * 100) % SHEET.length], P.bld, P.lit ? 0.5 : 0.15)), mcol(mixHex('#C9CCCF', P.bld, 0.3)));
       }
       // 水塔：架高的圓桶，靠在屋頂的一角
       if (B.h < 70) {
-        const v = pts[Math.floor(seed * n)], tx = gx + (v[0] - gx) * 0.55, ty = gy + (v[1] - gy) * 0.55, h0 = top + (shed ? 2.6 : 0);
-        out.push(poly(ngon(tx, ty, 0.9, 4, Math.PI / 4), h0, h0 + 1.0, legs));
-        out.push(poly(ngon(tx, ty, 1.0, 10), h0 + 1.0, h0 + 2.9, steel));
-        if (seed > 0.7) out.push(poly(ngon(tx + 0.0024, ty, 0.8, 10), h0 + 1.0, h0 + 2.5, steel));
+        const v = pts[Math.floor(seed * n)], tx = gx + (v[0] - gx) * 0.55, ty = gy + (v[1] - gy) * 0.55, h0 = top + (shed ? 2.9 : 0);
+        const [x, y] = L(tx, ty); tankMesh(mb, x, y, h0, steel, legs);
+        if (seed > 0.7) { const [x2, y2] = L(tx + 0.0024, ty); tankMesh(mb, x2, y2, h0, steel, legs); }
       }
       // 冷氣室外機：隨機掛在幾面外牆的幾層樓
       const nF = Math.floor((B.h - B.b0) / 3.4);
       for (let j = 0; j < Math.min(6, nF); j++) {
         const r = hash(B.key + 'ac' + j), e = Math.floor(r * n), a = pts[e], b = pts[e + 1];
-        const L = Math.hypot(b[0] - a[0], b[1] - a[1]); if (L < 0.003) continue;
-        const ux = (b[0] - a[0]) / L, uy = (b[1] - a[1]) / L, t = 0.2 + hash(B.key + 'at' + j) * 0.6;
-        // 外法線方向：朝離開中心的那一側
+        const Ln = Math.hypot(b[0] - a[0], b[1] - a[1]); if (Ln < 0.003) continue;
+        const ux = (b[0] - a[0]) / Ln, uy = (b[1] - a[1]) / Ln, t = 0.2 + hash(B.key + 'at' + j) * 0.6;
         let nx = -uy, ny = ux; const mx = a[0] + (b[0] - a[0]) * t, my = a[1] + (b[1] - a[1]) * t;
         if ((mx - gx) * nx + (my - gy) * ny < 0) { nx = -nx; ny = -ny; }
         const fl = 1 + Math.floor(hash(B.key + 'af' + j) * Math.max(1, nF - 1)), z = B.b0 + fl * 3.4 + 0.2;
-        out.push(poly(rect(mx + nx * 0.0006, my + ny * 0.0006, ux, uy, 0.9, 0.5), z, z + 0.65, acc));
+        const [x, y] = L(mx + nx * 0.0006, my + ny * 0.0006);
+        ellipsoid(mb, [x, y, z + 0.33], 0.45, 0.45, 0.33, acc, 6, 3, 6);
       }
     }
   }
@@ -434,7 +450,7 @@ const Facade = (() => {
   }
   /* 沿著街道種行道樹、立路燈；夜裡路燈在地面打出一圈暖光 */
   const ROAD_W = { primary: 11, secondary: 9, tertiary: 7, minor: 5 };
-  function streets(cx, cy, out, P, tiles) {
+  function streets(cx, cy, mb, P, tiles, L) {
     let roads;
     try { roads = nearFeatures(tiles, 'transportation', ['in', ['get', 'class'], ['literal', Object.keys(ROAD_W)]]); } catch { return []; }
     const lamps = [], seen = new Set(), RR = R * 0.8;
@@ -453,8 +469,8 @@ const Facade = (() => {
       const dx = bx - ax, dy = by - ay, t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy || 1)));
       return Math.hypot(ax + dx * t - x, ay + dy * t - y) < 0.014;
     });
-    const trunk = mixHex('#5B4636', P.land, 0.2), pole = mixHex('#7B838C', P.bld, 0.3);
-    const leaf = ['#4E7D4A', '#5F8F4E', '#3F6E47', '#6E9A55'].map(c => mixHex(c, P.wood, P.lit ? 0.35 : 0.2));
+    const trunk = mcol(mixHex('#5B4636', P.land, 0.2)), pole = mcol(mixHex('#7B838C', P.bld, 0.3));
+    const leaf = ['#4E7D4A', '#5F8F4E', '#3F6E47', '#6E9A55'].map(c => mcol(mixHex(c, P.wood, P.lit ? 0.35 : 0.2)));
     let trees = 0;
     for (const f of roads) {
       const w = ROAD_W[f.properties.class], g = f.geometry;
@@ -463,10 +479,10 @@ const Facade = (() => {
         const pts = line.map(([lon, lat]) => proj(lat, lon));
         let run = 0; // 沿整條路累計的距離，路燈間距才不受折線切段影響
         for (let i = 1; i < pts.length; i++) {
-          const [x1, y1] = pts[i - 1], [x2, y2] = pts[i], L = Math.hypot(x2 - x1, y2 - y1);
-          if (L < 1e-6) continue;
-          const ux = (x2 - x1) / L, uy = (y2 - y1) / L, nx = -uy, ny = ux;
-          for (let d = (0.012 - run % 0.012) % 0.012; d < L; d += 0.012) {
+          const [x1, y1] = pts[i - 1], [x2, y2] = pts[i], sl = Math.hypot(x2 - x1, y2 - y1);
+          if (sl < 1e-6) continue;
+          const ux = (x2 - x1) / sl, uy = (y2 - y1) / sl, nx = -uy, ny = ux;
+          for (let d = (0.012 - run % 0.012) % 0.012; d < sl; d += 0.012) {
             const x = x1 + ux * d, y = y1 + uy * d;
             if (Math.hypot(x - cx, y - cy) > RR) continue;
             const key = Math.round(x * 2e3) + ',' + Math.round(y * 2e3);
@@ -477,20 +493,17 @@ const Facade = (() => {
               if (onRail(tx, ty)) continue;
               if (k % 3 === 1 && side > 0) {
                 // 路燈：燈桿＋燈頭，夜裡地上一圈光
-                out.push(poly(ngon(tx, ty, 0.12, 4), 0, 7, pole));
-                out.push(poly(rect(tx - nx * 0.0006 * side, ty - ny * 0.0006 * side, nx, ny, 1.4, 0.35), 6.8, 7.1, P.lit ? '#FFE3A0' : pole));
+                { const [lx, ly] = L(tx, ty); lampMesh(mb, lx, ly, -nx * side, -ny * side, P.lit, pole); }
                 lamps.push({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: unproj(tx - nx * 0.0012 * side, ty - ny * 0.0012 * side) } });
                 continue;
               }
               if (trees > MAX_TREES || hash(key + side) < 0.25) continue;
               const r = 1.5 + hash(key + 's' + side) * 1.0, h = 4 + hs * 2.5;
-              out.push(poly(ngon(tx, ty, 0.18, 4), 0, h * 0.45, trunk));
-              out.push(poly(ngon(tx, ty, r, 7, hs), h * 0.4, h, leaf[Math.floor(hs * 97) % leaf.length]));
-              out.push(poly(ngon(tx, ty, r * 0.6, 7, hs + 0.3), h, h + 0.8, leaf[Math.floor(hs * 53) % leaf.length]));
+              { const [lx, ly] = L(tx, ty); treeMesh(mb, lx, ly, h + 0.8, r, leaf[Math.floor(hs * 97) % leaf.length], trunk, hs); }
               trees++;
             }
           }
-          run += L;
+          run += sl;
         }
       }
     }
@@ -499,24 +512,24 @@ const Facade = (() => {
   // 鏡頭附近車站的月台、雨棚與候車旅客（尖峰時段人多、深夜人少）
   let lastPf = '';
   function platforms() {
-    const src = map.getSource('platforms'); if (!src) return;
+    if (!map.getLayer('trains3d')) return;
     const z = map.getZoom(), c = map.getCenter(), [cx, cy] = proj(c.lat, c.lng);
     const near = z < FACADE_ZOOM ? [] : NODES.filter(n => Math.hypot(n.x - cx, n.y - cy) < 0.8);
     // 跟拍的列車在高架上時，車子前後也要有橋（站與站中間的高架段不在任何車站附近）
     const f = z < FACADE_ZOOM ? null : S.follow, fp = f && elevProfile(f) && tripPos(f, curMin());
     const key = near.map(n => n.id).join() + '|' + S.P.lit + '|' + TRIPS.length + '|' + (fp ? f.idx + ':' + Math.round(fp.km * 4) : '');
     if (key === lastPf) return; lastPf = key;
-    const out = [], seen = new Set();
-    for (const n of near) for (const [trip, idx] of stationReps(n)) stationFeatures(n, trip, idx, S.P, out, seen);
-    if (fp) viaductFeatures(f, fp.km - 1, fp.km + 1, S.P, out, seen);
-    src.setData({ type: 'FeatureCollection', features: out });
+    // 車站與高架橋合成一個網格，原點放在畫面中心
+    const mb = MB(), seen = new Set(), O = { x: cx, y: cy };
+    for (const n of near) for (const [trip, idx] of stationReps(n)) stationFeatures(n, trip, idx, S.P, mb, seen, O);
+    if (fp) viaductFeatures(f, fp.km - 1, fp.km + 1, S.P, mb, seen, O);
+    TrainGL.setStatic('stations', mb.P.length ? mbDone(mb) : null, unproj(cx, cy));
   }
   function build(force) {
     timer = 0;
-    if (!map || !S.mapReady || !map.getSource('facade')) return;
-    const src = map.getSource('facade');
+    if (!map || !S.mapReady || !map.getLayer('city3d')) return;
     platforms();
-    if (!S.buildings || Quality.low || map.getZoom() < FACADE_ZOOM) { if (last) { src.setData(EMPTY); last = null; } return; }
+    if (!S.buildings || Quality.low || map.getZoom() < FACADE_ZOOM) { if (last) { TrainGL.setStatic('city', null); last = null; } return; }
     const c = map.getCenter(), [cx, cy] = proj(c.lat, c.lng);
     let tiles = null; try { tiles = nearTiles(c, R); } catch {}
     // 只有附近的圖磚有變（新載入）或移動夠遠才重建；遠方圖磚載入不用重算
@@ -538,26 +551,21 @@ const Facade = (() => {
       cand.push({ pts, h, b0, d, key });
     }
     cand.sort((a, b) => a.d - b.d);
-    const out = [], glass = P.lit ? '#1A2330' : mixHex(P.bld, '#24384E', 0.65), lit = '#FFC25A', warm = '#FF9E45';
+    // 附近的建築、行道樹、路燈全部合成一個網格（以畫面中心為原點，單位公尺）
+    const mb = MB(), L = (x, y) => [(x - cx) * 1000, (y - cy) * 1000];
+    const glass = P.lit ? '#1A2330' : mixHex(P.bld, '#24384E', 0.65), shop = P.lit ? '#3A3226' : mixHex(P.bld, '#2C4258', 0.55);
     const rim = mixHex(P.bldEdge, '#FFFFFF', P.lit ? 0 : 0.3), band = mixHex(P.bld, P.land, 0.4);
-    for (const B of cand) {
-      if (out.length > MAX_FEAT) break;
-      const outer = outset(B.pts, 0.0003), inner = outset(B.pts, 0.00008), shell = [outer, inner.slice().reverse()];
-      const nF = Math.min(45, Math.floor((B.h - B.b0) / (FLOOR * 1000)));
+    const WALLS = ['#D8D3C8', '#C9CDD1', '#BFB6A8', '#E2DED6', '#A9B0B7', '#CFC6B6'];
+    cand.forEach((B, i) => {
+      if (mb.P.length > MAX_VERT * 3) return;
       const seed = hash(B.key);
-      // 一樓店面：較高的一整圈玻璃
-      if (B.b0 === 0) out.push({ type: 'Feature', properties: { b: 0.4, t: 2.9, c: P.lit ? (seed < 0.6 ? warm : glass) : glass }, geometry: { type: 'Polygon', coordinates: shell } });
-      for (let k = 1; k < nF; k++) {
-        const z = B.b0 + k * FLOOR * 1000, on = P.lit && hash(B.key + k) < 0.32 + seed * 0.25;
-        out.push({ type: 'Feature', properties: { b: z + 1.0, t: z + 2.3, c: on ? (hash(k + B.key) < 0.25 ? warm : lit) : glass }, geometry: { type: 'Polygon', coordinates: shell } });
-        // 每隔幾層加一道樓板線，讓立面有分段
-        if (k % 4 === 0) out.push({ type: 'Feature', properties: { b: z - 0.25, t: z + 0.15, c: band }, geometry: { type: 'Polygon', coordinates: shell } });
-      }
-      out.push({ type: 'Feature', properties: { b: B.h - 0.1, t: B.h + 0.7, c: rim }, geometry: { type: 'Polygon', coordinates: shell } });
-    }
-    roofs(cand, out, P);
-    const lamps = streets(cx, cy, out, P, tiles);
-    src.setData({ type: 'FeatureCollection', features: out });
+      const pts = outset(B.pts, 0.00025).slice(0, -1).map(([lon, lat]) => L(...proj(lat, lon)));
+      buildingMesh(mb, pts, B.h, B.b0, { detail: i < DETAIL_N, lit: P.lit, on: 0.32 + seed * 0.25, hash: k => hash(B.key + k),
+        wall: mixHex(WALLS[Math.floor(seed * 60) % WALLS.length], P.bld, P.lit ? 0.6 : 0.35), band, rim, glass, shop, roof: mixHex('#8E9296', P.bld, 0.4) });
+    });
+    roofs(cand, mb, P, L);
+    const lamps = streets(cx, cy, mb, P, tiles, L);
+    TrainGL.setStatic('city', mb.P.length ? mbDone(mb) : null, unproj(cx, cy));
     const ls = map.getSource('lamps'); if (ls) ls.setData({ type: 'FeatureCollection', features: lamps });
     last = { x: cx, y: cy, lit: P.lit, tkey };
   }
@@ -1151,7 +1159,7 @@ function toggleBtn(id, key, apply) {
 toggleBtn('#terrainbtn', 'terrain', () => syncTerrain(true));
 $('#qualityrow').addEventListener('click', e => { const b = e.target.closest('button[data-v]'); if (b) setQuality(b.dataset.v); });
 renderQualityBtns();
-toggleBtn('#buildbtn', 'buildings', on => { for (const l of ['buildings', 'facade', 'lamp-glow']) map.setLayoutProperty(l, 'visibility', on ? 'visible' : 'none'); });
+toggleBtn('#buildbtn', 'buildings', on => { for (const l of ['buildings', 'city3d', 'lamp-glow']) map.setLayoutProperty(l, 'visibility', on ? 'visible' : 'none'); });
 toggleBtn('#labelbtn', 'labels', on => map.setLayoutProperty('st-label', 'visibility', on ? 'visible' : 'none'));
 
 $('#viewbtn').addEventListener('click', cycleView);
