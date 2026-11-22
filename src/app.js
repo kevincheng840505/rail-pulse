@@ -1238,7 +1238,10 @@ async function connectTDX(cred, quiet) {
     if (metro && metro.trips.length) TDX.applyMetro(metro);
     perfMark('捷運官方資料套用');
     const ml = metro ? metro.covered.size : 0;
-    tdxStatus(`已載入 ${trips.length} 班台鐵與高鐵當日時刻，${d} 列台鐵即時誤點` + (ml ? `；${ml} 條捷運／輕軌改用官方行駛時間與班距（${metro.trips.length} 班）。` : metro && metro.trips.length ? `；捷運依官方資料加開 ${metro.trips.length} 班區間車，全線仍用班表推估。` : '；捷運與輕軌沿用班表推估。'));
+    let upd = '';
+    try { const mt = await (await fetch(TDX_DATA + 'meta.json', { cache: 'no-cache' })).json(); if (mt.updated) upd = `（TDX 資料更新於 ${new Date(mt.updated * 1000 + TW).toISOString().slice(11, 16)}，約每 10 分鐘更新）`; } catch {}
+    if (!isCurrent()) return;
+    tdxStatus(`已載入 ${trips.length} 班台鐵與高鐵當日時刻，${d} 列台鐵即時誤點` + (ml ? `；${ml} 條捷運／輕軌改用官方行駛時間與班距（${metro.trips.length} 班）。` : metro && metro.trips.length ? `；捷運依官方資料加開 ${metro.trips.length} 班區間車，全線仍用班表推估。` : '；捷運與輕軌沿用班表推估。') + upd);
     delayTimer = setInterval(() => {
       if (document.hidden) return; // 分頁在背景時不讀誤點，回到前景立刻補讀（見下方 visibilitychange）
       const now = Date.now();
@@ -1249,9 +1252,9 @@ async function connectTDX(cred, quiet) {
   } catch (err) {
     if (!isCurrent()) return;
     TDX.ok = false;
-    tdxStatus(err instanceof TypeError ? '無法連到 TDX，請確認網路連線。目前繼續使用班表推估。' : esc(err.message) + '。目前改用班表推估，稍後會自動重試。');
+    tdxStatus(err instanceof TypeError ? '讀不到 TDX 資料，請確認網路連線。目前繼續使用班表推估。' : esc(err.message) + '。目前改用班表推估，稍後會自動重試。');
     if (!quiet) console.warn(err);
-    setTimeout(() => { if (isCurrent() && !TDX.ok) connectTDX(cred, true); }, 3 * 60e3); // 代理暫時連不上：三分鐘後再試
+    setTimeout(() => { if (isCurrent() && !TDX.ok) connectTDX(cred, true); }, 3 * 60e3); // 資料暫時讀不到：三分鐘後再試
   }
 }
 // 回到前景：誤點超過一分鐘沒更新就馬上讀，跨日就重新載入當日時刻

@@ -21,21 +21,21 @@
 
 ## 資料
 
-- **TDX 即時（內建）**：訪客不用自己的金鑰。網站透過 `api/tdx.js` 這支伺服器端代理讀 [TDX](https://tdx.transportdata.tw/)，台鐵與高鐵改用當日官方時刻表（`v3/Rail/TRA/DailyTrainTimetable/Today`、`v2/Rail/THSR/DailyTimetable/Today`），台鐵每分鐘套用即時誤點（`v2/Rail/TRA/LiveTrainDelay`），捷運與輕軌改用官方站間行駛時間、班距與首末班車（`v2/Rail/Metro/{S2STravelTime,Frequency,FirstLastTimetable}/{TRTC,TYMC,TMRT,KRTC,KLRT}`，含北捷的區間車路線），並每 5 分鐘讀取營運通阻（`v3/Rail/TRA/Alert`、`v2/Rail/THSR/AlertInfo`、`v2/Rail/Metro/Alert/{TRTC,TYMC,TMRT,KRTC,KLRT}`）。
+- **TDX 即時（內建）**：訪客不用自己的金鑰。網站讀 GitHub Actions 定時從 [TDX](https://tdx.transportdata.tw/) 抓下來的資料（見下方），台鐵與高鐵改用當日官方時刻表（`v3/Rail/TRA/DailyTrainTimetable/Today`、`v2/Rail/THSR/DailyTimetable/Today`），台鐵套用即時誤點（約每 10 分鐘更新，`v2/Rail/TRA/LiveTrainDelay`），捷運與輕軌改用官方站間行駛時間、班距與首末班車（`v2/Rail/Metro/{S2STravelTime,Frequency,FirstLastTimetable}/{TRTC,TYMC,TMRT,KRTC,KLRT}`，含北捷的區間車路線），並每 5 分鐘讀取營運通阻（`v3/Rail/TRA/Alert`、`v2/Rail/THSR/AlertInfo`、`v2/Rail/Metro/Alert/{TRTC,TYMC,TMRT,KRTC,KLRT}`）。
 - **讀不到 TDX 時**：依各營運單位班型推估時刻（班表推估），台鐵誤點為模擬值，三分鐘後自動重試。
 - 縣市底圖來自 [taiwan-atlas](https://www.npmjs.com/package/taiwan-atlas)（內政部資料）。
 - 軌道線形與車站位置來自 [OpenStreetMap](https://www.openstreetmap.org/copyright)（ODbL），由 GitHub Actions（`.github/workflows/rail-data.yml`）每月執行 `tools/fetch_rail.py` 下載並轉成 `data/rail.json`。找不到合理軌道的區間會改畫站間直線。
 - 地圖：[MapLibre GL JS](https://maplibre.org/)，向量圖磚 [OpenFreeMap](https://openfreemap.org/)，地形高程 [Mapzen Terrain Tiles](https://registry.opendata.aws/terrain-tiles/)（AWS Open Data）。
 
-## TDX 代理（Vercel）
+## 內建 TDX（GitHub Actions 定時抓資料）
 
-GitHub Pages 是公開的靜態網站，放在前端的金鑰任何人都看得到，所以金鑰放在 Vercel 的伺服器端函式 `api/tdx.js`：
+GitHub Pages 是公開的靜態網站，放在前端的金鑰任何人都看得到，所以網站不直接連 TDX，也不經過其他伺服器：
 
-1. 在 Vercel 匯入這個 repo（不用設定 build，`api/` 底下的檔案會自動變成函式）。
-2. 在專案的 Settings → Environment Variables 加入 `TDX_CLIENT_ID`、`TDX_CLIENT_SECRET`（Production），重新部署一次。
-3. 網站預設呼叫 `https://rail-pulse.vercel.app/api/tdx`；網址不同時改 `src/engine.js` 的 `TDX_PROXY`（或測試時在網址加 `?proxy=https://…/api/tdx`）。
+1. 在 repo 的 Settings → Secrets and variables → Actions 加入 `TDX_CLIENT_ID`、`TDX_CLIENT_SECRET`。
+2. `.github/workflows/tdx-data.yml` 每 10 分鐘執行 `tools/fetch_tdx.py`，把網站要用的資料存成 JSON，推到 `tdx-data` 分支（每次覆蓋，只留最新一份）。即時誤點、航班、營運快訊每次都抓；當日時刻表每小時、捷運資料每天抓一次。
+3. 網站從 `https://raw.githubusercontent.com/kevincheng840505/rail-pulse/tdx-data/` 讀這些檔案（`src/engine.js` 的 `TDX_DATA`）。
 
-代理只允許網站會用到的 TDX 路徑，並設定 CDN 快取（誤點約 50 秒、時刻表 30 分鐘、捷運資料一天、航班 4 分鐘、快訊 5 分鐘），不論多少人同時在看，TDX 每段時間只被讀一次。允許呼叫的網站來源由環境變數 `ALLOW_ORIGINS` 設定（預設 `https://kevincheng840505.github.io`）。
+代價是即時誤點約 10～15 分鐘更新一次（GitHub 排程常會晚幾分鐘），而不是每分鐘。
 
 ## 開發
 
@@ -51,7 +51,7 @@ GitHub Pages 是公開的靜態網站，放在前端的金鑰任何人都看得�
 | `src/extras.js` | 沿線景點清單與字幕、營運快訊跑馬燈 |
 | `src/models.js` | 3D 模型產生器（車廂、飛機、旅客的曲面網格）與共用的 WebGL 繪製程式 |
 | `src/scene.js` | 車型塗裝、車廂擺放、跟車視角、光線與天氣 |
-| `api/tdx.js` | TDX 代理（Vercel 伺服器端函式，金鑰放在環境變數） |
+| `tools/fetch_tdx.py` | GitHub Actions 定時抓 TDX 資料（金鑰放在 repo Secrets） |
 | `data/rail.json` | 軌道線形（自動產生，勿手改） |
 | `src/template.html` | 版面與樣式 |
 | `src/geo.json` | 縣市輪廓（由 `tools/geo.py` 從 taiwan-atlas 轉出） |

@@ -374,9 +374,11 @@ async function tdxFetch(url, ms, what, opt) {
     throw e;
   } finally { clearTimeout(tm); }
 }
-/* 金鑰放在伺服器上（api/tdx.js，部署在 Vercel），網站透過這個代理讀 TDX，訪客不用自己申請金鑰。
-   代理的 CDN 會快取資料，所有訪客共用同一份，不會超過 TDX 的頻率限制。網址加 ?proxy=… 可以改用別的代理 */
-const TDX_PROXY = (new URLSearchParams(location.search).get('proxy')) || 'https://rail-pulse.vercel.app/api/tdx';
+/* 內建 TDX：金鑰放在 GitHub 的 Secrets，由 GitHub Actions（.github/workflows/tdx-data.yml）每 10 分鐘
+   抓一次資料存到 tdx-data 分支；網站直接讀那些靜態檔，訪客不用金鑰，也不經過任何其他伺服器。
+   網址加 ?tdxdata=… 可以改讀別的位置 */
+const TDX_DATA = (new URLSearchParams(location.search).get('tdxdata')) || 'https://raw.githubusercontent.com/kevincheng840505/rail-pulse/tdx-data/';
+const tdxFile = path => TDX_DATA + path.replace(/\//g, '_') + '.json';
 const TDX_CRED = { proxy: true };
 const TDX = {
   token: null, exp: 0, status: '未連線', ok: false, lastDelay: null,
@@ -401,7 +403,7 @@ const TDX = {
      - 每 260 毫秒最多送出一個（約每秒 4 次）
      - pri 大的先送：時刻表與誤點先送，航班、快訊等次要資料排在後面
      - 遇到 429 整個佇列暫停一下再重送，最多重試 4 次，呼叫端多半不會看到失敗 */
-  q: [], qTimer: 0, nextAt: 0, holdUntil: 0, hold: 0, gap: 150, gapAt: 0,
+  q: [], qTimer: 0, nextAt: 0, holdUntil: 0, hold: 0, gap: 60, gapAt: 0,
   get(path, cred, pri = 1) {
     return new Promise((res, rej) => {
       const job = { path, cred, pri, res, rej, tries: 0, q0: performance.now() };
@@ -426,7 +428,7 @@ const TDX = {
     }
     const job = this.q.shift();
     // 收到 429 後把間隔拉長（最多 1 秒一個），30 秒沒再遇到就慢慢縮回 260 毫秒
-    if (this.gap > 150 && Date.now() - this.gapAt > 30e3) { this.gap = Math.max(150, this.gap * 0.8); this.gapAt = Date.now(); }
+    if (this.gap > 60 && Date.now() - this.gapAt > 30e3) { this.gap = Math.max(60, this.gap * 0.8); this.gapAt = Date.now(); }
     this.nextAt = Date.now() + this.gap;
     this.send(job);
     this.pump();
@@ -436,7 +438,7 @@ const TDX = {
       let r;
       if (job.cred.proxy) {
         if (job.perf) job.perf.sent = performance.now();
-        r = await tdxFetch(TDX_PROXY + '?path=' + encodeURIComponent(job.path), 45e3, '讀取資料');
+        r = await tdxFetch(tdxFile(job.path), 45e3, '讀取資料');
       } else {
         const tk = await this.auth(job.cred.id, job.cred.secret);
         if (job.perf) job.perf.sent = performance.now();
