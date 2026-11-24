@@ -255,24 +255,73 @@ const AC_TYPES = {
   A359: { name:'A350-900', L:66.8, b:64.75, D:5.96, fin:10.0, sw:31.9, cr:11.6, ct:2.3, wx:0.39, de:3.4, le:7.1, ey:0.33, wl:3.0, gear:2.1, hs:9.8 },
   AT76: { name:'ATR 72-600', L:27.2, b:27.05, D:2.57, fin:4.6, sw:2, cr:2.6, ct:1.4, wx:0.40, de:1.0, le:4.4, ey:0.30, wl:0, gear:0.9, hs:3.9, prop:true },
 };
-/* 塗裝：body 機身、belly 機腹、tail 垂直尾翼、tail2 尾翼第二色、stripe 腰線 */
+/* 塗裝：依各航空公司實際的標準塗裝簡化。
+   body 機身、crown 機身上半、belly 機腹、cheat 腰線 [[高度 0 機腹~1 機頂, 半寬, 顏色], …]、nac 發動機短艙、lip 進氣口唇口、wl 小翼
+   tail 垂直尾翼底色；fin 尾翼上的圖案（u：翼根 0 → 翼尖 1，v：前緣 0 → 後緣 1）：
+     ['top', u0, 色]：u0 以上換色　['diag', a, b, 色]：u > a + b·v 的斜切區塊　['band', u0, u1, 色]：橫帶
+     ['disc', u, v, r, 色]：圓形標誌　['half', u, v, r, 上色, 下色]：上下兩色的圓（大韓太極）　['flower', u, v, r, 色, 花心色]：五瓣花（華航梅花）　['stripes', n, 色]：斜條紋（虎航）
+   沒有列出的航空公司用白色機身與 TAIL_OLD 的尾翼色 */
 const AIR_LIVERY = {
-  CI: { tail:'#C9658B', tail2:'#F2E6EC', stripe:'#2E4E8F' },
-  AE: { tail:'#2D5DA8', tail2:'#F0F3F6', stripe:'#2D5DA8' },
-  BR: { tail:'#1F6B4F', tail2:'#E37B2A', stripe:'#1F6B4F', belly:'#2C7A5C' },
-  B7: { tail:'#2D8C4E', tail2:'#E8742A', stripe:'#2D8C4E' },
-  JX: { tail:'#2A2622', tail2:'#B89660', stripe:'#B89660' },
-  IT: { tail:'#F29A1F', tail2:'#F7C948', stripe:'#F29A1F' },
-  CX: { tail:'#0B5E57', tail2:'#F2F4F6', stripe:'#0B5E57' },
-  JL: { tail:'#F2F4F6', tail2:'#C8102E' },
-  NH: { tail:'#13448F', tail2:'#2B8ED6', stripe:'#13448F' },
-  KE: { body:'#A9CCEB', belly:'#C9D0D6', tail:'#F2F4F6', tail2:'#1E4F9C' },
-  SQ: { tail:'#1F3A70', tail2:'#F1A51E', stripe:'#1F3A70' },
-  TG: { tail:'#5B2C83', tail2:'#C7A0D9', stripe:'#5B2C83' },
-  VN: { tail:'#1C6E8C', tail2:'#E3B04B', stripe:'#1C6E8C' },
-  MM: { tail:'#C9418F', tail2:'#F2F4F6', stripe:'#C9418F' },
-  UA: { tail:'#1D3E78', tail2:'#F2F4F6', belly:'#1D3E78' },
-  OZ: { tail:'#B6862C', tail2:'#E4472E', stripe:'#B6862C' },
+  // 台灣
+  CI: { tail:'#F4F2F6', fin:[['flower', 0.5, 0.48, 0.3, '#D24F86', '#8E5BA8']], cheat:[[0.33, 0.012, '#1F3F8F']], nac:'#E9ECF0', wl:'#D24F86' },
+  AE: { tail:'#1F4E9A', fin:[['disc', 0.55, 0.45, 0.2, '#F2F4F6'], ['disc', 0.55, 0.5, 0.13, '#1F4E9A']], cheat:[[0.33, 0.015, '#1F4E9A']] },
+  BR: { belly:'#1E6A4A', tail:'#1E6A4A', fin:[['disc', 0.55, 0.45, 0.22, '#F2F4F6'], ['disc', 0.55, 0.45, 0.16, '#1E6A4A'], ['band', 0.08, 0.14, '#E37B2A']], cheat:[[0.31, 0.012, '#E37B2A']], nac:'#E9ECF0', wl:'#1E6A4A' },
+  B7: { belly:'#1E6A4A', tail:'#1E6A4A', fin:[['diag', 0.55, -0.3, '#F2F4F6'], ['band', 0.1, 0.16, '#E37B2A']], cheat:[[0.31, 0.012, '#E37B2A']] },
+  JX: { body:'#F2F0EB', tail:'#2B2D33', fin:[['disc', 0.7, 0.42, 0.11, '#C7A45F']], nac:'#2B2D33', lip:'#C7A45F', wl:'#2B2D33', cheat:[[0.34, 0.006, '#C7A45F']] },
+  IT: { tail:'#F28C1E', fin:[['stripes', 5, '#F7F7F2']], nac:'#F28C1E', wl:'#F28C1E' },
+  // 港澳
+  CX: { belly:'#C9CFCB', tail:'#0B5E57', fin:[['diag', 0.6, -0.55, '#F2F4F6'], ['diag', 0.75, -0.55, '#0B5E57']], cheat:[[0.3, 0.01, '#0B5E57']], wl:'#0B5E57' },
+  HX: { tail:'#C8102E', fin:[['disc', 0.55, 0.45, 0.18, '#F2F4F6']], cheat:[[0.33, 0.01, '#C8A45F']] },
+  UO: { tail:'#5B2C83', fin:[['top', 0.75, '#E62E8B']], nac:'#5B2C83' },
+  NX: { tail:'#1E3A7B', fin:[['disc', 0.55, 0.45, 0.18, '#F2F4F6']], cheat:[[0.33, 0.012, '#C8102E']] },
+  // 日韓
+  JL: { tail:'#F4F4F2', fin:[['disc', 0.55, 0.45, 0.25, '#C8102E']] },
+  NH: { tail:'#13448F', fin:[['band', 0, 0.22, '#2B8ED6']], cheat:[[0.34, 0.02, '#13448F'], [0.3, 0.012, '#2B8ED6']], nac:'#E9ECF0', wl:'#13448F' },
+  MM: { tail:'#C9418F', fin:[['disc', 0.55, 0.45, 0.15, '#F2F4F6']], wl:'#C9418F' },
+  GK: { tail:'#F47920', fin:[['disc', 0.55, 0.45, 0.14, '#2A2A2A']] },
+  KE: { body:'#A9CCEB', belly:'#C9D0D6', tail:'#F2F4F6', fin:[['half', 0.5, 0.45, 0.2, '#D7263D', '#1E4F9C']], wl:'#A9CCEB' },
+  OZ: { body:'#E7E3DC', tail:'#B6862C', fin:[['band', 0.15, 0.25, '#E4472E'], ['band', 0.3, 0.38, '#2E6FB0'], ['band', 0.43, 0.5, '#F2C230']] },
+  '7C': { tail:'#F47A20', fin:[['disc', 0.55, 0.45, 0.14, '#F2F4F6']] },
+  ZE: { tail:'#E53935', fin:[['top', 0.6, '#F2F4F6']] },
+  TW: { tail:'#7FBF3F', fin:[['top', 0.65, '#2E7D32']] },
+  LJ: { tail:'#8DC63F', fin:[['disc', 0.55, 0.45, 0.14, '#F2F4F6']] },
+  // 中國
+  CA: { tail:'#F4F4F2', fin:[['disc', 0.55, 0.45, 0.22, '#C8102E'], ['disc', 0.55, 0.45, 0.14, '#F4F4F2']], cheat:[[0.34, 0.008, '#C8102E']] },
+  MU: { tail:'#1F3A7B', fin:[['top', 0.55, '#C8102E'], ['disc', 0.55, 0.45, 0.12, '#F2F4F6']] },
+  CZ: { tail:'#2F7BC1', fin:[['flower', 0.55, 0.45, 0.24, '#D7263D', '#F2C230']] },
+  MF: { tail:'#F2F4F6', fin:[['top', 0.45, '#1C5FAE'], ['disc', 0.62, 0.45, 0.12, '#F2F4F6']], cheat:[[0.33, 0.01, '#1C5FAE']] },
+  // 東南亞
+  SQ: { tail:'#1F3A70', fin:[['disc', 0.55, 0.45, 0.17, '#F1A51E']], cheat:[[0.32, 0.018, '#1F3A70'], [0.28, 0.01, '#F1A51E']], wl:'#1F3A70' },
+  TR: { tail:'#FFD200', fin:[['band', 0.1, 0.16, '#2A2A2A']], nac:'#FFD200' },
+  TG: { tail:'#5B2C83', fin:[['flower', 0.55, 0.45, 0.22, '#D0428F', '#E8B93A']], cheat:[[0.32, 0.014, '#5B2C83']], wl:'#5B2C83' },
+  VZ: { tail:'#E30613', fin:[['top', 0.6, '#FFD200']] },
+  FD: { tail:'#E30613', fin:[['disc', 0.55, 0.45, 0.14, '#F2F4F6']], belly:'#E30613' },
+  AK: { tail:'#E30613', fin:[['disc', 0.55, 0.45, 0.14, '#F2F4F6']], belly:'#E30613' },
+  D7: { tail:'#E30613', fin:[['disc', 0.55, 0.45, 0.14, '#F2F4F6']], belly:'#E30613' },
+  MH: { tail:'#F2F4F6', fin:[['diag', 0.25, 0.2, '#C8102E'], ['diag', 0.45, 0.2, '#1F3A7B'], ['diag', 0.65, 0.2, '#F2F4F6']], cheat:[[0.3, 0.01, '#C8102E'], [0.26, 0.01, '#1F3A7B']] },
+  VN: { tail:'#0E6B8C', fin:[['flower', 0.55, 0.45, 0.2, '#E3B04B', '#E3B04B']], cheat:[[0.32, 0.01, '#E3B04B']], wl:'#0E6B8C' },
+  VJ: { tail:'#E30613', fin:[['top', 0.55, '#FFD200']], belly:'#E30613' },
+  PR: { tail:'#1F3A8F', fin:[['diag', 0.5, -0.25, '#C8102E'], ['disc', 0.62, 0.55, 0.1, '#F2C230']] },
+  '5J': { tail:'#FFC20E', fin:[['band', 0, 0.2, '#00A3E0']] },
+  Z2: { tail:'#E30613', fin:[['disc', 0.55, 0.45, 0.14, '#F2F4F6']], belly:'#E30613' },
+  GA: { tail:'#0B6E80', fin:[['diag', 0.5, -0.2, '#4FB6C8']] },
+  // 歐美、中東、大洋洲
+  UA: { tail:'#1D3E78', belly:'#1D3E78', fin:[['disc', 0.55, 0.45, 0.2, '#F2F4F6'], ['disc', 0.55, 0.45, 0.15, '#1D3E78']] },
+  AA: { body:'#C5CBD1', belly:'#C5CBD1', tail:'#C5CBD1', fin:[['stripes', 3, '#B22234'], ['top', 0.7, '#1F3A7B']] },
+  DL: { belly:'#1F3A7B', tail:'#1F3A7B', fin:[['top', 0.55, '#C8102E']] },
+  AS: { tail:'#0B2D5B', fin:[['disc', 0.55, 0.45, 0.16, '#6FC3E0']] },
+  AC: { tail:'#1E1E1E', fin:[['disc', 0.55, 0.45, 0.16, '#D7263D']], belly:'#1E1E1E' },
+  KL: { body:'#00A1DE', crown:'#00A1DE', belly:'#F2F4F6', tail:'#00A1DE', fin:[['disc', 0.55, 0.45, 0.1, '#F2F4F6']] },
+  AF: { tail:'#F2F4F6', fin:[['stripes', 3, '#C8102E'], ['diag', 0.1, 0.9, '#F2F4F6']], cheat:[[0.32, 0.01, '#002395']] },
+  TK: { tail:'#C8102E', fin:[['disc', 0.55, 0.45, 0.2, '#F2F4F6'], ['disc', 0.55, 0.45, 0.14, '#C8102E']] },
+  EK: { tail:'#F2F4F6', fin:[['band', 0, 0.3, '#00843D'], ['diag', 0.3, 0.6, '#F2F4F6']], cheat:[[0.6, 0.003, '#C8102E']] },
+  QR: { body:'#D9D9D6', tail:'#5C0632', fin:[['disc', 0.55, 0.45, 0.14, '#D9D9D6']] },
+  EY: { body:'#E8E2D5', tail:'#B79257', fin:[['stripes', 4, '#8A6A3D']] },
+  QF: { tail:'#E0001B', fin:[['disc', 0.55, 0.5, 0.16, '#F2F4F6']], belly:'#E5E7EA' },
+  NZ: { body:'#F2F4F6', tail:'#1E1E1E', fin:[['disc', 0.55, 0.45, 0.14, '#F2F4F6']], belly:'#1E1E1E' },
+  AI: { tail:'#C8102E', fin:[['disc', 0.55, 0.45, 0.14, '#E3A21A']] },
+  FX: { tail:'#4D148C', crown:'#F2F4F6', belly:'#C9CDD2', fin:[['band', 0.2, 0.3, '#FF6200']] },
+  '5X': { body:'#F2F4F6', belly:'#4E3629', tail:'#4E3629', fin:[['disc', 0.55, 0.45, 0.14, '#FFB500']] },
 };
 const LONG_HAUL = new Set(['LAX','SFO','SEA','YVR','ONT','PHX','DFW','JFK','ORD','IAH','YYZ','HNL','ANC','LHR','CDG','AMS','FRA','MUC','VIE','PRG','MXP','FCO','IST','DXB','DOH','AUH','DEL','SYD','BNE','MEL','AKL']);
 function acTypeOf(f) {

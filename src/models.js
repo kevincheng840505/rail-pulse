@@ -306,12 +306,32 @@ function foil(mb, secs, thick, color, NC = 12) {
   const last = secs[secs.length - 1];
   rows.push(loop.map(([c]) => [last.x - c * last.c, last.y, last.z]));
   const cx = secs.reduce((s, q) => s + q.x - q.c / 2, 0) / secs.length, cy = secs.reduce((s, q) => s + q.y, 0) / secs.length, cz = secs.reduce((s, q) => s + q.z, 0) / secs.length;
-  surf(mb, rows, (i, j) => color(i, j, secs.length), false, [cx, cy, cz]);
+  surf(mb, rows, (i, j) => color(i, j, secs.length, (loop[j][0] + loop[Math.min(j + 1, loop.length - 1)][0]) / 2), false, [cx, cy, cz]);
+}
+// 尾翼塗裝：依 AIR_LIVERY 的 fin 圖案，算出尾翼上 (u 翼根→翼尖, v 前緣→後緣) 這一點的顏色。asp：弦長／翼高，讓圓形標誌不會被拉成橢圓
+function finPaint(Lv, u, v, asp) {
+  let c = Lv.tail || '#8C9AA6';
+  for (const op of Lv.fin || []) {
+    const k = op[0];
+    if (k === 'top') { if (u >= op[1]) c = op[2]; }
+    else if (k === 'band') { if (u >= op[1] && u < op[2]) c = op[3]; }
+    else if (k === 'diag') { if (u > op[1] + op[2] * v) c = op[3]; }
+    else if (k === 'stripes') { const w = (u * 1.2 + v * 0.9) * op[1]; if (w % 1 < 0.42 && u > 0.12) c = op[2]; }
+    else {
+      const du = u - op[1], dv = (v - op[2]) * asp, d = Math.hypot(du, dv) / op[3];
+      if (k === 'disc') { if (d < 1) c = op[4]; }
+      else if (k === 'half') { if (d < 1) c = du > 0.04 * Math.sin(dv / op[3] * Math.PI) * op[3] * 4 ? op[4] : op[5]; }
+      else if (k === 'flower') { const a = Math.atan2(du, dv), petal = 0.62 + 0.38 * Math.abs(Math.cos(a * 2.5)); if (d < 0.28) c = op[5]; else if (d < petal) c = op[4]; }
+    }
+  }
+  return c;
 }
 function planeMesh(type, airline, gearDown, lo = false) {
   const T = AC_TYPES[type], Lv = AIR_LIVERY[airline] || {}, mb = MB();
   const body = mcol(Lv.body || '#EEF1F4'), belly = mcol(Lv.belly || Lv.body || '#E2E6EA'), tail = mcol(Lv.tail || TAIL_OLD[airline] || '#8C9AA6');
-  const tail2 = Lv.tail2 ? mcol(Lv.tail2) : null, stripe = Lv.stripe ? mcol(Lv.stripe) : null;
+  const crown = Lv.crown ? mcol(Lv.crown) : null, cheat = (Lv.cheat || []).map(([z, w, c]) => [z, w, mcol(c)]);
+  const nacC = mcol(Lv.nac || '#B7C0C8'), lipC = Lv.lip ? mcol(Lv.lip) : null, wlC = mcol(Lv.wl || Lv.tail || TAIL_OLD[airline] || '#8C9AA6');
+  const finCache = new Map(), finCol = hex => { let c = finCache.get(hex); if (!c) finCache.set(hex, c = mcol(hex)); return c; };
   const dark = mcol('#1E2630'), wingC = mcol(mixHex(Lv.body || '#EEF1F4', '#9AA3AD', 0.25)), metal = mcol('#B7C0C8'), gearC = mcol('#3A4148'), tire = mcol('#202326');
   const z0 = gearDown ? T.gear : 0, NCf = lo ? 7 : 12;
   const L = T.L, D = T.D, R = D / 2, nose = L / 2, tailEnd = -L / 2;
@@ -353,9 +373,10 @@ function planeMesh(type, airline, gearDown, lo = false) {
       const ph = ((x - (tailEnd + tailLen)) / pitchW) % 1;
       if (ph > 0.15 && ph < 0.65) return dark;
     }
-    if (stripe && x < cabinF + noseLen * 0.4 && x > cabinA - tailLen * 0.3 && Math.abs(hz - stripeZ) < 0.05) return stripe;
+    // 腰線：從機頭後方一路到機尾（遠看的簡化模型只畫最主要的一條）
+    if (x < cabinF + noseLen * 0.4 && x > cabinA - tailLen * 0.3) for (const [cz, w, c] of lo ? cheat.slice(0, 1) : cheat) if (Math.abs(hz - cz) < w * (lo ? 2 : 1) + 0.012) return c;
     if (hz < 0.3) return belly;
-    if (tail2 && x < tailEnd + tailLen * 0.5 && hz > 0.75) return tail; // 機尾上緣延續尾翼顏色
+    if (crown && hz > 0.5) return crown;
     return body;
   }, true, [0, 0, z0 + R]);
 
@@ -368,7 +389,7 @@ function planeMesh(type, airline, gearDown, lo = false) {
     const ys = [R * 0.55, R, R + (semi - R) * 0.15, R + (semi - R) * 0.35, R + (semi - R) * 0.6, R + (semi - R) * 0.85, semi];
     foil(mb, ys.map(y => ({ x: le(y) + (y < R ? 0.4 : 0), y: s * y, z: wz(y), c: ch(y) * (y < R ? 1.08 : 1), t: 0.13 - 0.04 * (y - R) / semi })), 'z', () => wingC, NCf);
     // 小翼：從翼尖往上翹
-    if (T.wl) { const c = ch(semi) * 0.85, x0 = le(semi) - ch(semi) * 0.05; foil(mb, [0, 0.5, 1].map(u => ({ x: x0 - u * T.wl * 0.6, y: s * (semi + 0.05 + u * 0.35), z: wz(semi) + 0.05 + u * T.wl, c: c * (1 - 0.55 * u), t: 0.08 })), 'y', () => tail, NCf); }
+    if (T.wl) { const c = ch(semi) * 0.85, x0 = le(semi) - ch(semi) * 0.05; foil(mb, [0, 0.5, 1].map(u => ({ x: x0 - u * T.wl * 0.6, y: s * (semi + 0.05 + u * 0.35), z: wz(semi) + 0.05 + u * T.wl, c: c * (1 - 0.55 * u), t: 0.08 })), 'y', () => wlC, NCf); }
     // 發動機
     const ey = R + (semi - R) * T.ey, er = T.de / 2;
     if (T.prop) {
@@ -383,7 +404,7 @@ function planeMesh(type, airline, gearDown, lo = false) {
       const nr = [];
       const prf = u => u < 0.1 ? 0.88 + 0.12 * Math.sin(u / 0.1 * Math.PI / 2) : u < 0.45 ? 1 : 1 - 0.32 * ((u - 0.45) / 0.55) ** 1.4;
       for (let i = 0; i <= 14; i++) { const u = i / 14, x = ef - T.le * u, r = er * prf(u), row = []; for (let j = 0; j <= 18; j++) { const g = j / 18 * Math.PI * 2; row.push([x, s * ey + Math.cos(g) * r, ezc + Math.sin(g) * r]); } nr.push(row); }
-      surf(mb, nr, i => i === 0 ? dark : metal, true, [(ea + ef) / 2, s * ey, ezc]);
+      surf(mb, nr, i => i === 0 ? dark : i === 1 && lipC ? lipC : nacC, true, [(ea + ef) / 2, s * ey, ezc]);
       tube(mb, [ef - 0.25, s * ey, ezc], [ef - 0.2, s * ey, ezc], er * 0.86, er * 0.86, 18, dark); // 進氣口內的風扇
       tube(mb, [ef - 0.3, s * ey, ezc], [ef + 0.25, s * ey, ezc], er * 0.22, 0.02, 10, metal, false); // 鼻錐
       tube(mb, [ea + 0.2, s * ey, ezc], [ea - T.le * 0.18, s * ey, ezc], er * 0.5, 0.05, 10, mcol('#5B636B'), false); // 尾錐
@@ -395,7 +416,13 @@ function planeMesh(type, airline, gearDown, lo = false) {
   // 尾翼
   const finRoot = T.cr * 1.05, finLE = tailEnd + tailLen * 0.62, finTanSw = Math.tan((T.prop ? 30 : 40) / DEG);
   const finBase = z0 + prof(finLE - finRoot / 2).hi - 0.25;
-  foil(mb, [0, 0.25, 0.5, 0.75, 1].map(u => ({ x: finLE + 0.6 * (1 - u) - u * T.fin * finTanSw, y: 0, z: finBase + u * T.fin, c: finRoot * (1 - 0.6 * u) + (u === 0 ? 0.8 : 0), t: 0.12 - 0.03 * u })), 'y', (i, j, n) => tail2 && i >= n - 2 ? tail2 : tail, NCf);
+  // 尾翼：近看時沿翼高切 25 段、沿弦長 28 格，標誌才畫得出形狀；遠看只切 5 段
+  const finUs = lo ? [0, 0.25, 0.5, 0.75, 1] : Array.from({ length: 25 }, (_, i) => i / 24);
+  foil(mb, finUs.map(u => ({ x: finLE + 0.6 * (1 - u) - u * T.fin * finTanSw, y: 0, z: finBase + u * T.fin, c: finRoot * (1 - 0.6 * u) + (u === 0 ? 0.8 : 0), t: 0.12 - 0.03 * u })), 'y', (i, j, n, cf) => {
+    if (!Lv.fin) return tail;
+    const u = Math.min(1, (i + 0.5) / (n - 1)), asp = finRoot * (1 - 0.6 * u) / T.fin;
+    return finCol(finPaint(Lv, u, cf, asp));
+  }, lo ? NCf : 28);
   const hsZ = T.prop ? finBase + T.fin * 0.97 : z0 + D * 0.42, hsLE = T.prop ? finLE - T.fin * finTanSw + 0.2 : tailEnd + tailLen * 0.42, hsC = T.cr * 0.5, hsTan = Math.tan((T.prop ? 8 : 32) / DEG);
   for (const s of [-1, 1]) foil(mb, [0, 0.35, 0.7, 1].map(u => ({ x: hsLE - u * T.hs * hsTan, y: s * (0.3 + u * (T.hs - 0.3)), z: hsZ + u * T.hs * (T.prop ? 0 : 0.08), c: hsC * (1 - 0.55 * u), t: 0.1 })), 'z', () => wingC, NCf);
   // 襟翼滑軌整流罩：主翼後緣下方的獨木舟形狀
