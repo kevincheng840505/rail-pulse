@@ -289,6 +289,18 @@ function viaductFeatures(trip, k0, k1, P, mb, seen, O) {
   flush();
 }
 
+/* 軌道去重：同一股道會被好幾班車（上下行、不同車次）各畫一次，取樣點也不會剛好對齊。
+   以 3 公尺的格子記下已經畫過的點；新的點附近若已有點，沿軌道方向 3 公尺內、側向 1.2 公尺內，就算同一股道已經畫過。
+   以前用格子座標直接比對，對不齊的地方會畫出兩層同高的道碴，畫面會閃爍、邊緣鋸齒，看起來像物件在微微移動 */
+function trackTaken(seen, lk, x, y, ux, uy) {
+  const G = seen._track || (seen._track = new Map()), c = 0.003, gx = Math.floor(x / c), gy = Math.floor(y / c);
+  for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
+    const a = G.get(lk + ':' + (gx + i) + ',' + (gy + j)); if (!a) continue;
+    for (const [px, py] of a) { const dx = px - x, dy = py - y, al = Math.abs(dx * ux + dy * uy), lat = Math.abs(dy * ux - dx * uy); if (al < 0.003 && lat < 0.0012) return true; }
+  }
+  const k = lk + ':' + gx + ',' + gy; (G.get(k) || G.set(k, []).get(k)).push([x, y]);
+  return false;
+}
 /* 軌道：每條線上下行各一股道。道碴（碎石道床）、混凝土枕木、兩條鋼軌；台鐵與高鐵再加電車線桿和架空線。
    枕木很多，只畫鏡頭附近 near 公里內 */
 function trackFeatures(trip, k0, k1, P, mb, seen, O, near) {
@@ -299,15 +311,14 @@ function trackFeatures(trip, k0, k1, P, mb, seen, O, near) {
   const bsec = [[-g - 1.7, -0.02], [g + 1.7, -0.02], [g + 1.05, 0.14], [-g - 1.05, 0.14]];
   for (const sd of [-1, 1]) {
     const lat = sd * o, runs = [[]];
-    let n = 0;
+    let n = 0, prevPt = null;
     for (let i = Math.floor(k0 / step); i * step < k1; i++) {
       const k = i * step, f = railFrame(trip, k), cx = f.x + f.nx * lat / 1000, cy = f.y + f.ny * lat / 1000;
-      const key = 'T' + levelKey(trip) + sd * Math.sign(sideOffset(trip)) + ':' + Math.round(cx * 400) + ',' + Math.round(cy * 400);
-      const r = runs[runs.length - 1];
-      if (seen.has(key)) { if (r.length) runs.push([]); continue; }
-      seen.add(key);
-      const e = elevAt(trip, k), x = (cx - O.x) * 1000, y = (cy - O.y) * 1000;
-      r.push([x, y, f.nx, f.ny, e]);
+      const r = runs[runs.length - 1], e = elevAt(trip, k), x = (cx - O.x) * 1000, y = (cy - O.y) * 1000, pt = [x, y, f.nx, f.ny, e];
+      // 接到別班車已經畫好的那一段：多畫一格接上去，不留縫
+      if (trackTaken(seen, levelKey(trip), cx, cy, f.ux, f.uy)) { if (r.length) { r.push(pt); runs.push([]); } prevPt = pt; continue; }
+      if (!r.length && prevPt) r.push(prevPt);
+      r.push(pt); prevPt = null;
       const d = Math.hypot(cx - O.x, cy - O.y);
       if (d < near) {
         // 枕木：每 0.6 公尺一根（這一格 5 公尺裡排 8 根）
@@ -515,7 +526,7 @@ const offsetPt = (p, along, side) => {
 /* ---------- 光線：依時間在幾個關鍵色票之間平滑內插 ---------- */
 const PALETTES = {
   night: { sea:'#050A12', land:'#0F1822', edge:'#1C2733', water:'#06101B', wood:'#0F1D1A', road:'#1D2A37', bld:'#6FA6DE', bldEdge:'#A8D4FF', bldOp:0.6,
-    hsShadow:'#000000', hsHigh:'#3A4C60', hsAccent:'#0A121B', label:'#8FA0AE', halo:'#050A12',
+    hsShadow:'#000000', hsHigh:'#3A4C60', hsAccent:'#0A121B', label:'#C3CFD8', halo:'#050A12',
     sky:'#081222', horizon:'#1C2B40', fog:'#0B1320', tra:'#A9BCCD', light:'#7C8FB0', glow:0.6, lightI:0.25 },
   dawn: { sea:'#2A3348', land:'#3A3540', edge:'#4A4452', water:'#2C3650', wood:'#2E3A35', road:'#4D4652', bld:'#A396C0', bldEdge:'#DCC8EE', bldOp:0.48,
     hsShadow:'#1A1424', hsHigh:'#E0A27E', hsAccent:'#382A3A', label:'#E6D2C6', halo:'#241E28',

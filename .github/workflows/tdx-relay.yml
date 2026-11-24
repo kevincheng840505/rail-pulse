@@ -1,0 +1,59 @@
+name: TDX 即時資料（接力）
+
+# GitHub 的定時排程（tdx-data.yml 的 schedule）在這個 repo 一直沒有觸發，所以改用接力：
+# 一個工作每 10 分鐘抓一次 TDX，連續跑約 5.5 小時，結束前自己再啟動下一輪。
+# 不需要外部伺服器，公開 repo 的 Actions 不收費。
+# 要停下來：到 Actions 頁面把這個 workflow 停用（Disable workflow），或取消正在跑的那一輪。
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/tdx-relay.yml
+
+permissions:
+  contents: write
+  actions: write
+
+# 同時只留一輪；新的一輪啟動時取消舊的
+concurrency:
+  group: tdx-relay
+  cancel-in-progress: true
+
+jobs:
+  relay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - name: 每 10 分鐘抓一次 TDX，推到 tdx-data 分支
+        env:
+          TDX_CLIENT_ID: ${{ secrets.TDX_CLIENT_ID }}
+          TDX_CLIENT_SECRET: ${{ secrets.TDX_CLIENT_SECRET }}
+          REPO_URL: https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git
+        run: |
+          end=$(( $(date +%s) + 330 * 60 ))
+          while [ "$(date +%s)" -lt "$end" ]; do
+            start=$(date +%s)
+            rm -rf out
+            git clone -q --depth 1 --branch tdx-data "$REPO_URL" out || mkdir -p out
+            rm -rf out/.git
+            if python3 tools/fetch_tdx.py out; then
+              ( cd out
+                git init -q -b tdx-data
+                git config user.name "github-actions[bot]"
+                git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+                git add -A
+                git commit -qm "TDX 資料 $(date -u +%Y-%m-%dT%H:%MZ)"
+                git push -qf "$REPO_URL" tdx-data ) || echo "推送失敗，下一輪再試"
+            else
+              echo "這次抓取失敗，下一輪再試"
+            fi
+            left=$(( 600 - ($(date +%s) - start) ))
+            [ "$left" -gt 0 ] && sleep "$left"
+          done
+      - name: 啟動下一輪
+        if: always() && !cancelled()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run tdx-relay.yml --repo "${{ github.repository }}" --ref main
