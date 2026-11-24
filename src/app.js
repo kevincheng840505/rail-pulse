@@ -85,6 +85,58 @@ const STYLE = {
   ],
 };
 
+/* ---------- 真實地圖（衛星影像底圖） ----------
+   參考軌島的「衛星」外觀：把插畫風的陸地、森林、水面、道路換成真實的航空與衛星照片，
+   鐵道、車站、列車、3D 模型與地名照舊疊在上面。影像用內政部國土測繪中心的正射影像（台灣最清楚），
+   萬一該服務讀不到，自動改用 Esri World Imagery。兩者都是公開圖磚，不需要金鑰。 */
+const SAT_SRC = {
+  nlsc: { type: 'raster', tiles: ['https://wmts.nlsc.gov.tw/wmts/PHOTO2/default/GoogleMapsCompatible/{z}/{y}/{x}'], tileSize: 256, minzoom: 7, maxzoom: 19,
+    attribution: '影像 © 內政部國土測繪中心', bounds: [118.0, 21.8, 122.2, 26.5] },
+  esri: { type: 'raster', tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'], tileSize: 256, maxzoom: 19,
+    attribution: '影像 © Esri, Maxar, Earthstar Geographics' },
+};
+// 插畫風才有的圖層：真實地圖時隱藏
+const ART_LAYERS = ['wood', 'park', 'grass', 'hills', 'water', 'roads', 'buildings', 'bld-edge'];
+const Basemap = {
+  pref: store.get('basemap', 'art') === 'real' ? 'real' : 'art',
+  src: null, failed: false,
+  get real() { return this.pref === 'real'; },
+  // 依時間與天氣調暗：夜裡照片壓暗、陰雨天降低飽和度，跟原本的光線系統一致
+  paint(P, W) {
+    const bmax = Math.max(0.28, Math.min(1, 1.15 - P.glow * 1.4)) * (1 - (W.dark || 0) * 0.5);
+    return { 'raster-brightness-max': bmax, 'raster-saturation': -0.1 - (W.grey || 0) * 0.5 - (P.lit ? 0.25 : 0), 'raster-contrast': P.lit ? 0.1 : 0.05, 'raster-fade-duration': 150 };
+  },
+  ensure() {
+    if (this.src || !map) return;
+    this.src = this.failed ? 'esri' : 'nlsc';
+    map.addSource('sat', SAT_SRC[this.src]);
+    // 國土測繪中心只涵蓋台灣：外圍（外海、離島以外）放一層 Esri 當底
+    if (this.src === 'nlsc' && !map.getSource('sat-world')) map.addSource('sat-world', { ...SAT_SRC.esri, maxzoom: 9 });
+    const before = map.getLayer('county') ? 'county' : undefined;
+    if (map.getSource('sat-world')) map.addLayer({ id: 'sat-world', type: 'raster', source: 'sat-world', maxzoom: 10 }, before);
+    map.addLayer({ id: 'sat', type: 'raster', source: 'sat' }, before);
+  },
+  // 國土測繪中心的圖磚讀不到（例如瀏覽器擋跨網域）：換成 Esri
+  fail() {
+    if (this.failed || this.src !== 'nlsc') return;
+    this.failed = true; console.warn('國土測繪中心影像讀不到，改用 Esri 衛星影像');
+    for (const l of ['sat', 'sat-world']) try { map.removeLayer(l); } catch {}
+    for (const s of ['sat', 'sat-world']) try { map.removeSource(s); } catch {}
+    this.src = null; this.apply();
+  },
+  apply() {
+    if (!map || !S.mapReady) return;
+    const real = this.real, vis = on => on ? 'visible' : 'none';
+    if (real) this.ensure();
+    for (const l of ['sat', 'sat-world']) try { map.setLayoutProperty(l, 'visibility', vis(real)); } catch {}
+    for (const l of ART_LAYERS) try { map.setLayoutProperty(l, 'visibility', vis(!real && (l !== 'hills' || !Quality.low) && (!/^b/.test(l) || S.buildings))); } catch {}
+    document.body.classList.toggle('realmap', real);
+    applyLook(true);
+  },
+  set(v) { this.pref = v === 'real' ? 'real' : 'art'; store.set('basemap', this.pref); this.render(); this.apply(); },
+  render() { for (const b of document.querySelectorAll('#baserow button')) b.setAttribute('aria-pressed', String(b.dataset.v === this.pref)); },
+};
+
 /* ---------- 路線與車站資料 ---------- */
 function lineCoords(L) {
   const out = [], joints = [];
@@ -309,10 +361,12 @@ function initMap() {
       paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, ['case', ['get', 'sel'], 6, ['==', ['get', 'g'], 'mrt'], 2.4 * DOT, 3 * DOT], 12, ['case', ['get', 'sel'], 9, 5.5]],
         'circle-color': ['get', 'color'], 'circle-stroke-color': '#FFFFFF', 'circle-stroke-width': ['case', ['get', 'sel'], 2, 0.6], 'circle-pitch-alignment': 'map' } });
     map.setLayoutProperty('buildings', 'visibility', S.buildings ? 'visible' : 'none');
+    map.setLayoutProperty('bld-edge', 'visibility', S.buildings ? 'visible' : 'none');
     for (const l of ['city3d', 'lamp-glow']) map.setLayoutProperty(l, 'visibility', S.buildings ? 'visible' : 'none');
     S.mapReady = true;
     perfMark('地圖樣式就緒');
     applyQuality();
+    if (Basemap.real) Basemap.apply();
     applyLook(true); pushTrains(true);
     map.on('click', onMapClick);
     for (const l of ['train', 'train-halo', 'st-dot']) {
@@ -335,7 +389,13 @@ function initMap() {
   box.addEventListener('pointerdown', down, true);
   box.addEventListener('wheel', e => { if (S.follow && !S.followPaused) unlockView(); }, { capture: true, passive: true });
   addEventListener('pointerup', up); addEventListener('pointercancel', up);
-  map.on('error', e => console.warn('地圖資源載入失敗', e && e.error && e.error.message));
+  // 國土測繪中心影像：一張都還沒成功就連續失敗（多半是跨網域被擋）才改用 Esri；外海沒有影像的圖磚失敗不算
+  let satErr = 0, satOk = false;
+  map.on('sourcedata', e => { if (e.sourceId === 'sat' && e.tile && e.tile.state === 'loaded') satOk = true; });
+  map.on('error', e => {
+    if (e && e.sourceId === 'sat' && Basemap.src === 'nlsc' && !satOk && ++satErr >= 4) Basemap.fail();
+    console.warn('地圖資源載入失敗', e && e.error && e.error.message);
+  });
 }
 
 /* 3D 地形只用在大範圍視野：近看與跟車時攤平，車廂才會整齊、鏡頭不會被地形推開，也省效能 */
@@ -357,7 +417,7 @@ function applyQuality() {
   if (!map || !S.mapReady) return;
   const low = Quality.low, vis = on => on ? 'visible' : 'none';
   try { if (map.getPixelRatio() !== Quality.pixelRatio) map.setPixelRatio(Quality.pixelRatio); } catch {}
-  try { map.setLayoutProperty('hills', 'visibility', vis(!low)); } catch {}
+  try { map.setLayoutProperty('hills', 'visibility', vis(!low && !Basemap.real)); } catch {}
   for (const l of ['city3d', 'lamp-glow']) try { map.setLayoutProperty(l, 'visibility', vis(S.buildings && !low)); } catch {}
   syncTerrain(true); Facade.soon(true); pushTrains(true);
 }
@@ -600,13 +660,18 @@ function applyLook(force) {
   set('bg', 'background-color', P.sea); set('land', 'fill-color', P.land); set('wood', 'fill-color', P.wood);
   set('water', 'fill-color', P.water); set('bld-edge', 'line-color', P.bldEdge); set('county', 'line-color', P.edge); set('roads', 'line-color', P.road); set('buildings', 'fill-extrusion-opacity', P.bldOp);
   set('hills', 'hillshade-shadow-color', P.hsShadow); set('hills', 'hillshade-highlight-color', P.hsHigh); set('hills', 'hillshade-accent-color', P.hsAccent);
-  for (const l of ['places', 'street-names', 'poi']) { set(l, 'text-color', P.label); set(l, 'text-halo-color', P.halo); }
+  // 真實地圖：照片顏色很雜，地名一律白字深色外框才看得清楚
+  const lab = Basemap.real ? (P.lit ? '#E8EEF2' : '#FFFFFF') : P.label, halo = Basemap.real ? '#10161C' : P.halo;
+  for (const l of ['places', 'street-names', 'poi']) { set(l, 'text-color', lab); set(l, 'text-halo-color', halo); }
+  if (Basemap.real) { const sp = Basemap.paint(P, W); for (const l of ['sat', 'sat-world']) for (const k in sp) set(l, k, sp[k]); }
   set('park', 'fill-color', P.wood); set('grass', 'fill-color', P.wood);
   // 高樓顏色亮一點、矮房暗一點，整片街區才有層次
   set('buildings', 'fill-extrusion-color', ['interpolate', ['linear'], ['coalesce', ['get', 'render_height'], 8], 4, mixHex(P.bld, P.land, 0.25), 30, P.bld, 120, mixHex(P.bld, P.bldEdge, 0.35)]);
   set('lamp-glow', 'circle-opacity', P.lit ? 0.55 : 0);
   Facade.soon(true);
-  set('rail', 'line-color', railColor(P)); set('rail-glow', 'line-color', railColor(P));
+  // 真實地圖上台鐵的灰線改成淺色，才不會跟照片裡的道路混在一起
+  const RP = Basemap.real ? { ...P, tra: P.lit ? '#C9D6E0' : '#F2F4F5' } : P;
+  set('rail', 'line-color', railColor(RP)); set('rail-glow', 'line-color', railColor(RP));
   set('rail-glow', 'line-opacity', ['interpolate', ['linear'], ['zoom'], 13, P.glow * 0.5, 16, 0]);
   set('train-halo', 'circle-opacity', P.glow + 0.15);
   try { map.setSky({ 'sky-color': P.sky, 'horizon-color': P.horizon, 'fog-color': P.fog, 'sky-horizon-blend': 0.6, 'horizon-fog-blend': 0.4 + W.fog, 'fog-ground-blend': P.fogBlend, 'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 1, 12, 0.6, 16, 0.3] }); } catch {}
@@ -1175,7 +1240,9 @@ function toggleBtn(id, key, apply) {
 toggleBtn('#terrainbtn', 'terrain', () => syncTerrain(true));
 $('#qualityrow').addEventListener('click', e => { const b = e.target.closest('button[data-v]'); if (b) setQuality(b.dataset.v); });
 renderQualityBtns();
-toggleBtn('#buildbtn', 'buildings', on => { for (const l of ['buildings', 'city3d', 'lamp-glow']) map.setLayoutProperty(l, 'visibility', on ? 'visible' : 'none'); });
+toggleBtn('#buildbtn', 'buildings', on => { for (const l of ['buildings', 'bld-edge', 'city3d', 'lamp-glow']) map.setLayoutProperty(l, 'visibility', on && !(Basemap.real && /^b/.test(l)) ? 'visible' : 'none'); });
+$('#baserow').addEventListener('click', e => { const b = e.target.closest('button[data-v]'); if (b) Basemap.set(b.dataset.v); });
+Basemap.render();
 toggleBtn('#labelbtn', 'labels', on => map.setLayoutProperty('st-label', 'visibility', on ? 'visible' : 'none'));
 
 $('#viewbtn').addEventListener('click', cycleView);
