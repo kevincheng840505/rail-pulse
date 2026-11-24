@@ -262,30 +262,77 @@ function doorGapMesh(L) {
 
 /* ---------- 旅客 ----------
    沿用原本的人體比例（鞋、小腿、大腿、骨盆、胸腔、肩、上臂、前臂、脖子、頭），每段改成圓角的橢球。
-   走路的姿勢先量化成 16 個相位，各做一個模型重複使用 */
-function personMesh(phase, walk) {
-  const mb = MB(), k = EX;
-  const shirt = mcol(PERSON_COLOR), pants = mcol('#2E3540'), skin = mcol('#D9A988'), hair = mcol('#22201E'), shoe = mcol('#1B1D20');
+   十種角色：上班族（公事包、領帶）、上班族女（裙子、肩背包）、學生與女學生（制服、書包）、長輩（白髮、拐杖、微駝）、
+   小朋友（矮、亮色衣服、小書包）、旅客（拉行李箱）、休閒（帽子）、洋裝（長髮、雨傘）、背包客（大登山包）。
+   每種角色兩組配色。走路的姿勢量化成 16 個相位，每個「角色＋配色＋相位」做一個模型重複使用 */
+const PERSON_STYLES = [
+  { tops: ['#F2F2EE', '#D9E4F2'], bottom: '#2B2F36', hair: '#1E1C1A', acc: 'brief', accC: '#3B2A20', tie: '#3A4A7A', phone: true },
+  { tops: ['#C9A7B8', '#E8E2D6'], bottom: '#2E2A33', skirt: true, long: true, hair: '#2A211C', acc: 'handbag', accC: '#7A4B2F', phone: true },
+  { tops: ['#F4F6F8', '#EEF2F5'], bottom: '#1F2E5A', hair: '#141414', acc: 'backpack', accC: '#2F5D9E', phone: true },
+  { tops: ['#F4F6F8', '#EEF2F5'], bottom: '#24356B', skirt: true, long: true, hair: '#141414', acc: 'backpack', accC: '#C0392B' },
+  { tops: ['#8A6E55', '#6F7A63'], bottom: '#55524C', hair: '#C9C7C2', stoop: true, acc: 'cane', accC: '#4A3A2C', speed: 0.7 },
+  { tops: ['#F2B134', '#6BC2A1'], bottom: '#3B6EA8', hair: '#1A1A1A', scale: 0.66, acc: 'backpack', accC: '#E86A92', speed: 0.9 },
+  { tops: ['#5E8C61', '#3F6FB8'], bottom: '#C9B48A', hair: '#3A2A20', acc: 'suitcase', accC: '#2F3A4A', speed: 0.85 },
+  { tops: ['#4A4F57', '#9A3B3B'], bottom: '#3D5A80', hair: '#2A2420', acc: 'cap', accC: '#B03A2E', phone: true },
+  { tops: ['#E8D5B5', '#B8C9D9'], dress: true, long: true, hair: '#3A2A20', acc: 'umbrella', accC: '#2E7D8C' },
+  { tops: ['#C7553A', '#2F6F8F'], bottom: '#4A4F45', hair: '#2A2420', acc: 'bigpack', accC: '#3F5D3A' },
+];
+function personMesh(phase, walk, sid = 0, vi = 0) {
+  const st = PERSON_STYLES[sid] || PERSON_STYLES[0], mb = MB(), k = EX * (st.scale || 1);
+  const shirt = mcol(st.tops[vi % st.tops.length]), pants = mcol(st.dress ? st.tops[vi % st.tops.length] : st.bottom), skin = mcol('#D9A988'), hair = mcol(st.hair), shoe = mcol('#1B1D20');
+  const accC = mcol(st.accC || '#333'), dark = mcol('#1E2226');
   const ell = (fwd, lat, rf, rl, b, t, col, p = 2.6) => ellipsoid(mb, [fwd * k, lat * k, (b + t) / 2 * k], rf * k, rl * k, Math.max(0.02, (t - b) / 2) * k, col, 6, 3, p);
-  const sw = Math.sin(phase) * walk, vel = Math.cos(phase) * walk;
-  const bob = (1 - Math.abs(Math.cos(phase))) * walk * 0.035, lean = walk * 0.035;
+  const box = (fwd, lat, z, hf, hl, hz, col) => ellipsoid(mb, [fwd * k, lat * k, z * k], hf * k, hl * k, hz * k, col, 6, 3, 7);
+  const stick = (a, b, r, col) => tube(mb, a.map(v => v * k), b.map(v => v * k), r * k, r * k, 5, col, false);
+  const slow = st.stoop || st.acc === 'suitcase' ? 0.7 : 1;
+  const sw = Math.sin(phase) * walk * slow, vel = Math.cos(phase) * walk;
+  const bob = (1 - Math.abs(Math.cos(phase))) * walk * 0.035, lean = walk * 0.035 + (st.stoop ? 0.07 : 0);
+  const legC = st.skirt || st.dress ? skin : pants;
   for (const [side, f, v] of [[1, sw, vel], [-1, -sw, -vel]]) {
     const foot = f * 0.21, swing = Math.max(0, v), lift = swing * 0.07, lat = side * 0.085;
     ell(foot + 0.04, lat, 0.12, 0.05, lift, lift + 0.08, shoe, 3);
-    ell(foot * 0.75 - swing * 0.06, lat, 0.055, 0.055, lift + 0.05, 0.49 + lift * 0.6, pants);
-    ell(foot * 0.38, lat * 0.95, 0.07, 0.07, 0.43 + lift * 0.6, 0.88 + bob, pants);
+    ell(foot * 0.75 - swing * 0.06, lat, 0.055, 0.055, lift + 0.05, 0.49 + lift * 0.6, legC);
+    ell(foot * 0.38, lat * 0.95, 0.07, 0.07, 0.43 + lift * 0.6, 0.88 + bob, legC);
   }
-  ell(lean * 0.5, 0, 0.11, 0.165, 0.8 + bob, 0.98 + bob, pants);
+  // 裙子：從腰往下張開的鐘形；洋裝一路到小腿
+  if (st.skirt) ell(lean * 0.4, 0, 0.17, 0.2, 0.55 + bob, 0.98 + bob, pants, 2.2);
+  else if (st.dress) ell(lean * 0.4, 0, 0.19, 0.22, 0.4 + bob, 1.0 + bob, pants, 2.2);
+  else ell(lean * 0.5, 0, 0.11, 0.165, 0.8 + bob, 0.98 + bob, pants);
   ell(lean, 0, 0.12, 0.18, 0.93 + bob, 1.3 + bob, shirt, 3);
   ell(lean * 1.2, 0, 0.1, 0.205, 1.2 + bob, 1.36 + bob, shirt, 3);
+  if (st.tie) ell(lean * 1.1 + 0.115, 0, 0.012, 0.025, 1.02 + bob, 1.32 + bob, mcol(st.tie));
+  // 手臂：站著滑手機的人，右手前臂抬到胸前，手上一支手機
+  const phoneUp = !walk && st.phone;
   for (const [side, a] of [[1, -sw], [-1, sw]]) {
     const lat = side * 0.235;
     ell(lean * 1.2 + a * 0.06, lat, 0.05, 0.05, 1.0 + bob, 1.34 + bob, shirt);
-    ell(lean + a * 0.17, lat * 0.97, 0.042, 0.042, 0.73 + bob, 1.03 + bob, skin);
+    if (phoneUp && side > 0) { stick([lean + 0.02, lat * 0.9, 1.02], [lean + 0.24, lat * 0.45, 1.16], 0.04, skin); box(lean + 0.27, lat * 0.4, 1.19, 0.008, 0.04, 0.07, dark); }
+    else ell(lean + a * 0.17, lat * 0.97, 0.042, 0.042, 0.73 + bob, 1.03 + bob, skin);
   }
   ell(lean * 1.3, 0, 0.045, 0.045, 1.32 + bob, 1.45 + bob, skin);
-  ellipsoid(mb, [(lean * 1.4 + 0.01) * k, 0, (1.55 + bob) * k], 0.105 * k, 0.095 * k, 0.125 * k, skin, 9, 6);
-  ellipsoid(mb, [(lean * 1.4 - 0.01) * k, 0, (1.6 + bob) * k], 0.11 * k, 0.1 * k, 0.1 * k, hair, 9, 4);
+  const hx = lean * 1.4 + (phoneUp ? 0.03 : 0), hz = (phoneUp ? -0.03 : 0);
+  ellipsoid(mb, [(hx + 0.01) * k, 0, (1.55 + bob + hz) * k], 0.105 * k, 0.095 * k, 0.125 * k, skin, 9, 6);
+  ellipsoid(mb, [(hx - 0.01) * k, 0, (1.6 + bob + hz) * k], 0.11 * k, 0.1 * k, 0.1 * k, hair, 9, 4);
+  if (st.long) ell(hx - 0.07, 0, 0.06, 0.1, 1.3 + bob, 1.62 + bob, hair);
+  // 配件
+  const handF = lean + sw * -0.17, handL = 0.24, handZ = 0.72 + bob; // 右手（側向 +）大概的位置
+  switch (st.acc) {
+    case 'brief': box(handF, handL + 0.03, handZ - 0.16, 0.2, 0.04, 0.14, accC); break;
+    case 'handbag': box(lean - 0.02, -0.27, 0.98 + bob, 0.13, 0.05, 0.1, accC); stick([lean, -0.24, 1.08 + bob], [lean, -0.2, 1.36 + bob], 0.012, accC); break;
+    case 'backpack': box(lean - 0.19, 0, 1.13 + bob, 0.08, 0.15, 0.17, accC); break;
+    case 'bigpack': box(lean - 0.24, 0, 1.2 + bob, 0.13, 0.17, 0.34, accC); box(lean - 0.24, 0, 1.58 + bob, 0.1, 0.13, 0.06, mcol('#C9B48A')); break;
+    case 'cap': ellipsoid(mb, [(hx - 0.005) * k, 0, (1.66 + bob) * k], 0.115 * k, 0.105 * k, 0.07 * k, accC, 9, 4); box(hx + 0.12, 0, 1.64 + bob, 0.07, 0.08, 0.012, accC); break;
+    case 'cane': stick([handF + 0.05, handL, handZ + 0.02], [handF + 0.16, handL + 0.02, 0], 0.016, accC); break;
+    case 'umbrella': stick([handF + 0.02, handL, handZ + 0.05], [handF + 0.08, handL + 0.02, 0.05], 0.022, accC); break;
+    case 'suitcase': {
+      // 行李箱拉在身後，拉桿接到右手
+      const sx = lean - 0.42, sl = handL + 0.05;
+      box(sx, sl, 0.34, 0.1, 0.17, 0.27, accC);
+      stick([sx + 0.06, sl, 0.6], [handF, handL, handZ], 0.012, mcol('#9AA1A8'));
+      for (const d of [-0.12, 0.12]) ellipsoid(mb, [(sx - 0.04) * k, (sl + d) * k, 0.03 * k], 0.03 * k, 0.015 * k, 0.03 * k, dark, 6, 3);
+      break;
+    }
+  }
   return mbDone(mb);
 }
 
