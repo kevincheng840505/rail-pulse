@@ -19,26 +19,32 @@ const NOSE_SHAPE = {
   TRTC_BR:  { tipH: 0.7,  hp: 1.0,  tipW: 0.72, wp: 3.0 },
   TRTC_Y:   { tipH: 0.72, hp: 1.1,  tipW: 0.66, wp: 2.6 },
   TYMC:     { tipH: 0.6,  hp: 1.1,  tipW: 0.6,  wp: 2.6 },
+  TYMC_X:   { tipH: 0.6,  hp: 1.1,  tipW: 0.6,  wp: 2.6 },
   TMRT:     { tipH: 0.62, hp: 1.1,  tipW: 0.6,  wp: 2.6 },
   KRTC:     { tipH: 0.84, hp: 1.0,  tipW: 0.8,  wp: 4.0 },
   LRT:      { tipH: 0.72, hp: 1.0,  tipW: 0.6,  wp: 2.4 },
 };
 // 每節車廂單側的車門數
-const DOORS = { THSR: 1, TEMU2000: 1, TEMU1000: 1, EMU3000: 2, E1000: 2, CHUKUANG: 2, EMU900: 3, TRTC: 4, TRTC_BR: 2, TRTC_Y: 3, TYMC: 3, TMRT: 4, KRTC: 4, LRT: 1 };
+const DOORS = { THSR: 1, TEMU2000: 1, TEMU1000: 1, EMU3000: 2, E1000: 2, CHUKUANG: 2, EMU900: 3, TRTC: 4, TRTC_BR: 2, TRTC_Y: 3, TYMC: 3, TYMC_X: 2, TMRT: 4, KRTC: 4, LRT: 1 };
+/* 尺寸依各車型公開規格（維基百科）：700T 中間車 25 m、寬 3.38 m、高 3.65 m、車鼻約 8 m；
+   普悠瑪 20.7 m／太魯閣 20.5 m、寬 2.9 m；EMU3000、EMU900 20.3 m、寬 2.9 m；
+   北捷高運量 C371／C381 23.5 m、寬 3.18 m、高 3.585 m、單側 4 門，不鏽鋼車身配藍色飾條；
+   機捷 2000 型 20.25 m、寬 3.03 m、高 3.76 m（直達車紫色、普通車藍色） */
 const LIVERY = {
-  THSR:     { n:12, len:25,   w:3.38, h:3.65, gap:0.5, nose:10,  body:'#F3F4F1', stripe:'#F07F1F', stripe2:'#1E3A6E', roof:'#D9DCDF', name:'700T' },
-  TEMU2000: { n:8,  len:20,   w:2.9,  h:3.6,  gap:0.6, nose:4.5, body:'#F4F4F2', stripe:'#E8452C', stripe2:'#E8452C', roof:'#C9CDD1', cab:'#E8452C', name:'普悠瑪' },
-  TEMU1000: { n:8,  len:20,   w:2.9,  h:3.6,  gap:0.6, nose:4,   body:'#F4F4F2', stripe:'#C8102E', stripe2:'#9AA3AD', roof:'#C9CDD1', cab:'#C8102E', name:'太魯閣' },
-  EMU3000:  { n:12, len:20,   w:2.9,  h:3.6,  gap:0.6, nose:3.5, body:'#F2F3F1', stripe:'#F26A21', stripe2:'#2B2F36', roof:'#C9CDD1', cab:'#2B2F36', name:'EMU3000' },
+  THSR:     { n:12, len:25,   w:3.38, h:3.65, gap:0.5, nose:8.5, body:'#F3F4F1', stripe:'#F07F1F', stripe2:'#1F2329', roof:'#D9DCDF', skirt:true, name:'700T' },
+  TEMU2000: { n:8,  len:20.7, w:2.9,  h:3.6,  gap:0.6, nose:4.5, body:'#F4F4F2', stripe:'#E8452C', stripe2:'#E8452C', roof:'#C9CDD1', cab:'#E8452C', skirt:true, name:'普悠瑪' },
+  TEMU1000: { n:8,  len:20.5, w:2.9,  h:3.6,  gap:0.6, nose:4,   body:'#F4F4F2', stripe:'#C8102E', stripe2:'#9AA3AD', roof:'#C9CDD1', cab:'#C8102E', skirt:true, name:'太魯閣' },
+  EMU3000:  { n:12, len:20.3, w:2.91, h:3.6,  gap:0.6, nose:3.5, body:'#F2F3F1', stripe:'#E0442E', stripe2:'#2B2F36', roof:'#C9CDD1', cab:'#2B2F36', skirt:true, band:'#20252B', name:'EMU3000' },
   E1000:    { n:12, len:20,   w:2.9,  h:3.6,  gap:0.6, nose:3,   body:'#F2F3F1', stripe:'#E2752B', stripe2:'#E2752B', roof:'#B9BEC4', cab:'#E2752B', name:'推拉式' },
   CHUKUANG: { n:10, len:20,   w:2.9,  h:3.6,  gap:0.7, nose:0,   body:'#E8833A', stripe:'#FFFFFF', stripe2:'#FFFFFF', roof:'#8D8F93', name:'莒光' },
-  EMU900:   { n:10, len:20,   w:2.9,  h:3.6,  gap:0.6, nose:2,   body:'#E9ECEF', stripe:'#F2C230', stripe2:'#2D5BA8', roof:'#B9BEC4', cab:'#2D5BA8', name:'EMU900' },
-  TRTC:     { n:6,  len:23.5, w:3.2,  h:3.6,  gap:0.5, nose:1.5, body:'#C9CED3', roof:'#A9AFB5', name:'高運量' },
+  EMU900:   { n:10, len:20.3, w:2.89, h:3.6,  gap:0.6, nose:2,   body:'#E9ECEF', stripe:'#F2C230', stripe2:'#2D5BA8', roof:'#B9BEC4', cab:'#2D5BA8', name:'EMU900' },
+  TRTC:     { n:6,  len:23.5, w:3.18, h:3.585,gap:0.5, nose:1.5, body:'#C9CED3', stripe:'#2D62B0', roof:'#A9AFB5', steel:true, name:'高運量' },
   TRTC_BR:  { n:4,  len:13.7, w:2.5,  h:3.3,  gap:0.5, nose:1.5, body:'#E9EBEC', roof:'#B4BAC0', name:'中運量' },
   TRTC_Y:   { n:4,  len:22,   w:2.65, h:3.5,  gap:0.5, nose:2,   body:'#D9DDE0', roof:'#B4BAC0', name:'中運量' },
-  TYMC:     { n:5,  len:22,   w:3.0,  h:3.6,  gap:0.5, nose:2.5, body:'#D3D7DB', roof:'#A9AFB5', name:'機捷' },
+  TYMC:     { n:5,  len:20.25,w:3.03, h:3.76, gap:0.5, nose:2.5, body:'#D3D7DB', stripe:'#2E6DB4', roof:'#A9AFB5', steel:true, name:'機捷' },
+  TYMC_X:   { n:5,  len:20.25,w:3.03, h:3.76, gap:0.5, nose:2.5, body:'#D3D7DB', stripe:'#6B3FA0', roof:'#A9AFB5', steel:true, name:'機捷直達' },
   TMRT:     { n:2,  len:22,   w:2.9,  h:3.6,  gap:0.5, nose:2.5, body:'#E4E8EB', roof:'#B4BAC0', name:'台中捷運' },
-  KRTC:     { n:3,  len:23.5, w:3.2,  h:3.6,  gap:0.5, nose:1.5, body:'#C9CED3', roof:'#A9AFB5', name:'高雄捷運' },
+  KRTC:     { n:3,  len:23.5, w:3.2,  h:3.6,  gap:0.5, nose:1.5, body:'#C9CED3', roof:'#A9AFB5', steel:true, name:'高雄捷運' },
   LRT:      { n:5,  len:6.8,  w:2.65, h:3.4,  gap:0,   nose:1.5, body:'#F1F3F1', roof:'#7CBD52', name:'輕軌' },
 };
 function liveryOf(trip) {
@@ -54,6 +60,7 @@ function liveryOf(trip) {
   const id = trip.line && trip.line.id;
   if (trip.sys === 'TRTC') return id === 'BR' ? LIVERY.TRTC_BR : id === 'Y' ? LIVERY.TRTC_Y : LIVERY.TRTC;
   if (trip.sys === 'KRTC' && id === 'KC') return LIVERY.LRT;
+  if (trip.sys === 'TYMC' && /直達/.test((trip.type || '') + (trip.name || ''))) return LIVERY.TYMC_X;
   return LIVERY[trip.sys] || LIVERY.TRTC;
 }
 const trainLength = trip => { const L = liveryOf(trip); return (L.n * L.len + (L.n - 1) * L.gap) / 1000; };
