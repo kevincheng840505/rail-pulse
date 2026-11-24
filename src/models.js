@@ -21,6 +21,7 @@ function mbDone(mb) { return { P: new Float32Array(mb.P), N: new Float32Array(mb
 /* 格狀曲面：rows[i][j] 是點，相鄰四點組成一格；color(i, j) 回傳那一格的顏色。
    法向量 = 周圍各格法向量的平均（平滑）；wrap 表示每一列頭尾相接（圓周）。
    最後依「法向量大多朝外」自動翻正（以所有點的中心判斷，車身、機身這類封閉形狀都適用） */
+const perRowC = c => c === 'rows';
 function surf(mb, rows, color, wrap = false, center = null) {
   const R = rows.length, Cn = rows[0].length;
   const N = rows.map(r => r.map(() => [0, 0, 0]));
@@ -37,9 +38,14 @@ function surf(mb, rows, color, wrap = false, center = null) {
     if (r.every(q => Math.abs(q[0] - p[0]) + Math.abs(q[1] - p[1]) + Math.abs(q[2] - p[2]) < 1e-6)) { const s = [0, 0, 0]; for (const q of N[i]) { s[0] += q[0]; s[1] += q[1]; s[2] += q[2]; } for (const q of N[i]) { q[0] = s[0]; q[1] = s[1]; q[2] = s[2]; } }
   }
   let cx = 0, cy = 0, cz = 0, cnt = 0;
-  if (center) [cx, cy, cz] = center; else { for (const r of rows) for (const p of r) { cx += p[0]; cy += p[1]; cz += p[2]; cnt++; } cx /= cnt; cy /= cnt; cz /= cnt; }
+  if (center && !perRowC(center)) [cx, cy, cz] = center; else if (!center) { for (const r of rows) for (const p of r) { cx += p[0]; cy += p[1]; cz += p[2]; cnt++; } cx /= cnt; cy /= cnt; cz /= cnt; }
+  // center === 'rows'：每一列各自用自己的中心判斷朝外（很長的放樣路徑若用整體中心，遠處的誤差會讓法向量整個翻面、看起來全黑）
+  const perRow = center === 'rows';
   let sg = 0;
-  for (let i = 0; i < R; i++) for (let j = 0; j < Cn; j++) { const n = N[i][j], l = Math.hypot(n[0], n[1], n[2]) || 1; n[0] /= l; n[1] /= l; n[2] /= l; const p = rows[i][j]; sg += n[0] * (p[0] - cx) + n[1] * (p[1] - cy) + n[2] * (p[2] - cz); }
+  for (let i = 0; i < R; i++) {
+    if (perRow) { cx = cy = cz = 0; for (const p of rows[i]) { cx += p[0]; cy += p[1]; cz += p[2]; } cx /= Cn; cy /= Cn; cz /= Cn; }
+    for (let j = 0; j < Cn; j++) { const n = N[i][j], l = Math.hypot(n[0], n[1], n[2]) || 1; n[0] /= l; n[1] /= l; n[2] /= l; const p = rows[i][j]; sg += n[0] * (p[0] - cx) + n[1] * (p[1] - cy) + n[2] * (p[2] - cz); }
+  }
   const f = sg < 0 ? -1 : 1;
   const P = mb.P, NN = mb.N, C = mb.C;
   const v = (i, j, c) => { const p = rows[i][j], n = N[i][j]; P.push(p[0], p[1], p[2]); NN.push(n[0] * f, n[1] * f, n[2] * f); C.push(c[0], c[1], c[2], c[3]); };
@@ -513,7 +519,7 @@ function loftPath(mb, path, sec, color, caps = true) {
   for (const p of path) rows.push(ring(p, 1));
   if (caps) rows.push(ring(path[path.length - 1], 0.97), ring(path[path.length - 1], 0));
   const off = caps ? 2 : 0, n = path.length - 1;
-  surf(mb, rows, (i, j) => color(Math.max(0, Math.min(n - 1, i - off)), j, i < off || i >= off + n));
+  surf(mb, rows, (i, j) => color(Math.max(0, Math.min(n - 1, i - off)), j, i < off || i >= off + n), false, 'rows');
 }
 // 一片牆：a→b（平面座標）、高度 zs（由下往上）、沿牆的切點 us（0~1）；center 是建築內部的一點，法向量朝外
 function panel(mb, a, b, zs, us, color, center) {

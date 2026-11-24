@@ -4,7 +4,7 @@
    依實際車型的編組、車長、車寬與塗裝。單位公尺；寬高略為放大，遠看也認得出來。
    body 車身、stripe/stripe2 腰帶、roof 車頂、nose 車頭流線段長度、cab 車頭色（無則同車身） */
 const EX = 1.3;
-const LIFT = 0; // 近看時地形已攤平，車廂直接貼地
+const LIFT = 0.3; // 車輪踩在鋼軌頂（道碴＋枕木＋鋼軌約 30 公分高）
 /* 車頭外形（依實車照片的大致比例）：
    tipH 車鼻最前端的高度比例、hp 側面輪廓往下收的曲率（越大越像子彈頭，前段才開始下降）、
    tipW 最前端寬度比例、wp 俯視輪廓的圓潤度（越大越方、越小越尖） */
@@ -263,22 +263,74 @@ function elevAt(trip, km) {
   const e0 = r0 > 0 ? (h0 - base) * ss(1 - (km - g0) / r0) : 0, e1 = r1 > 0 ? (h1 - base) * ss((km - (g1 - r1)) / r1) : 0;
   return base + Math.max(e0, e1);
 }
-// 高架橋：箱型梁橋面沿著軌道放樣（跟著坡度升降），每 24 公尺一支圓柱橋墩
+// 高架橋：箱型梁橋面沿著軌道放樣（跟著坡度升降），每 24 公尺一支圓柱橋墩。
+// 同一段橋可能被好幾班車各畫一次，用 seen 去重；遇到已經畫過的地方，橋面要多延伸一格接上去，不然會留下一道縫
 function viaductFeatures(trip, k0, k1, P, mb, seen, O) {
-  const o = Math.abs(sideOffset(trip)), w = liveryOf(trip).w * EX / 1000, half = (o + w / 2 + 0.0007) * 1000;
-  const deck = mcol(mixHex('#A8ACAE', P.land, 0.3)), pier = mcol(mixHex('#8E9397', P.land, 0.3)), step = 0.004;
-  const sec = [[-half, -0.02], [half, -0.02], [half, -0.9], [half * 0.55, -1.05], [half * 0.4, -2.2], [-half * 0.4, -2.2], [-half * 0.55, -1.05], [-half, -0.9]];
-  let run = [];
-  const flush = () => { if (run.length > 1) loftPath(mb, run, sec, () => deck); run = []; };
+  const o = Math.abs(sideOffset(trip)), w = liveryOf(trip).w * EX / 1000, half = (o + w / 2 + 0.0007) * 1000 + 1.2;
+  const deck = mcol(mixHex('#A8ACAE', P.land, 0.3)), side = mcol(mixHex('#9A9FA3', P.land, 0.3)), pier = mcol(mixHex('#8E9397', P.land, 0.3)), step = 0.004;
+  // 斷面：兩側矮牆（防音牆）、橋面板，下面是收窄的箱型梁
+  const plain = [[-half, 1.0], [-half, -0.9], [-half * 0.55, -1.05], [-half * 0.4, -2.2], [half * 0.4, -2.2], [half * 0.55, -1.05], [half, -0.9], [half, 1.0], [half - 0.22, 1.0], [half - 0.22, 0.05], [-half + 0.22, 0.05], [-half + 0.22, 1.0]];
+  let run = [], prev = null, prevSeen = false;
+  const flush = () => { if (run.length > 1) loftPath(mb, run, plain, (i, j) => j === 9 ? deck : side); run = []; };
   for (let i = Math.floor(k0 / step); i * step < k1; i++) {
-    const k = i * step, e = elevAt(trip, k); if (e < 0.05) { flush(); continue; }
+    const k = i * step, e = elevAt(trip, k);
+    if (e < 0.05) { flush(); prev = null; continue; }
     const f = railFrame(trip, k), key = levelKey(trip) + Math.round(f.x * 250) + ',' + Math.round(f.y * 250);
-    if (seen.has(key)) { flush(); continue; } seen.add(key);
-    const x = (f.x - O.x) * 1000, y = (f.y - O.y) * 1000;
-    run.push([x, y, f.nx, f.ny, e]);
-    if (e > 2.5 && i % 6 === 0) { tube(mb, [x, y, 0], [x, y, e - 2.1], 0.95, 0.85, 12, pier, false); ellipsoid(mb, [x, y, e - 2.15], 1.4, half * 0.5, 0.25, pier, 10, 3, 4); }
+    const pt = [(f.x - O.x) * 1000, (f.y - O.y) * 1000, f.nx, f.ny, e];
+    if (seen.has(key)) {
+      if (run.length) { run.push(pt); flush(); } // 接到已經有的橋面上
+      prev = pt; prevSeen = true; continue;
+    }
+    seen.add(key);
+    if (!run.length && prev && prevSeen) run.push(prev); // 從已經有的橋面接出來
+    run.push(pt); prev = pt; prevSeen = false;
+    if (e > 2.5 && i % 6 === 0) { tube(mb, [pt[0], pt[1], 0], [pt[0], pt[1], e - 2.1], 0.95, 0.85, 12, pier, false); ellipsoid(mb, [pt[0], pt[1], e - 2.15], 1.4, half * 0.5, 0.25, pier, 10, 3, 4); }
   }
   flush();
+}
+
+/* 軌道：每條線上下行各一股道。道碴（碎石道床）、混凝土枕木、兩條鋼軌；台鐵與高鐵再加電車線桿和架空線。
+   枕木很多，只畫鏡頭附近 near 公里內 */
+function trackFeatures(trip, k0, k1, P, mb, seen, O, near) {
+  const o = Math.abs(sideOffset(trip)) * 1000, g = (trip.sys === 'THSR' || trip.sys !== 'TRA' ? 0.72 : 0.54) * EX, step = 0.005;
+  const ballast = mcol(mixHex('#8A847A', P.land, 0.25)), sleeper = mcol(mixHex('#B3AFA6', P.land, 0.2)), railSide = mcol('#5E6368'), railTop = mcol('#C2C7CC');
+  const wireC = mcol('#2E3236'), mastC = mcol(mixHex('#8C9399', P.land, 0.2));
+  const elec = trip.sys === 'TRA' || trip.sys === 'THSR';
+  const bsec = [[-g - 1.7, -0.02], [g + 1.7, -0.02], [g + 1.05, 0.14], [-g - 1.05, 0.14]];
+  for (const sd of [-1, 1]) {
+    const lat = sd * o, runs = [[]];
+    let n = 0;
+    for (let i = Math.floor(k0 / step); i * step < k1; i++) {
+      const k = i * step, f = railFrame(trip, k), cx = f.x + f.nx * lat / 1000, cy = f.y + f.ny * lat / 1000;
+      const key = 'T' + levelKey(trip) + sd * Math.sign(sideOffset(trip)) + ':' + Math.round(cx * 400) + ',' + Math.round(cy * 400);
+      const r = runs[runs.length - 1];
+      if (seen.has(key)) { if (r.length) runs.push([]); continue; }
+      seen.add(key);
+      const e = elevAt(trip, k), x = (cx - O.x) * 1000, y = (cy - O.y) * 1000;
+      r.push([x, y, f.nx, f.ny, e]);
+      const d = Math.hypot(cx - O.x, cy - O.y);
+      if (d < near) {
+        // 枕木：每 0.6 公尺一根（這一格 5 公尺裡排 8 根）
+        for (let q = 0; q < 8; q++) { const u = (q + 0.5) / 8 * step * 1000, sx = x + f.ux * u, sy = y + f.uy * u; ellipsoid(mb, [sx, sy, e + 0.17], 0.13, g + 0.42, 0.05, sleeper, 4, 2, 8); }
+      }
+      // 電車線桿：每 50 公尺一支，立在股道外側，懸臂伸到軌道正上方
+      if (elec && d < near * 2.5 && i % 10 === 0) {
+        const mx = x + f.nx * sd * (g + 2.6), my = y + f.ny * sd * (g + 2.6);
+        tube(mb, [mx, my, e], [mx, my, e + 7.4], 0.17, 0.12, 8, mastC, false);
+        tube(mb, [mx, my, e + 6.9], [x, y, e + 6.6], 0.05, 0.05, 5, mastC, false);
+        tube(mb, [mx, my, e + 5.9], [x, y, e + 5.75], 0.04, 0.04, 5, mastC, false);
+      }
+      n++;
+    }
+    for (const r of runs) {
+      if (r.length < 2) continue;
+      loftPath(mb, r, bsec, () => ballast, false);
+      // 鋼軌：窄的工字形，頂面亮一點
+      for (const rs of [-1, 1]) loftPath(mb, r, [[rs * g - 0.035, 0.18], [rs * g + 0.035, 0.18], [rs * g + 0.035, 0.3], [rs * g - 0.035, 0.3]], (i, j) => j === 2 ? railTop : railSide, false);
+      // 架空線：吊線與接觸線
+      if (elec) for (const z of [5.75, 6.6]) loftPath(mb, r, [[-0.03, z - 0.03], [0.03, z - 0.03], [0.03, z + 0.03], [-0.03, z + 0.03]], () => wireC, false);
+    }
+  }
 }
 
 /* ---------- 車站：月台、雨棚、樓梯、站名牌 ----------
@@ -354,7 +406,10 @@ function stationFeatures(node, trip, idx, P, mb, seen, O) {
     }
   }
   // 高架段的橋面與橋墩（坡道一路畫到落地）
-  if (elevProfile(trip)) { const r = platHalf(trip) + 1.0; viaductFeatures(trip, trip.cum[idx] - r, trip.cum[idx] + r, P, mb, seen, O); }
+  // 高架段的橋面與橋墩：一路畫到前後兩站（最多各 3 公里），站與站中間不會斷掉
+  const c = trip.cum, ka = Math.max(c[idx] - 3, idx > 0 ? c[idx - 1] : c[idx] - 1), kb = Math.min(c[idx] + 3, idx < c.length - 1 ? c[idx + 1] : c[idx] + 1);
+  if (elevProfile(trip)) viaductFeatures(trip, ka, kb, P, mb, seen, O);
+  trackFeatures(trip, Math.max(ka, c[idx] - 1.2), Math.min(kb, c[idx] + 1.2), P, mb, seen, O, 0.35);
 }
 
 /* ---------- 月台上的旅客 ----------

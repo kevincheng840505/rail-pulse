@@ -263,7 +263,7 @@ function initMap() {
       paint: { 'line-color': railColor(P0),
         // 近看時畫成約 10 公尺寬的雙線道床，上下行列車各走一側
         'line-width': ['interpolate', ['exponential', 2], ['zoom'], 6, ['case', ['==', ['get', 'sys'], 'THSR'], 1.6, ['==', ['get', 'g'], 'mrt'], 1.1, 1], 12, 2.6, 15, 5, 16, 9, 22, 590],
-        'line-opacity': ['interpolate', ['linear'], ['zoom'], 15, 1, 17, 0.6, 19, 0.38] } });
+        'line-opacity': ['interpolate', ['linear'], ['zoom'], 15, 1, 17, 0.5, 19, 0.22] } });
     map.addSource('stations', { type: 'geojson', data: stationsGeoJSON() });
     map.addLayer({ id: 'st-dot', type: 'circle', source: 'stations',
       filter: ['any', ['<=', ['get', 'rank'], 1], ['all', ['<=', ['get', 'rank'], 2], ['>=', ['zoom'], 9]], ['>=', ['zoom'], 11.5]],
@@ -516,13 +516,14 @@ const Facade = (() => {
     const z = map.getZoom(), c = map.getCenter(), [cx, cy] = proj(c.lat, c.lng);
     const near = z < FACADE_ZOOM ? [] : NODES.filter(n => Math.hypot(n.x - cx, n.y - cy) < 0.8);
     // 跟拍的列車在高架上時，車子前後也要有橋（站與站中間的高架段不在任何車站附近）
-    const f = z < FACADE_ZOOM ? null : S.follow, fp = f && elevProfile(f) && tripPos(f, curMin());
-    const key = near.map(n => n.id).join() + '|' + S.P.lit + '|' + TRIPS.length + '|' + (fp ? f.idx + ':' + Math.round(fp.km * 4) : '');
+    const f = z < FACADE_ZOOM ? null : S.follow, fq = f && tripPos(f, curMin()), fp = f && elevProfile(f) && fq;
+    const key = near.map(n => n.id).join() + '|' + S.P.lit + '|' + TRIPS.length + '|' + (fq ? (f.idx ?? f.id) + ':' + Math.round(fq.km * 4) : '');
     if (key === lastPf) return; lastPf = key;
     // 車站與高架橋合成一個網格，原點放在畫面中心
     const mb = MB(), seen = new Set(), O = { x: cx, y: cy };
     for (const n of near) for (const [trip, idx] of stationReps(n)) stationFeatures(n, trip, idx, S.P, mb, seen, O);
-    if (fp) viaductFeatures(f, fp.km - 1, fp.km + 1, S.P, mb, seen, O);
+    if (fp) viaductFeatures(f, fp.km - 1.5, fp.km + 1.5, S.P, mb, seen, O);
+    if (fq) trackFeatures(f, fq.km - 0.8, fq.km + 0.8, S.P, mb, seen, O, 0.35);
     TrainGL.setStatic('stations', mb.P.length ? mbDone(mb) : null, unproj(cx, cy));
   }
   function build(force) {
