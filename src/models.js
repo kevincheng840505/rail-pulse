@@ -18,6 +18,17 @@ function mcol(hex, e = 0) {
 const MB = () => ({ P: [], N: [], C: [] });
 function mbDone(mb) { return { P: new Float32Array(mb.P), N: new Float32Array(mb.N), C: new Float32Array(mb.C), n: mb.P.length / 3 }; }
 
+// 一塊矮長方體（枕木這類大量、小、看不到底面的東西）：只畫頂面和兩個長側面，直接寫入頂點，不經過 surf，速度快很多
+// c 中心（底面高度 z），(ux,uy) 長邊方向，hl 長邊半長、hw 短邊半寬、h 高
+function slab(mb, cx, cy, z, ux, uy, hl, hw, h, col) {
+  const vx = -uy, vy = ux, P = mb.P, N = mb.N, C = mb.C;
+  const pt = (a, b, zz) => [cx + ux * a + vx * b, cy + uy * a + vy * b, zz];
+  const quad = (p0, p1, p2, p3, n) => { for (const q of [p0, p1, p2, p0, p2, p3]) { P.push(q[0], q[1], q[2]); N.push(n[0], n[1], n[2]); C.push(col[0], col[1], col[2], col[3]); } };
+  const t = z + h, A = pt(-hl, -hw, t), B = pt(hl, -hw, t), Cc = pt(hl, hw, t), D = pt(-hl, hw, t);
+  const a = pt(-hl, -hw, z), b = pt(hl, -hw, z), c = pt(hl, hw, z), d = pt(-hl, hw, z);
+  quad(A, B, Cc, D, [0, 0, 1]);
+  quad(a, b, B, A, [-vx, -vy, 0]); quad(c, d, D, Cc, [vx, vy, 0]); // 兩端的小面看不太到，省略
+}
 /* 格狀曲面：rows[i][j] 是點，相鄰四點組成一格；color(i, j) 回傳那一格的顏色。
    法向量 = 周圍各格法向量的平均（平滑）；wrap 表示每一列頭尾相接（圓周）。
    最後依「法向量大多朝外」自動翻正（以所有點的中心判斷，車身、機身這類封閉形狀都適用） */
