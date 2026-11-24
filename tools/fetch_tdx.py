@@ -46,6 +46,17 @@ def get(tk, path):
             raise
 
 
+def slim(o):
+    """拿掉網站用不到的英日韓文名稱（只讀 Zh_tw），台鐵時刻表從 4.4 MB 減到 3.3 MB，手機解析也快一些"""
+    if isinstance(o, dict):
+        if "Zh_tw" in o:
+            o = {k: v for k, v in o.items() if k not in ("En", "Ja", "Kr")}
+        return {k: slim(v) for k, v in o.items()}
+    if isinstance(o, list):
+        return [slim(x) for x in o]
+    return o
+
+
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else "tdx-out"
     os.makedirs(out, exist_ok=True)
@@ -67,7 +78,7 @@ def main():
             fail += 1
             continue
         with open(os.path.join(out, f), "w", encoding="utf-8") as fp:
-            json.dump(data, fp, ensure_ascii=False, separators=(",", ":"))
+            json.dump(slim(data), fp, ensure_ascii=False, separators=(",", ":"))
         files[f] = int(now)
         ok += 1
         time.sleep(1.0)  # TDX 對每把金鑰有頻率限制，一秒最多一個請求比較保險

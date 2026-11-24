@@ -311,6 +311,21 @@ function trackTaken(seen, lk, x, y, ux, uy) {
   const k = lk + ':' + gx + ',' + gy; (G.get(k) || G.set(k, []).get(k)).push([x, y]);
   return false;
 }
+// 直線段不需要每 5 公尺一個斷面：中間的點離弦線都不到 2 公分就略過（彎道照樣保留細節）
+function thinPath(r, tol = 0.02) {
+  const out = [r[0]]; let a = 0;
+  for (let b = 2; b < r.length; b++) {
+    const A = r[a], B = r[b], dx = B[0] - A[0], dy = B[1] - A[1], L = Math.hypot(dx, dy) || 1;
+    let ok = b - a < 40;
+    for (let i = a + 1; ok && i < b; i++) {
+      const p = r[i], t = ((p[0] - A[0]) * dx + (p[1] - A[1]) * dy) / (L * L);
+      if (Math.abs((p[1] - A[1]) * dx - (p[0] - A[0]) * dy) / L > tol || Math.abs(p[4] - (A[4] + (B[4] - A[4]) * t)) > tol) ok = false;
+    }
+    if (!ok) { a = b - 1; out.push(r[a]); }
+  }
+  out.push(r[r.length - 1]);
+  return out;
+}
 /* 軌道：每條線上下行各一股道。道碴（碎石道床）、混凝土枕木、兩條鋼軌；台鐵與高鐵再加電車線桿和架空線。
    枕木很多，只畫鏡頭附近 near 公里內 */
 function trackFeatures(trip, k0, k1, P, mb, seen, O, near) {
@@ -332,7 +347,8 @@ function trackFeatures(trip, k0, k1, P, mb, seen, O, near) {
       const d = Math.hypot(cx - O.x, cy - O.y);
       if (d < near) {
         // 枕木：每 0.6 公尺一根（這一格 5 公尺裡排 8 根）
-        for (let q = 0; q < 8; q++) { const u = (q + 0.5) / 8 * step * 1000, sx = x + f.ux * u, sy = y + f.uy * u; ellipsoid(mb, [sx, sy, e + 0.17], 0.13, g + 0.42, 0.05, sleeper, 4, 2, 8); }
+        // （用 slab 直接寫頂點；以前每根枕木是一顆橢球，跟拍高鐵時一次重建要畫二十幾萬個頂點，手機會卡半秒以上）
+        for (let q = 0; q < 8; q++) { const u = (q + 0.5) / 8 * step * 1000, sx = x + f.ux * u, sy = y + f.uy * u; slab(mb, sx, sy, e + 0.12, f.nx, f.ny, g + 0.42, 0.13, 0.1, sleeper); }
       }
       // 電車線桿：每 50 公尺一支，立在股道外側，懸臂伸到軌道正上方
       if (elec && d < near * 2.5 && i % 10 === 0) {
@@ -343,8 +359,9 @@ function trackFeatures(trip, k0, k1, P, mb, seen, O, near) {
       }
       n++;
     }
-    for (const r of runs) {
+    for (let r of runs) {
       if (r.length < 2) continue;
+      r = thinPath(r);
       loftPath(mb, r, bsec, () => ballast, false);
       // 鋼軌：窄的工字形，頂面亮一點
       for (const rs of [-1, 1]) loftPath(mb, r, [[rs * g - 0.035, 0.18], [rs * g + 0.035, 0.18], [rs * g + 0.035, 0.3], [rs * g - 0.035, 0.3]], (i, j) => j === 2 ? railTop : railSide, false);

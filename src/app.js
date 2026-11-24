@@ -222,10 +222,10 @@ const TrainGL = {
     onRemove() { TrainGL.gl = null; TrainGL.meshes.clear(); TrainGL.statics.clear(); },
     render(gl, matrix) {
       const T = TrainGL, z = map.getZoom();
-      const live = Object.values(T.groups).filter(g => g.f && z >= g.minz), st = T.statics.get('stations');
-      if (!live.length && !st) return;
+      const live = Object.values(T.groups).filter(g => g.f && z >= g.minz), st = T.statics.get('stations'), tk = T.statics.get('track');
+      if (!live.length && !st && !tk) return;
       const p = GL3D.begin(gl);
-      if (st && z >= FACADE_ZOOM) GL3D.draw(gl, p, st.mesh, matrix, st.m);
+      if (z >= FACADE_ZOOM) for (const s of [st, tk]) if (s) GL3D.draw(gl, p, s.mesh, matrix, s.m);
       for (const g of live) for (const it of g.f) GL3D.draw(gl, p, T.mesh(it), matrix, it.m);
     },
   },
@@ -512,21 +512,31 @@ const Facade = (() => {
     return lamps;
   }
   // 鏡頭附近車站的月台、雨棚與候車旅客（尖峰時段人多、深夜人少）
-  let lastPf = '';
+  let lastPf = '', lastBase = { key: null, grid: new Map() };
   function platforms() {
     if (!map.getLayer('trains3d')) return;
     const z = map.getZoom(), c = map.getCenter(), [cx, cy] = proj(c.lat, c.lng);
     const near = z < FACADE_ZOOM ? [] : NODES.filter(n => Math.hypot(n.x - cx, n.y - cy) < 0.8);
     // 跟拍的列車在高架上時，車子前後也要有橋（站與站中間的高架段不在任何車站附近）
     const f = z < FACADE_ZOOM ? null : S.follow, fq = f && tripPos(f, curMin()), fp = f && elevProfile(f) && fq;
-    const key = near.map(n => n.id).join() + '|' + S.P.lit + '|' + TRIPS.length + '|' + (fq ? (f.idx ?? f.id) + ':' + Math.round(fq.km * 4) : '');
+    const base = near.map(n => n.id).join() + '|' + S.P.lit + '|' + TRIPS.length + '|' + (fp ? (f.idx ?? f.id) + ':' + Math.round(fp.km * 2) : '');
+    const key = base + '|' + (fq ? (f.idx ?? f.id) + ':' + Math.round(fq.km * 4) : '');
     if (key === lastPf) return; lastPf = key;
-    // 車站與高架橋合成一個網格，原點放在畫面中心
-    const mb = MB(), seen = new Set(), O = { x: cx, y: cy };
-    for (const n of near) for (const [trip, idx] of stationReps(n)) stationFeatures(n, trip, idx, S.P, mb, seen, O);
-    if (fp) viaductFeatures(f, fp.km - 1.5, fp.km + 1.5, S.P, mb, seen, O);
+    // 分兩個網格：車站與高架橋（換站或每 500 m 才重建），跟拍列車附近的軌道（每 250 m 重建）。
+    // 以前兩者合在一起每 250 m 全部重算，手機上會卡一下。
+    const O = { x: cx, y: cy };
+    if (base !== lastBase.key) {
+      const mb = MB(), seen = new Set();
+      for (const n of near) for (const [trip, idx] of stationReps(n)) stationFeatures(n, trip, idx, S.P, mb, seen, O);
+      if (fp) viaductFeatures(f, fp.km - 1.5, fp.km + 1.5, S.P, mb, seen, O);
+      TrainGL.setStatic('stations', mb.P.length ? mbDone(mb) : null, unproj(cx, cy));
+      lastBase = { key: base, grid: seen._track || new Map() };
+    }
+    // 軌道避開車站已經畫過的股道（複製一份佔用表，不污染下次用）
+    const mb = MB(), seen = new Set();
+    seen._track = new Map([...lastBase.grid].map(([k, a]) => [k, a.slice()]));
     if (fq) trackFeatures(f, fq.km - 0.8, fq.km + 0.8, S.P, mb, seen, O, 0.35);
-    TrainGL.setStatic('stations', mb.P.length ? mbDone(mb) : null, unproj(cx, cy));
+    TrainGL.setStatic('track', mb.P.length ? mbDone(mb) : null, unproj(cx, cy));
   }
   function build(force) {
     timer = 0;
