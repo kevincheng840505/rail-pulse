@@ -13,7 +13,8 @@ JOBS = [("v2/Rail/TRA/LiveTrainDelay", 0)]
 JOBS += [(f"v2/Air/FIDS/Airport/{k}/{ap}", 0) for ap in ["TPE", "TSA", "KHH", "RMQ"] for k in ["Departure", "Arrival"]]
 JOBS += [("v3/Rail/TRA/Alert", 0), ("v2/Rail/THSR/AlertInfo", 0)] + [(f"v2/Rail/Metro/Alert/{op}", 0) for op in OPS]
 JOBS += [("v3/Rail/TRA/DailyTrainTimetable/Today", 3000), ("v2/Rail/THSR/DailyTimetable/Today", 3000)]
-JOBS += [(f"v2/Rail/Metro/{kind}/{op}", 20 * 3600) for kind in ["S2STravelTime", "Frequency", "FirstLastTimetable"] for op in OPS]
+JOBS += [(f"v2/Rail/Metro/{kind}/{op}", 20 * 3600) for kind in ["S2STravelTime", "Frequency", "FirstLastTimetable"] for op in OPS
+         if not (kind == "Frequency" and op == "KLRT")]  # 輕軌沒有班距資料（TDX 回 400）
 
 
 def fname(path):
@@ -35,7 +36,12 @@ def get(tk, path):
                 return json.load(r)
         except urllib.error.HTTPError as e:
             if e.code == 429 and attempt < 4:
-                time.sleep(1.5 * (attempt + 1))
+                # 超過頻率限制：照 Retry-After 等，沒給就 5、10、20、40 秒
+                try:
+                    wait = float(e.headers.get("Retry-After") or 0)
+                except ValueError:
+                    wait = 0
+                time.sleep(max(wait, 5 * 2 ** attempt))
                 continue
             raise
 
@@ -64,7 +70,7 @@ def main():
             json.dump(data, fp, ensure_ascii=False, separators=(",", ":"))
         files[f] = int(now)
         ok += 1
-        time.sleep(0.25)  # TDX 每把金鑰每秒只收幾次請求
+        time.sleep(1.0)  # TDX 對每把金鑰有頻率限制，一秒最多一個請求比較保險
     meta["updated"] = int(now)
     with open(meta_path, "w", encoding="utf-8") as fp:
         json.dump(meta, fp, ensure_ascii=False, indent=1)
