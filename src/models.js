@@ -104,7 +104,7 @@ function carMesh(L, key, o) {
   const nDoor = DOORS[key] || 2, doorW = L.len > 15 ? 1.4 : 1.1;
   const win = mcol('#141C26'), pane = o.lit ? mcol(o.lit, 1) : mcol('#3A5068'), door = mcol(mixHex(L.body, '#2A3038', 0.16)), under = mcol('#24282E');
   const body = mcol(L.body), roof = mcol(L.roof), cab = L.cab ? mcol(L.cab) : body;
-  const st1 = L.stripe ? mcol(L.stripe) : null, st2 = L.stripe2 ? mcol(L.stripe2) : null, line = !L.stripe && o.line ? mcol(o.line) : null;
+  const band = L.band ? mcol(L.band) : null, st1 = L.stripe ? mcol(L.stripe) : null, st2 = L.stripe2 ? mcol(L.stripe2) : null, line = !L.stripe && o.line ? mcol(o.line) : null;
   const sWin = nl >= 6 ? 0.42 : 1.01;
   // 車門與車窗沿車長的位置（跟 trainDoors 一樣排法）
   const bodyF = o.front === 'nose' ? xf - nl : xf, bodyB = o.back === 'nose' ? xb + nl : xb, span = bodyF - bodyB;
@@ -162,6 +162,8 @@ function carMesh(L, key, o) {
       const lamp = isFront ? o.lampF : o.lampB;
       if (lamp && r > 0.15 && r < 0.31 && Math.abs(y) > aa * 0.3 && Math.abs(y) < aa * 0.8 && (zone === 'dome' || s > 0.9)) return mcol(lamp, 1);
       // 擋風玻璃：短車頭是整片前窗；高鐵這種長鼻子只有鼻根上方一小塊駕駛艙窗
+      // 行先顯示器：擋風玻璃上緣中間一塊橘色 LED（高鐵沒有）
+      if (nl < 6 && det && r > 0.86 && r < 0.93 && Math.abs(y) < aa * 0.32 && (zone === 'dome' || s > 0.7)) return mcol(o.lit ? '#FFB547' : '#E0902E', o.lit ? 1 : 0.55);
       if (nl >= 6 ? (!side && s > 0.12 && s < sWin && r > 0.62 && Math.abs(y) < aa * 0.8) : (r > 0.5 && r < 0.95 && (zone === 'dome' || !side || s > 0.35))) return win;
     }
     if (st2 && r > 0.33 && r < 0.37) return st2;
@@ -169,6 +171,7 @@ function carMesh(L, key, o) {
     if (line && r > 0.42 && r < 0.52) return line;
     if (det && side && zone === 'body' && inDoor(x) && r > 0.21 && r < 0.82) return inDoorWin(x) && r > 0.56 && r < 0.8 ? pane : door;
     if (r > 0.56 && r < 0.80 && side) return det && zone === 'body' && r > 0.6 && r < 0.77 && inPane(x) ? pane : win;
+    if (band && side && r > 0.52 && r < 0.86) return band; // EMU3000 一整條黑色車窗帶
     if (r > 0.95 && !side) return roof;
     if (s > 0 && r < 0.56 && L.cab) return cab;
     return body;
@@ -180,20 +183,62 @@ function carMesh(L, key, o) {
     for (const x of [x0 - dir * 0.05, x1]) r.push(carSection(a0 * 0.36, 0.3 * h, 0.92 * h, 0.4, h, [0.5]).map(([y, z]) => [x, y, z]));
     surf(mb, r, () => mcol('#2A2E33'), true, [x0, 0, 0.6 * h]);
   }
-  // 車底：轉向架與車底設備
-  const gauge = (key === 'THSR' || /^(TRTC|TYMC|TMRT|KRTC)$/.test(key) ? 0.72 : 0.54) * EX;
+  // 車底：轉向架（側架、軸箱、彈簧、車輪）與車底設備箱
+  const gauge = (key === 'THSR' || /^(TRTC|TYMC|TYMC_X|TMRT|KRTC)$/.test(key) ? 0.72 : 0.54) * EX;
+  const frameC = mcol('#1A1D21'), wheelC = mcol('#3B4046'), springC = mcol('#55595F');
   for (const u of [0.13, 0.87]) {
     const bx = xb + len * u, bl = Math.min(2.8, len * 0.16);
-    ellipsoid(mb, [bx, 0, 0.55], bl / 2, gauge + 0.12, 0.24, mcol('#1A1D21'), det ? 12 : 6, det ? 5 : 3, 6);
-    if (det) for (const wx of [-bl * 0.38, bl * 0.38]) for (const sy of [-1, 1]) tube(mb, [bx + wx, sy * (gauge - 0.07), 0.43], [bx + wx, sy * (gauge + 0.07), 0.43], 0.43, 0.43, 14, mcol('#3B4046'));
+    if (!det) { ellipsoid(mb, [bx, 0, 0.55], bl / 2, gauge + 0.12, 0.24, frameC, 6, 3, 6); continue; }
+    ellipsoid(mb, [bx, 0, 0.62], bl * 0.3, gauge - 0.05, 0.12, frameC, 8, 3, 6); // 橫樑
+    for (const sy of [-1, 1]) {
+      ellipsoid(mb, [bx, sy * (gauge + 0.12), 0.58], bl * 0.52, 0.07, 0.17, frameC, 12, 3, 8); // 側架
+      for (const wx of [-bl * 0.38, bl * 0.38]) {
+        tube(mb, [bx + wx, sy * (gauge - 0.07), 0.43], [bx + wx, sy * (gauge + 0.07), 0.43], 0.43, 0.43, 16, wheelC);
+        ellipsoid(mb, [bx + wx, sy * (gauge + 0.2), 0.43], 0.17, 0.07, 0.13, springC, 6, 3, 6); // 軸箱
+        tube(mb, [bx + wx * 0.75, sy * (gauge + 0.12), 0.68], [bx + wx * 0.75, sy * (gauge + 0.12), zb0 - 0.02], 0.1, 0.1, 8, springC, false); // 二次彈簧
+      }
+    }
   }
-  { const ua = xb + len * 0.13 + 1.8, ub = xb + len * 0.87 - 1.8; if (ub > ua) ellipsoid(mb, [(ua + ub) / 2, 0, zb0 - 0.12], (ub - ua) / 2, a0 * 0.7, 0.2, mcol('#2B2F35'), det ? 10 : 6, 4, 6); }
-  // 集電弓（台鐵電聯車、高鐵）
+  { const ua = xb + len * 0.13 + 1.8, ub = xb + len * 0.87 - 1.8;
+    if (ub > ua) {
+      if (!det) ellipsoid(mb, [(ua + ub) / 2, 0, zb0 - 0.12], (ub - ua) / 2, a0 * 0.7, 0.2, mcol('#2B2F35'), 6, 4, 6);
+      else { // 車底設備箱：幾個大小不一的箱子
+        const n = Math.max(2, Math.round((ub - ua) / 3.2));
+        for (let k = 0; k < n; k++) { const c = ua + (ub - ua) * (k + 0.5) / n, wl = (ub - ua) / n * 0.42; ellipsoid(mb, [c, 0, zb0 - 0.2 - 0.05 * (k % 2)], wl, a0 * (0.6 + 0.1 * (k % 2)), 0.24 + 0.05 * (k % 2), mcol(k % 2 ? '#2B2F35' : '#34393F'), 8, 3, 8); }
+      }
+    }
+  }
+  // 裙板：高鐵、普悠瑪、太魯閣、EMU3000 車身下緣延伸蓋住車底
+  if (L.skirt) {
+    const sa = xb + len * 0.13 + 1.6, sb = xb + len * 0.87 - 1.6;
+    if (sb > sa) for (const sy of [-1, 1]) ellipsoid(mb, [(sa + sb) / 2, sy * (a0 - 0.16), zb0 - 0.08], (sb - sa) / 2, 0.08, 0.34, cab === body ? body : mcol(mixHex(L.body, '#8A9098', 0.3)), det ? 12 : 6, 3, 10);
+  }
+  // 車頭下方的排障器與連結器蓋（短車頭的電聯車、捷運）
+  if (det) for (const [x0, dir, kind] of [[xf, 1, o.front], [xb, -1, o.back]]) {
+    if (kind !== 'nose') continue;
+    const tip = x0 + dir * (nl >= 6 ? 0 : 0.05);
+    ellipsoid(mb, [tip - dir * 0.35, 0, zb0 - 0.05], 0.45, a0 * 0.78, 0.28, mcol('#24282E'), 10, 4, 5);
+    if (nl < 6) tube(mb, [tip - dir * 0.2, 0, zb0 + 0.05], [tip + dir * 0.15, 0, zb0 + 0.05], 0.18, 0.15, 8, mcol('#3A3F45'));
+  }
+  // 車頂設備：空調機組（高鐵車頂是整流罩，看不到）
+  const AC = { EMU900: [0.28, 0.72], EMU3000: [0.5], E1000: [0.5], CHUKUANG: [0.5], TEMU1000: [0.5], TEMU2000: [0.5], TRTC: [0.27, 0.73], TYMC: [0.3, 0.7], TYMC_X: [0.3, 0.7], TMRT: [0.3, 0.7], KRTC: [0.27, 0.73], TRTC_Y: [0.5], LRT: [0.5] }[key];
+  if (det && AC) for (const u of AC) {
+    const cx = xb + len * u;
+    if (o.front === 'nose' && cx > bodyF - 1.2 || o.back === 'nose' && cx < bodyB + 1.2 || (o.panto && Math.abs(cx - (xb + len * 0.7)) < 2.2)) continue;
+    const acC = mcol(mixHex(L.roof, '#8A9198', 0.35));
+    ellipsoid(mb, [cx, 0, zt0 + 0.08], Math.min(1.6, len * 0.08), a0 * 0.52, 0.26, acC, 10, 4, 6);
+    for (const dx of [-0.55, 0.55]) ellipsoid(mb, [cx + dx, 0, zt0 + 0.3], 0.36, 0.36, 0.05, mcol('#3C4248'), 10, 2, 2); // 散熱風扇
+  }
+  // 單臂式集電弓：底座、礙子、下臂、上臂、弓頭（兩側羊角）
   if (o.panto && det) {
-    const px = xb + len * 0.7, z0 = zt0 + 0.02, g = mcol('#4A5058'), up = 1.35;
-    for (const sy of [-0.45, 0.45]) { tube(mb, [px - 0.8, sy, z0 + 0.12], [px + 0.2, sy * 0.5, z0 + up * 0.55], 0.04, 0.04, 6, g, false); tube(mb, [px + 0.2, sy * 0.5, z0 + up * 0.55], [px - 0.3, sy * 0.4, z0 + up], 0.035, 0.035, 6, g, false); }
-    tube(mb, [px - 0.3, -0.9, z0 + up], [px - 0.3, 0.9, z0 + up], 0.05, 0.05, 6, mcol('#2C3036'));
-    ellipsoid(mb, [px - 0.6, 0, z0 + 0.06], 0.7, 0.55, 0.08, g, 8, 3, 6);
+    const px = xb + len * 0.7, z0 = zt0 + 0.02, g = mcol('#4A5058'), ins = mcol('#C46A3A'), dark2 = mcol('#2C3036');
+    ellipsoid(mb, [px, 0, z0 + 0.1], 1.0, 0.75, 0.07, g, 8, 3, 8);
+    for (const [dx, dy] of [[-0.8, -0.55], [-0.8, 0.55], [0.8, -0.55], [0.8, 0.55]]) tube(mb, [px + dx, dy, z0], [px + dx, dy, z0 + 0.16], 0.09, 0.07, 8, ins, false);
+    const knee = [px + 1.0, 0, z0 + 0.95], head = [px - 0.15, 0, z0 + 1.7];
+    for (const sy of [-0.28, 0.28]) tube(mb, [px - 0.7, sy, z0 + 0.2], [knee[0], sy * 0.4, knee[2]], 0.05, 0.04, 6, g, false);
+    tube(mb, [knee[0], 0, knee[2]], [head[0], 0, head[2]], 0.04, 0.035, 6, g, false);
+    tube(mb, [head[0], -0.85, head[2]], [head[0], 0.85, head[2]], 0.05, 0.05, 6, dark2);
+    for (const sy of [-1, 1]) tube(mb, [head[0], sy * 0.85, head[2]], [head[0], sy * 1.05, head[2] - 0.15], 0.04, 0.03, 5, dark2, false);
   }
   return mbDone(mb);
 }
@@ -282,11 +327,21 @@ function planeMesh(type, airline, gearDown, lo = false) {
     for (let j = 0; j <= SEG; j++) { const g = -Math.PI / 2 + j / SEG * Math.PI * 2; row.push([x, Math.cos(g) * P.r, z0 + zc + Math.sin(g) * rz]); }
     rows.push(row); info.push({ x, zc: z0 + zc, rz, r: P.r });
   }
-  const winZ = 0.62, stripeZ = 0.36;
+  const winZ = 0.62, stripeZ = 0.36, doorC = mcol(mixHex(Lv.body || '#EEF1F4', '#7D8790', 0.28));
+  // 艙門位置（機頭往後）：窄體機前後各一＋翼上逃生門；廣體機每側四到五個
+  const cabLen = cabinF - cabinA, doorX = (T.L > 55 ? [0.02, 0.3, 0.62, 0.97] : T.prop ? [0.03, 0.97] : [0.03, 0.5, 0.97]).map(u => cabinF - cabLen * u);
   surf(mb, rows, (i, j) => {
     const A = rows[i][j], B = rows[i + 1][j + 1], x = (A[0] + B[0]) / 2, y = (A[1] + B[1]) / 2, z = (A[2] + B[2]) / 2, I = info[i];
     const rel = I.rz > 0.01 ? (z - I.zc) / I.rz : 0, hz = (rel + 1) / 2; // 0 機腹 ~ 1 機頂
-    if (x > nose - noseLen * 0.78 && x < nose - noseLen * 0.42 && hz > 0.6 && hz < 0.86 && Math.abs(y) < I.r * 0.85 && Math.abs(y) > I.r * 0.08) return dark;
+    // 駕駛艙擋風玻璃：左右各兩、三片，中間窗框；A350 的窗框一圈塗黑（「浣熊面罩」）
+    if (x > nose - noseLen * 0.8 && x < nose - noseLen * 0.4 && hz > 0.58 && hz < 0.88 && Math.abs(y) < I.r * 0.88) {
+      const ay = Math.abs(y) / I.r;
+      if (type === 'A359') return dark;
+      if (ay < 0.07 || (ay > 0.42 && ay < 0.5) || hz > 0.84 || hz < 0.62) return body === belly && !Lv.body ? mcol('#D5DADF') : body;
+      return dark;
+    }
+    // 艙門：比機身略深的長方形（左右對稱），門上一個小窗
+    if (!lo && Math.abs(y) > I.r * 0.55 && hz > 0.3 && hz < 0.8) for (const dx of doorX) if (Math.abs(x - dx) < 0.55) return Math.abs(x - dx) < 0.18 && Math.abs(hz - winZ) < 0.05 ? dark : doorC;
     if (x < cabinF && x > cabinA && Math.abs(hz - winZ) < 0.055 && Math.abs(y) > I.r * 0.5) {
       if (lo) return dark; // 遠看：窗戶連成一條線
       const ph = ((x - (tailEnd + tailLen)) / pitchW) % 1;
@@ -324,6 +379,7 @@ function planeMesh(type, airline, gearDown, lo = false) {
       for (let i = 0; i <= 14; i++) { const u = i / 14, x = ef - T.le * u, r = er * prf(u), row = []; for (let j = 0; j <= 18; j++) { const g = j / 18 * Math.PI * 2; row.push([x, s * ey + Math.cos(g) * r, ezc + Math.sin(g) * r]); } nr.push(row); }
       surf(mb, nr, i => i === 0 ? dark : metal, true, [(ea + ef) / 2, s * ey, ezc]);
       tube(mb, [ef - 0.25, s * ey, ezc], [ef - 0.2, s * ey, ezc], er * 0.86, er * 0.86, 18, dark); // 進氣口內的風扇
+      tube(mb, [ef - 0.3, s * ey, ezc], [ef + 0.25, s * ey, ezc], er * 0.22, 0.02, 10, metal, false); // 鼻錐
       tube(mb, [ea + 0.2, s * ey, ezc], [ea - T.le * 0.18, s * ey, ezc], er * 0.5, 0.05, 10, mcol('#5B636B'), false); // 尾錐
       foil(mb, [0, 1].map(u => ({ x: ef - T.le * 0.25 + u * 0.4, y: s * ey, z: ezc + er * 0.8 + (wz(ey) - ezc - er * 0.8 + 0.2) * u, c: T.le * 0.75, t: 0.12 })), 'y', () => metal, NCf);
     }
@@ -336,15 +392,32 @@ function planeMesh(type, airline, gearDown, lo = false) {
   foil(mb, [0, 0.25, 0.5, 0.75, 1].map(u => ({ x: finLE + 0.6 * (1 - u) - u * T.fin * finTanSw, y: 0, z: finBase + u * T.fin, c: finRoot * (1 - 0.6 * u) + (u === 0 ? 0.8 : 0), t: 0.12 - 0.03 * u })), 'y', (i, j, n) => tail2 && i >= n - 2 ? tail2 : tail, NCf);
   const hsZ = T.prop ? finBase + T.fin * 0.97 : z0 + D * 0.42, hsLE = T.prop ? finLE - T.fin * finTanSw + 0.2 : tailEnd + tailLen * 0.42, hsC = T.cr * 0.5, hsTan = Math.tan((T.prop ? 8 : 32) / DEG);
   for (const s of [-1, 1]) foil(mb, [0, 0.35, 0.7, 1].map(u => ({ x: hsLE - u * T.hs * hsTan, y: s * (0.3 + u * (T.hs - 0.3)), z: hsZ + u * T.hs * (T.prop ? 0 : 0.08), c: hsC * (1 - 0.55 * u), t: 0.1 })), 'z', () => wingC, NCf);
-  // 起落架
+  // 襟翼滑軌整流罩：主翼後緣下方的獨木舟形狀
+  if (!lo && !T.prop) for (const s of [-1, 1]) for (const u of [0.18, 0.38, 0.58]) {
+    const y = R + (semi - R) * u, xc = le(y) - ch(y) * 0.85;
+    ellipsoid(mb, [xc, s * y, wz(y) - 0.22], ch(y) * 0.32, 0.22, 0.28, wingC, 8, 4, 2.2);
+  }
+  // 燈：機頂、機腹紅色防撞燈，左翼尖紅、右翼尖綠的航行燈，機尾白燈
+  { const red = mcol('#FF3B30', 1), mid = (cabinF + cabinA) / 2;
+    ellipsoid(mb, [mid, 0, z0 + D + 0.05], 0.18, 0.18, 0.1, red, 6, 3);
+    ellipsoid(mb, [mid - L * 0.05, 0, z0 - 0.04], 0.18, 0.18, 0.1, red, 6, 3);
+    for (const s of [-1, 1]) ellipsoid(mb, [le(semi) - 0.3, s * (semi + 0.05), wz(semi)], 0.16, 0.12, 0.1, mcol(s > 0 ? '#38E07A' : '#FF3B30', 1), 6, 3);
+    ellipsoid(mb, [tailEnd - 0.05, 0, z0 + D * 0.62], 0.12, 0.12, 0.12, mcol('#FFFFFF', 1), 6, 3);
+  }
+  // 機尾 APU 排氣口
+  if (!T.prop) tube(mb, [tailEnd + 0.4, 0, z0 + D * 0.62], [tailEnd - 0.08, 0, z0 + D * 0.62], 0.22, 0.2, 10, mcol('#3A3F45'));
+  // 起落架：鼻輪兩輪；主輪窄體每側兩輪，A330／787／A350 每側四輪，777 每側六輪（三軸台車）
   if (gearDown) {
     const g = T.gear, nx = nose - noseLen * 1.05, wr = Math.min(0.62, g * 0.32);
     tube(mb, [nx, 0, z0 + 0.3], [nx, 0, wr], 0.12, 0.1, 8, gearC, false);
+    tube(mb, [nx + 0.25, 0, z0 + 0.1], [nx, 0, wr + 0.4], 0.05, 0.05, 6, gearC, false); // 斜撐
     for (const sy of [-1, 1]) tube(mb, [nx, sy * 0.12, wr], [nx, sy * 0.38, wr], wr * 0.85, wr * 0.85, 12, tire);
-    const big = T.L > 55, y0 = R * (T.prop ? 0.95 : 1.1), gf = rootLE - T.cr * 0.72;
+    const axles = type === 'B77W' ? 3 : T.L > 55 ? 2 : 1, y0 = R * (T.prop ? 0.95 : 1.1), gf = rootLE - T.cr * 0.72, ax = 1.45;
     for (const s of [-1, 1]) {
       tube(mb, [gf, s * y0, z0 + D * 0.2], [gf, s * y0, wr * 1.2], 0.2, 0.17, 8, gearC, false);
-      for (const dx of big ? [-0.75, 0.75] : [0]) for (const dy of [-0.32, 0.32]) tube(mb, [gf + dx, s * y0 + dy - 0.16, wr * 1.05], [gf + dx, s * y0 + dy + 0.16, wr * 1.05], wr * 1.05, wr * 1.05, 14, tire);
+      tube(mb, [gf, s * y0, z0 + D * 0.15], [gf + 1.2, s * (y0 - 0.9), z0 + D * 0.45], 0.08, 0.08, 6, gearC, false); // 側撐桿
+      if (axles > 1) tube(mb, [gf - ax * (axles - 1) / 2 - 0.2, s * y0, wr * 1.05], [gf + ax * (axles - 1) / 2 + 0.2, s * y0, wr * 1.05], 0.12, 0.12, 6, gearC); // 台車樑
+      for (let k = 0; k < axles; k++) { const dx = (k - (axles - 1) / 2) * ax; for (const dy of [-0.34, 0.34]) tube(mb, [gf + dx, s * y0 + dy - 0.17, wr * 1.05], [gf + dx, s * y0 + dy + 0.17, wr * 1.05], wr * 1.05, wr * 1.05, 14, tire); }
     }
   }
   return mbDone(mb);
