@@ -1524,7 +1524,7 @@ const TDX = {
    音色：鋼琴用帶不和諧泛音與琴槌聲的加法合成，電鋼琴用 FM 合成，整體再過一層錄音帶走音、
    飽和與 sidechain（大鼓響時其他聲音稍微讓開），聽起來比較像真的 lofi 唱片。 */
 const Music = (() => {
-  let ctx = null, master = null, verb = null, noise = null, timer = null;
+  let ctx = null, master = null, verb = null, noise = null, timer = null, crackle = null;
   let playing = false, idx = 0, sess = null, pausedAt = 0, cut = 0; // cut：從小節中間開始播時，比這個時間早的音符不排
   const listeners = new Set();
   const emit = () => listeners.forEach(f => { try { f(); } catch {} });
@@ -1544,6 +1544,23 @@ const Music = (() => {
     return { root, bass, tones, iv, pcs: new Set(iv.map(i => (root + i) % 12)) };
   }
 
+  const PHRASES = {
+    lofi: [
+      [[0, 4, 3], [3, 3, 3], [6, 2, 6], [16, 3, 2], [18, 2, 2], [20, 1, 4], [24, 0, 8]],
+      [[2, 2, 2], [4, 4, 4], [8, 5, 6], [16, 4, 3], [19, 2, 3], [22, 1, 10]],
+      [[0, 7, 2], [2, 6, 2], [4, 4, 6], [12, 2, 4], [16, 3, 6], [24, 2, 8]],
+      [[4, 2, 2], [6, 3, 2], [8, 4, 8], [20, 3, 2], [22, 1, 2], [24, 2, 8]],
+    ],
+    cafe: [
+      [[0, 4, 2], [2, 5, 2], [4, 7, 4], [8, 6, 2], [10, 4, 2], [12, 5, 4], [16, 4, 2], [18, 2, 2], [20, 3, 2], [22, 1, 2], [24, 2, 8]],
+      [[2, 0, 2], [4, 2, 2], [6, 4, 2], [8, 5, 4], [12, 4, 4], [18, 7, 2], [20, 6, 2], [22, 4, 2], [24, 5, 8]],
+      [[0, 7, 4], [4, 5, 2], [6, 4, 2], [8, 2, 4], [14, 4, 2], [16, 5, 4], [20, 4, 2], [22, 2, 2], [24, 4, 8]],
+    ],
+    bossa: [
+      [[0, 4, 3], [3, 5, 3], [6, 4, 2], [8, 2, 6], [16, 3, 3], [19, 4, 3], [22, 2, 2], [24, 1, 8]],
+      [[2, 2, 2], [4, 4, 4], [10, 5, 2], [12, 4, 4], [18, 2, 2], [20, 3, 2], [22, 1, 2], [24, 0, 8]],
+    ],
+  };
   /* ---------- 曲目 ----------
      style：lofi（慵懶 swing 鼓、黑膠底噪、溫暖的電鋼琴）、cafe（爵士刷鼓與走路貝斯）、bossa（巴薩諾瓦撥弦） */
   const TRACKS = [
@@ -1560,23 +1577,11 @@ const Music = (() => {
     return { ...t, id: i, bar, bars, dur: bars * bar, chords: t.prog.map(c => chord(c, 64)), motif: makeMotif(i, t) };
   });
 
-  /* 每首曲子一個兩小節的旋律動機（16 分音符格、音階級數、長度），整首都從它變化出來 */
+  /* 旋律動機：手寫的兩小節樂句（16 分音符格 s、五聲音階級數 d、長度 len），每首挑一個，整首都從它變化出來。
+     以前是隨機漫步產生的旋律，聽起來沒有方向；這些樂句有起伏、有呼吸（留白），比較像人寫的 */
   function makeMotif(id, t) {
-    const R = rngOf(id * 977 + 3), notes = [];
-    const slow = t.style === 'lofi';
-    let d = 2 + Math.floor(R() * 3);
-    for (let s = 0; s < 32;) {
-      const strong = s % 8 === 0;
-      if (s >= 24 && notes.length) { notes[notes.length - 1].len = Math.max(notes[notes.length - 1].len, 32 - notes[notes.length - 1].s); break; }
-      if (R() < (strong ? 0.85 : slow ? 0.42 : 0.55)) {
-        d += [-2, -1, -1, 0, 1, 1, 2][Math.floor(R() * 7)];
-        d = Math.max(0, Math.min(9, d));
-        const len = [2, 2, 3, 4, 4, 6][Math.floor(R() * 6)];
-        notes.push({ s, d, len });
-        s += len;
-      } else s += 2;
-    }
-    return notes;
+    const list = PHRASES[t.style] || PHRASES.lofi, P = list[(id * 3 + 1) % list.length];
+    return P.map(([s, d, len]) => ({ s, d, len }));
   }
 
   /* ---------- 音色 ---------- */
@@ -1590,39 +1595,46 @@ const Music = (() => {
     const o = ctx.createOscillator(); o.type = type; o.frequency.value = f; o.detune.value = det;
     o.connect(out); o.start(t); o.stop(end); return o;
   }
-  // 鋼琴：四個帶一點不和諧（inharmonic）的泛音，越高的泛音衰減越快；力度越大音色越亮；加上琴槌敲擊聲
+  // 鋼琴：每個音兩條微微走音的弦（豐富泛音的波形），濾波器由亮慢慢變暗、高音衰減比較快；加上很輕的琴槌聲。
+  // 以前用四個正弦波疊出來，聽起來像電子琴
+  let pianoWave = null, pianoCtx = null;
+  function pianoWaveOf() {
+    if (pianoCtx === ctx) return pianoWave;
+    const N = 16, re = new Float32Array(N), im = new Float32Array(N);
+    for (let n = 1; n < N; n++) im[n] = Math.pow(n, -1.35) * (n % 2 ? 1 : 0.82) * (n === 7 || n === 14 ? 0.3 : 1);
+    pianoCtx = ctx; return (pianoWave = ctx.createPeriodicWave(re, im));
+  }
   function piano(bus, m, t, len, vel) {
     if (t < cut) return;
-    const f = hz(m), dec = Math.max(0.9, Math.min(4.5, 3.2 - (m - 60) * 0.06)), end = t + len, stopAt = end + 0.9;
-    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.Q.value = 0.2;
-    const bright = 900 + vel * 3200 + (m - 48) * 25;
-    lp.frequency.setValueAtTime(bright, t); lp.frequency.setTargetAtTime(bright * 0.45, t + 0.02, 0.5);
-    lp.connect(bus);
-    [[1, 1], [2, 0.42], [3, 0.16], [4, 0.07]].forEach(([n, a]) => {
-      const g = ctx.createGain(), fn = f * n * Math.sqrt(1 + 0.00035 * n * n);
-      g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.11 * vel * a, t + 0.004);
-      g.gain.setTargetAtTime(0.0001, t + 0.004, dec / Math.pow(n, 0.8) / 2.2);
-      g.gain.setTargetAtTime(0.0001, end, 0.09);
-      g.connect(lp); osc('sine', fn, t, stopAt, g, n === 1 ? -3 : 0);
-      if (n === 1) osc('sine', fn, t, stopAt, g, 3); // 兩條弦微微走音，有合唱感
-    });
-    // 琴槌：很短的濾波噪音
+    const f = hz(m), dec = Math.max(0.8, Math.min(5, 3.6 - (m - 60) * 0.07)), end = t + len, stopAt = end + 1.0;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.Q.value = 0.3;
+    const bright = Math.min(9000, f * (2.2 + vel * 4) + 600);
+    lp.frequency.setValueAtTime(bright, t); lp.frequency.setTargetAtTime(Math.max(f * 1.6, bright * 0.35), t + 0.01, 0.35 + dec * 0.1);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.085 * vel, t + 0.005);
+    g.gain.setTargetAtTime(0.03 * vel, t + 0.005, 0.12); g.gain.setTargetAtTime(0.0001, t + 0.25, dec / 2.5);
+    g.gain.setTargetAtTime(0.0001, end, 0.12);
+    g.connect(lp); lp.connect(bus);
+    const w = pianoWaveOf();
+    for (const det of [-3.5, 3.5]) { const o = ctx.createOscillator(); o.setPeriodicWave(w); o.frequency.value = f; o.detune.value = det; o.connect(g); o.start(t); o.stop(stopAt); }
     const s = ctx.createBufferSource(); s.buffer = noise;
-    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = Math.min(6000, f * 5); bp.Q.value = 1.2;
-    const hg = ctx.createGain(); hg.gain.setValueAtTime(0.02 * vel, t); hg.gain.exponentialRampToValueAtTime(0.0001, t + 0.02);
-    s.connect(bp); bp.connect(hg); hg.connect(bus); s.start(t, Math.random()); s.stop(t + 0.04);
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = Math.min(3500, f * 3); bp.Q.value = 0.9;
+    const hg = ctx.createGain(); hg.gain.setValueAtTime(0.008 * vel, t); hg.gain.exponentialRampToValueAtTime(0.0001, t + 0.025);
+    s.connect(bp); bp.connect(hg); hg.connect(bus); s.start(t, Math.random()); s.stop(t + 0.05);
   }
   // 電鋼琴（Rhodes）：FM 合成。調變量隨時間變小，起音帶一點金屬「叮」聲，之後變得圓潤
   function rhodes(bus, m, t, len, vel) {
     if (t < cut) return;
     const f = hz(m), end = t + len, stopAt = end + 1.2;
-    const g = ctx.createGain(); adsr(g, t, 0.004, 0.13 * vel, 1.6, 0.045 * vel, end, 0.5);
-    g.connect(bus);
-    const car = ctx.createOscillator(); car.frequency.value = f; car.detune.value = (Math.random() - 0.5) * 6;
+    // 調變量比以前小，起音的金屬聲也收斂，聲音比較圓、比較暖
+    const g = ctx.createGain(); adsr(g, t, 0.006, 0.12 * vel, 1.4, 0.05 * vel, end, 0.6);
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = Math.min(8000, 2600 + f * 6); lp.Q.value = 0.4;
+    g.connect(lp); lp.connect(bus);
+    const car = ctx.createOscillator(); car.frequency.value = f; car.detune.value = (Math.random() - 0.5) * 5;
     const mod = ctx.createOscillator(); mod.frequency.value = f;
-    const mi = ctx.createGain(); mi.gain.setValueAtTime(f * (0.4 + vel * 1.4), t); mi.gain.setTargetAtTime(f * 0.12, t, 0.35);
+    const mi = ctx.createGain(); mi.gain.setValueAtTime(f * (0.7 + vel * 1.3), t); mi.gain.setTargetAtTime(f * 0.4, t, 0.4);
     const tine = ctx.createOscillator(); tine.frequency.value = f * 14;
-    const ti = ctx.createGain(); ti.gain.setValueAtTime(f * 0.5 * vel, t); ti.gain.setTargetAtTime(0, t, 0.025);
+    const ti = ctx.createGain(); ti.gain.setValueAtTime(f * 0.3 * vel, t); ti.gain.setTargetAtTime(0, t, 0.02);
     mod.connect(mi); mi.connect(car.frequency); tine.connect(ti); ti.connect(car.frequency);
     car.connect(g);
     [car, mod, tine].forEach(o => { o.start(t); o.stop(stopAt); });
@@ -1658,26 +1670,29 @@ const Music = (() => {
     const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(peak, t + att); g.gain.setTargetAtTime(0.0001, t + att, dec / 4);
     s.connect(fl); fl.connect(g); g.connect(bus); s.start(t, Math.random() * 1.5); s.stop(t + att + dec + 0.05);
   }
+  // 大鼓：低頻正弦往下滑，加一點軟的鼓皮聲；比以前圓、比較不像電子音效
   function kick(S, t, vel) {
     if (t < cut) return;
     const o = ctx.createOscillator(), g = ctx.createGain();
-    o.frequency.setValueAtTime(140, t); o.frequency.exponentialRampToValueAtTime(48, t + 0.09);
-    g.gain.setValueAtTime(0.85 * vel, t); g.gain.setTargetAtTime(0.0001, t + 0.02, 0.1);
-    o.connect(g); g.connect(S.drums); o.start(t); o.stop(t + 0.5);
-    noiseHit(S.drums, t, 'highpass', 2500, 0.7, 0.05 * vel, 0.012); // 鼓槌的「喀」
+    o.frequency.setValueAtTime(120, t); o.frequency.exponentialRampToValueAtTime(52, t + 0.06); o.frequency.exponentialRampToValueAtTime(44, t + 0.3);
+    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.65 * vel, t + 0.004); g.gain.setTargetAtTime(0.0001, t + 0.03, 0.08);
+    o.connect(g); g.connect(S.drums); o.start(t); o.stop(t + 0.55);
+    noiseHit(S.drums, t, 'lowpass', 1200, 0.5, 0.06 * vel, 0.02); // 鼓槌的悶響
     // sidechain：大鼓響的瞬間，和弦與貝斯稍微讓開，再慢慢回來
-    const d = S.duck.gain, depth = S.track.style === 'lofi' ? 0.55 : 0.8;
-    d.setValueAtTime(1, t); d.linearRampToValueAtTime(depth, t + 0.015); d.setTargetAtTime(1, t + 0.03, 0.11);
+    const d = S.duck.gain, depth = S.track.style === 'lofi' ? 0.7 : 0.85;
+    d.setValueAtTime(1, t); d.linearRampToValueAtTime(depth, t + 0.02); d.setTargetAtTime(1, t + 0.04, 0.12);
   }
+  // 小鼓：鼓身的音高加上中頻的響弦噪音，lofi 曲子再過低通，聽起來像取樣自老唱片
   function snare(S, t, vel) {
     if (t < cut) return;
-    noiseHit(S.drums, t, 'bandpass', 1900, 0.7, 0.15 * vel, 0.16);
-    noiseHit(S.drums, t, 'lowpass', 4200, 0.3, 0.035 * vel, 0.22);
-    const o = ctx.createOscillator(), g = ctx.createGain(); o.frequency.setValueAtTime(200, t); o.frequency.exponentialRampToValueAtTime(160, t + 0.08);
-    g.gain.setValueAtTime(0.12 * vel, t); g.gain.setTargetAtTime(0.0001, t, 0.035); o.connect(g); g.connect(S.drums); o.start(t); o.stop(t + 0.2);
+    noiseHit(S.drums, t, 'bandpass', 2200, 0.8, 0.11 * vel, 0.13);
+    noiseHit(S.drums, t, 'highpass', 4500, 0.5, 0.05 * vel, 0.1);
+    const o = ctx.createOscillator(), g = ctx.createGain(); o.type = 'triangle'; o.frequency.setValueAtTime(230, t); o.frequency.exponentialRampToValueAtTime(175, t + 0.05);
+    g.gain.setValueAtTime(0.16 * vel, t); g.gain.setTargetAtTime(0.0001, t + 0.005, 0.03); o.connect(g); g.connect(S.drums); o.start(t); o.stop(t + 0.2);
   }
-  const hat = (S, t, vel, open) => noiseHit(S.drums, t, 'bandpass', 7600, 1.4, (open ? 0.03 : 0.04) * vel, open ? 0.16 : 0.035);
-  const brush = (S, t, vel, long) => noiseHit(S.drums, t, 'bandpass', 3600, 1.1, (long ? 0.018 : 0.026) * vel, long ? 0.16 : 0.08, long ? 0.03 : 0.004);
+  // 腳踏鈸：高通的短噪音，音量比以前小，不會一直嘶嘶響
+  const hat = (S, t, vel, open) => noiseHit(S.drums, t, 'highpass', 6000, 0.6, (open ? 0.06 : 0.08) * vel, open ? 0.18 : 0.03);
+  const brush = (S, t, vel, long) => noiseHit(S.drums, t, 'bandpass', 3600, 1.1, (long ? 0.016 : 0.022) * vel, long ? 0.16 : 0.08, long ? 0.03 : 0.004);
   function rim(S, t, vel) {
     if (t < cut) return;
     noiseHit(S.drums, t, 'bandpass', 1900, 7, 0.14 * vel, 0.04);
@@ -1715,14 +1730,14 @@ const Music = (() => {
       if (T.style === 'cafe' && !brk && !intro) {
         const fifth = C.bass + 7 - (C.bass + 7 > 55 ? 12 : 0);
         const walk = [C.bass, R() < 0.5 ? fifth : C.bass + C.iv[1], R() < 0.5 ? C.bass + C.iv[2] : C.bass + 12 - 2, next.bass + (R() < 0.5 ? 1 : -1)];
-        walk.forEach((m, b) => bass(S.keys, m, at(b * 4), T.bar / 4 * 0.8, (b === 0 ? 0.9 : 0.75) * fade, true));
+        walk.forEach((m, b) => bass(S.low, m, at(b * 4), T.bar / 4 * 0.8, (b === 0 ? 0.9 : 0.75) * fade, true));
       } else if (T.style === 'bossa') {
         const fifth = C.bass + 7 - (C.bass + 7 > 55 ? 12 : 0);
-        [[0, C.bass, 5], [6, fifth, 2], [8, fifth, 5], [14, C.bass, 2]].forEach(([s, m, l]) => bass(S.keys, m, at(s), st * l, 0.8 * fade, true));
+        [[0, C.bass, 5], [6, fifth, 2], [8, fifth, 5], [14, C.bass, 2]].forEach(([s, m, l]) => bass(S.low, m, at(s), st * l, 0.8 * fade, true));
       } else {
-        bass(S.keys, C.bass, at(0), T.bar * 0.6, 0.85 * fade);
-        if (R() < 0.55) bass(S.keys, C.bass + (R() < 0.5 ? 7 : 12), at(10), T.bar * 0.22, 0.55 * fade);
-        if (R() < 0.3) bass(S.keys, next.bass + (next.bass > C.bass ? -1 : 1), at(14), st * 2, 0.45 * fade);
+        bass(S.low, C.bass, at(0), T.bar * 0.6, 0.85 * fade);
+        if (R() < 0.55) bass(S.low, C.bass + (R() < 0.5 ? 7 : 12), at(10), T.bar * 0.22, 0.55 * fade);
+        if (R() < 0.3) bass(S.low, next.bass + (next.bass > C.bass ? -1 : 1), at(14), st * 2, 0.45 * fade);
       }
     }
 
@@ -1733,7 +1748,7 @@ const Music = (() => {
         const kicks = R() < 0.5 ? [0, 7, 10] : [0, 3, 10];
         kicks.forEach((s, i) => kick(S, at(s), i ? 0.6 : 0.9));
         [4, 12].forEach(s => snare(S, at(s), 0.75));
-        for (let s = 0; s < 16; s += 2) hat(S, at(s), s % 4 ? 0.5 : 0.85, s === 14 && R() < 0.25);
+        for (let s = 0; s < 16; s += 2) hat(S, at(s), (s % 4 ? 0.45 : 0.8) * (0.85 + R() * 0.3), s === 14 && R() < 0.2);
         if (fill) { snare(S, at(14), 0.35); snare(S, at(15), 0.45); }
         else if (R() < 0.3) hat(S, at(15), 0.3);
       } else if (T.style === 'cafe') {
@@ -1784,15 +1799,20 @@ const Music = (() => {
   }
   function init() {
     ctx = new (window.AudioContext || window.webkitAudioContext)();
-    master = ctx.createGain(); master.gain.value = 0.75;
+    buildGraph();
+  }
+  function buildGraph() {
+    master = ctx.createGain(); master.gain.value = 0.6;
     // 輕微飽和：讓聲音比較厚、比較「類比」
     const sat = ctx.createWaveShaper(), curve = new Float32Array(1024);
-    for (let i = 0; i < 1024; i++) { const x = i / 511.5 - 1; curve[i] = Math.tanh(x * 1.6) / Math.tanh(1.6); }
-    sat.curve = curve; sat.oversample = '2x';
-    const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -16; comp.ratio.value = 3; comp.attack.value = 0.01; comp.release.value = 0.2;
-    verb = ctx.createConvolver(); verb.buffer = makeImpulse(2.6, 1);
-    const wet = ctx.createGain(); wet.gain.value = 0.32; verb.connect(wet); wet.connect(master);
-    master.connect(sat); sat.connect(comp); comp.connect(ctx.destination);
+    // 以前推得太用力（整體失真、聲音發扁），現在只留一點溫暖的飽和，再用壓縮器黏合、限幅器擋住破音
+    for (let i = 0; i < 1024; i++) { const x = i / 511.5 - 1; curve[i] = Math.tanh(x * 1.1) / Math.tanh(1.1); }
+    sat.curve = curve; sat.oversample = '4x';
+    const glue = ctx.createDynamicsCompressor(); glue.threshold.value = -20; glue.ratio.value = 2; glue.knee.value = 10; glue.attack.value = 0.03; glue.release.value = 0.25;
+    const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -3; comp.ratio.value = 20; comp.knee.value = 0; comp.attack.value = 0.002; comp.release.value = 0.1;
+    verb = ctx.createConvolver(); verb.buffer = makeImpulse(2.2, 1);
+    const wet = ctx.createGain(); wet.gain.value = 0.26; verb.connect(wet); wet.connect(master);
+    master.connect(glue); glue.connect(sat); sat.connect(comp); comp.connect(ctx.destination);
     noise = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
     { const d = noise.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1; }
   }
@@ -1810,8 +1830,8 @@ const Music = (() => {
     // 訊號流：樂器 → (keys/lead 經過 sidechain duck) → 錄音帶走音 → 音色濾波 → 淡入淡出 → master；另送一份到殘響
     const bus = ctx.createGain(); bus.gain.setValueAtTime(0, now); bus.gain.linearRampToValueAtTime(1, now + (at > 0 ? 0.3 : 0.05));
     bus.connect(master);
-    const tone = ctx.createBiquadFilter(); tone.type = 'lowpass'; tone.frequency.value = lofi ? 4200 : 11000; tone.Q.value = 0.5;
-    const low = ctx.createBiquadFilter(); low.type = 'highshelf'; low.frequency.value = 6000; low.gain.value = lofi ? -4 : -1;
+    const tone = ctx.createBiquadFilter(); tone.type = 'lowpass'; tone.frequency.value = lofi ? 9500 : 14000; tone.Q.value = 0.5;
+    const low = ctx.createBiquadFilter(); low.type = 'highshelf'; low.frequency.value = 6000; low.gain.value = lofi ? -2.5 : -1;
     tone.connect(low); low.connect(bus);
     const tape = ctx.createDelay(0.1); tape.delayTime.value = 0.02; tape.connect(tone);
     const stops = [];
@@ -1820,18 +1840,36 @@ const Music = (() => {
       const l = ctx.createOscillator(), g = ctx.createGain(); l.frequency.value = f; g.gain.value = d; l.connect(g); g.connect(tape.delayTime); l.start(now); stops.push(l);
     });
     const duck = ctx.createGain(); duck.connect(tape);
-    const keys = ctx.createGain(); keys.gain.value = T.keys === 'rhodes' ? 1.1 : 1; keys.connect(duck);
-    const lead = ctx.createGain(); lead.gain.value = 0.85; lead.connect(duck);
+    // 以前低音太重（八成的能量在 150Hz 以下），手機喇叭放不出來，剩下的中頻又太小聲，聽起來又悶又糊。
+    // 貝斯改走自己的音軌、音量降低並切掉超低頻；和弦與旋律拉高
+    const keys = ctx.createGain(); keys.gain.value = T.keys === 'rhodes' ? 1.7 : 1.5; keys.connect(duck);
+    const lead = ctx.createGain(); lead.gain.value = 1.5; lead.connect(duck);
+    const lowBus = ctx.createGain(); lowBus.gain.value = 0.42;
+    const lowHp = ctx.createBiquadFilter(); lowHp.type = 'highpass'; lowHp.frequency.value = 40; lowHp.Q.value = 0.6;
+    lowBus.connect(lowHp); lowHp.connect(duck);
     // 電鋼琴的左右顫音（auto-pan）
     if (T.keys === 'rhodes') {
       const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
       if (pan) { keys.disconnect(); keys.connect(pan); pan.connect(duck); const l = ctx.createOscillator(), g = ctx.createGain(); l.frequency.value = 3.2; g.gain.value = 0.3; l.connect(g); g.connect(pan.pan); l.start(now); stops.push(l); }
     }
-    const drums = ctx.createGain(); drums.gain.value = lofi ? 0.55 : 0.5;
-    const dlp = ctx.createBiquadFilter(); dlp.type = 'lowpass'; dlp.frequency.value = lofi ? 5200 : 9000;
+    const drums = ctx.createGain(); drums.gain.value = lofi ? 0.5 : 0.45;
+    const dlp = ctx.createBiquadFilter(); dlp.type = 'lowpass'; dlp.frequency.value = lofi ? 10000 : 14000;
     drums.connect(dlp); dlp.connect(tape);
-    const send = ctx.createGain(); send.gain.value = lofi ? 0.55 : 0.4; duck.connect(send); send.connect(verb);
-    sess = { track: T, bus, send, duck, keys, lead, drums, stops, startAt: now + 0.12 - Math.min(at, T.dur - 0.5), next: k };
+    const send = ctx.createGain(); send.gain.value = lofi ? 0.5 : 0.35; duck.connect(send); send.connect(verb);
+    // 黑膠底噪：零星的爆音加上很輕的嘶聲，lofi 曲子才有
+    if (lofi) {
+      if (!crackle) {
+        const n = ctx.sampleRate * 4; crackle = ctx.createBuffer(1, n, ctx.sampleRate); const d = crackle.getChannelData(0); let h = 0;
+        for (let i = 0; i < n; i++) { h += ((Math.random() * 2 - 1) - h) * 0.25; d[i] = h * 0.05; }
+        for (let c = 0; c < 70; c++) { const at = Math.floor(Math.random() * (n - 200)), a = (Math.random() < 0.15 ? 0.9 : 0.35) * (Math.random() < 0.5 ? 1 : -1); for (let j = 0; j < 40; j++) d[at + j] += a * Math.exp(-j / 6) * (j % 2 ? -0.6 : 1); }
+      }
+      const src = ctx.createBufferSource(); src.buffer = crackle; src.loop = true;
+      const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 900;
+      const lpf = ctx.createBiquadFilter(); lpf.type = 'lowpass'; lpf.frequency.value = 7000;
+      const cg = ctx.createGain(); cg.gain.value = 0.09;
+      src.connect(hp); hp.connect(lpf); lpf.connect(cg); cg.connect(bus); src.start(now); stops.push(src);
+    }
+    sess = { track: T, bus, send, duck, keys, lead, low: lowBus, drums, stops, startAt: now + 0.12 - Math.min(at, T.dur - 0.5), next: k };
     cut = now + 0.1;
     clearInterval(timer); timer = setInterval(tick, 100); tick();
   }
@@ -1879,7 +1917,20 @@ const Music = (() => {
     s.connect(lp); lp.connect(g); g.connect(ctx.destination); s.start(t); s.stop(t + len + 0.1);
   }
 
+  /* 離線算出一段音樂（測試與試聽用）：把整段的小節一次排好，用 OfflineAudioContext 算成音訊 */
+  async function renderOffline(i, sec, from = 0) {
+    const saved = { ctx, master, verb, noise, sess, idx, cut, timer, crackle };
+    try {
+      const SR = 44100; ctx = new OfflineAudioContext(2, Math.ceil(SR * sec), SR); sess = null; crackle = null;
+      buildGraph(); idx = i;
+      startSession(from); clearInterval(timer);
+      const S = sess; while (S.next < S.track.bars && S.startAt + S.next * S.track.bar < sec + 1) scheduleBar(S, S.next++);
+      return await ctx.startRendering();
+    } finally { clearInterval(timer); ({ ctx, master, verb, noise, sess, idx, cut, timer, crackle } = saved); }
+  }
+
   const api = {
+    renderOffline,
     tracks: TRACKS.map(({ id, title, mood, dur }) => ({ id, title, mood, dur })),
     get playing() { return playing; },
     get index() { return idx; },
@@ -2802,6 +2853,18 @@ function viaductFeatures(trip, k0, k1, P, mb, seen, O) {
   flush();
 }
 
+/* 軌道去重：同一股道會被好幾班車（上下行、不同車次）各畫一次，取樣點也不會剛好對齊。
+   以 3 公尺的格子記下已經畫過的點；新的點附近若已有點，沿軌道方向 3 公尺內、側向 1.2 公尺內，就算同一股道已經畫過。
+   以前用格子座標直接比對，對不齊的地方會畫出兩層同高的道碴，畫面會閃爍、邊緣鋸齒，看起來像物件在微微移動 */
+function trackTaken(seen, lk, x, y, ux, uy) {
+  const G = seen._track || (seen._track = new Map()), c = 0.003, gx = Math.floor(x / c), gy = Math.floor(y / c);
+  for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
+    const a = G.get(lk + ':' + (gx + i) + ',' + (gy + j)); if (!a) continue;
+    for (const [px, py] of a) { const dx = px - x, dy = py - y, al = Math.abs(dx * ux + dy * uy), lat = Math.abs(dy * ux - dx * uy); if (al < 0.003 && lat < 0.0012) return true; }
+  }
+  const k = lk + ':' + gx + ',' + gy; (G.get(k) || G.set(k, []).get(k)).push([x, y]);
+  return false;
+}
 /* 軌道：每條線上下行各一股道。道碴（碎石道床）、混凝土枕木、兩條鋼軌；台鐵與高鐵再加電車線桿和架空線。
    枕木很多，只畫鏡頭附近 near 公里內 */
 function trackFeatures(trip, k0, k1, P, mb, seen, O, near) {
@@ -2812,15 +2875,14 @@ function trackFeatures(trip, k0, k1, P, mb, seen, O, near) {
   const bsec = [[-g - 1.7, -0.02], [g + 1.7, -0.02], [g + 1.05, 0.14], [-g - 1.05, 0.14]];
   for (const sd of [-1, 1]) {
     const lat = sd * o, runs = [[]];
-    let n = 0;
+    let n = 0, prevPt = null;
     for (let i = Math.floor(k0 / step); i * step < k1; i++) {
       const k = i * step, f = railFrame(trip, k), cx = f.x + f.nx * lat / 1000, cy = f.y + f.ny * lat / 1000;
-      const key = 'T' + levelKey(trip) + sd * Math.sign(sideOffset(trip)) + ':' + Math.round(cx * 400) + ',' + Math.round(cy * 400);
-      const r = runs[runs.length - 1];
-      if (seen.has(key)) { if (r.length) runs.push([]); continue; }
-      seen.add(key);
-      const e = elevAt(trip, k), x = (cx - O.x) * 1000, y = (cy - O.y) * 1000;
-      r.push([x, y, f.nx, f.ny, e]);
+      const r = runs[runs.length - 1], e = elevAt(trip, k), x = (cx - O.x) * 1000, y = (cy - O.y) * 1000, pt = [x, y, f.nx, f.ny, e];
+      // 接到別班車已經畫好的那一段：多畫一格接上去，不留縫
+      if (trackTaken(seen, levelKey(trip), cx, cy, f.ux, f.uy)) { if (r.length) { r.push(pt); runs.push([]); } prevPt = pt; continue; }
+      if (!r.length && prevPt) r.push(prevPt);
+      r.push(pt); prevPt = null;
       const d = Math.hypot(cx - O.x, cy - O.y);
       if (d < near) {
         // 枕木：每 0.6 公尺一根（這一格 5 公尺裡排 8 根）
@@ -3028,7 +3090,7 @@ const offsetPt = (p, along, side) => {
 /* ---------- 光線：依時間在幾個關鍵色票之間平滑內插 ---------- */
 const PALETTES = {
   night: { sea:'#050A12', land:'#0F1822', edge:'#1C2733', water:'#06101B', wood:'#0F1D1A', road:'#1D2A37', bld:'#6FA6DE', bldEdge:'#A8D4FF', bldOp:0.6,
-    hsShadow:'#000000', hsHigh:'#3A4C60', hsAccent:'#0A121B', label:'#8FA0AE', halo:'#050A12',
+    hsShadow:'#000000', hsHigh:'#3A4C60', hsAccent:'#0A121B', label:'#C3CFD8', halo:'#050A12',
     sky:'#081222', horizon:'#1C2B40', fog:'#0B1320', tra:'#A9BCCD', light:'#7C8FB0', glow:0.6, lightI:0.25 },
   dawn: { sea:'#2A3348', land:'#3A3540', edge:'#4A4452', water:'#2C3650', wood:'#2E3A35', road:'#4D4652', bld:'#A396C0', bldEdge:'#DCC8EE', bldOp:0.48,
     hsShadow:'#1A1424', hsHigh:'#E0A27E', hsAccent:'#382A3A', label:'#E6D2C6', halo:'#241E28',
@@ -3219,13 +3281,13 @@ const STYLE = {
     // 近看時的城市小細節：街道名稱與店家、廟宇、學校等地標
     { id: 'street-names', type: 'symbol', source: 'omt', 'source-layer': 'transportation_name', minzoom: 16,
       layout: { 'text-field': NAME, 'text-font': ['Noto Sans Regular'], 'text-size': 11, 'symbol-placement': 'line', 'text-letter-spacing': 0.1 },
-      paint: { 'text-color': P0.label, 'text-halo-color': P0.halo, 'text-halo-width': 1.2, 'text-opacity': 0.8 } },
+      paint: { 'text-color': P0.label, 'text-halo-color': P0.halo, 'text-halo-width': 1.5, 'text-opacity': 0.95 } },
     { id: 'poi', type: 'symbol', source: 'omt', 'source-layer': 'poi', minzoom: 16.5, filter: ['has', 'name'],
       layout: { 'text-field': NAME, 'text-font': ['Noto Sans Regular'], 'text-size': 10.5, 'text-max-width': 7, 'symbol-sort-key': ['get', 'rank'] },
-      paint: { 'text-color': P0.label, 'text-halo-color': P0.halo, 'text-halo-width': 1.2, 'text-opacity': 0.75 } },
+      paint: { 'text-color': P0.label, 'text-halo-color': P0.halo, 'text-halo-width': 1.5, 'text-opacity': 0.92 } },
     { id: 'places', type: 'symbol', source: 'omt', 'source-layer': 'place', filter: ['in', ['get', 'class'], ['literal', ['city', 'town']]],
       layout: { 'text-field': NAME, 'text-font': ['Noto Sans Regular'], 'text-size': ['interpolate', ['linear'], ['zoom'], 6, 11, 12, 15], 'text-letter-spacing': 0.15 },
-      paint: { 'text-color': P0.label, 'text-halo-color': P0.halo, 'text-halo-width': 1.4, 'text-opacity': 0.75 } },
+      paint: { 'text-color': P0.label, 'text-halo-color': P0.halo, 'text-halo-width': 1.6, 'text-opacity': 0.92 } },
   ],
 };
 
@@ -3295,7 +3357,8 @@ const Quality = {
   get low() { return this.pref === 'low'; },
   // 手機省電限每秒 30 格；電腦螢幕大、靠滑鼠操作，30 格看起來一頓一頓，所以電腦省電只限 60 格（擋掉 120／144Hz 螢幕多畫的格數）
   get fps() { return this.low ? (COARSE ? 30 : 60) : 0; },
-  get pixelRatio() { return Math.min(window.devicePixelRatio || 1, this.low ? 1 : COARSE ? 1.5 : 2); },
+  // 手機螢幕是 3 倍像素，像素比 1 會讓文字和模型邊緣糊成一片；省電模式在手機上也至少用 1.5
+  get pixelRatio() { return Math.min(window.devicePixelRatio || 1, this.low ? (COARSE ? 1.5 : 1) : 2); },
 };
 const maxCarTrains = () => (COARSE ? 8 : 18) / (Quality.low ? 2 : 1); // 同時畫成車廂的列車上限（跟拍的列車另計）
 const liveTrains = () => Quality.low ? 3 : COARSE ? 5 : 8; // 其中每一格都更新的列數
@@ -3392,6 +3455,7 @@ function initMap() {
     container: 'map', style: STYLE, ...TAIWAN, maxPitch: 85, attributionControl: false,
     localIdeographFontFamily: "'Noto Sans TC','PingFang TC','Microsoft JhengHei',sans-serif",
     fadeDuration: 0,
+    antialias: true, // 多重取樣抗鋸齒：3D 模型的邊緣（軌道、月台、車廂）移動時不會一直閃爍、看起來像在抖
     pixelRatio: Quality.pixelRatio, // 手機 3 倍像素太耗效能
   });
   map.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: '© OpenStreetMap 貢獻者 · OpenFreeMap · 地形 Mapzen／AWS · 天氣 Open-Meteo' }), 'bottom-right');

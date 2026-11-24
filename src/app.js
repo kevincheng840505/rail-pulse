@@ -75,13 +75,13 @@ const STYLE = {
     // 近看時的城市小細節：街道名稱與店家、廟宇、學校等地標
     { id: 'street-names', type: 'symbol', source: 'omt', 'source-layer': 'transportation_name', minzoom: 16,
       layout: { 'text-field': NAME, 'text-font': ['Noto Sans Regular'], 'text-size': 11, 'symbol-placement': 'line', 'text-letter-spacing': 0.1 },
-      paint: { 'text-color': P0.label, 'text-halo-color': P0.halo, 'text-halo-width': 1.2, 'text-opacity': 0.8 } },
+      paint: { 'text-color': P0.label, 'text-halo-color': P0.halo, 'text-halo-width': 1.5, 'text-opacity': 0.95 } },
     { id: 'poi', type: 'symbol', source: 'omt', 'source-layer': 'poi', minzoom: 16.5, filter: ['has', 'name'],
       layout: { 'text-field': NAME, 'text-font': ['Noto Sans Regular'], 'text-size': 10.5, 'text-max-width': 7, 'symbol-sort-key': ['get', 'rank'] },
-      paint: { 'text-color': P0.label, 'text-halo-color': P0.halo, 'text-halo-width': 1.2, 'text-opacity': 0.75 } },
+      paint: { 'text-color': P0.label, 'text-halo-color': P0.halo, 'text-halo-width': 1.5, 'text-opacity': 0.92 } },
     { id: 'places', type: 'symbol', source: 'omt', 'source-layer': 'place', filter: ['in', ['get', 'class'], ['literal', ['city', 'town']]],
       layout: { 'text-field': NAME, 'text-font': ['Noto Sans Regular'], 'text-size': ['interpolate', ['linear'], ['zoom'], 6, 11, 12, 15], 'text-letter-spacing': 0.15 },
-      paint: { 'text-color': P0.label, 'text-halo-color': P0.halo, 'text-halo-width': 1.4, 'text-opacity': 0.75 } },
+      paint: { 'text-color': P0.label, 'text-halo-color': P0.halo, 'text-halo-width': 1.6, 'text-opacity': 0.92 } },
   ],
 };
 
@@ -151,7 +151,8 @@ const Quality = {
   get low() { return this.pref === 'low'; },
   // 手機省電限每秒 30 格；電腦螢幕大、靠滑鼠操作，30 格看起來一頓一頓，所以電腦省電只限 60 格（擋掉 120／144Hz 螢幕多畫的格數）
   get fps() { return this.low ? (COARSE ? 30 : 60) : 0; },
-  get pixelRatio() { return Math.min(window.devicePixelRatio || 1, this.low ? 1 : COARSE ? 1.5 : 2); },
+  // 手機螢幕是 3 倍像素，像素比 1 會讓文字和模型邊緣糊成一片；省電模式在手機上也至少用 1.5
+  get pixelRatio() { return Math.min(window.devicePixelRatio || 1, this.low ? (COARSE ? 1.5 : 1) : 2); },
 };
 const maxCarTrains = () => (COARSE ? 8 : 18) / (Quality.low ? 2 : 1); // 同時畫成車廂的列車上限（跟拍的列車另計）
 const liveTrains = () => Quality.low ? 3 : COARSE ? 5 : 8; // 其中每一格都更新的列數
@@ -248,6 +249,7 @@ function initMap() {
     container: 'map', style: STYLE, ...TAIWAN, maxPitch: 85, attributionControl: false,
     localIdeographFontFamily: "'Noto Sans TC','PingFang TC','Microsoft JhengHei',sans-serif",
     fadeDuration: 0,
+    antialias: true, // 多重取樣抗鋸齒：3D 模型的邊緣（軌道、月台、車廂）移動時不會一直閃爍、看起來像在抖
     pixelRatio: Quality.pixelRatio, // 手機 3 倍像素太耗效能
   });
   map.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: '© OpenStreetMap 貢獻者 · OpenFreeMap · 地形 Mapzen／AWS · 天氣 Open-Meteo' }), 'bottom-right');
