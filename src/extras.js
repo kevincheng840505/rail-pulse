@@ -155,8 +155,7 @@ function parseAlerts(label, j) {
 }
 async function loadAlerts() {
   if (!Extras.alerts || Extras.demo) return;
-  const cred = store.get('tdx', {});
-  if (!cred.id || !cred.secret) { setAlerts([]); return; }
+  const cred = TDX_CRED;
   if (Extras.alertBusy) return; Extras.alertBusy = true; // 開頁和按下連線都會觸發，不要重複排
   Extras.alertLoad = Date.now();
   const res = await Promise.allSettled(ALERT_SOURCES.map(([label, path]) => TDX.get(path, cred, 0).then(j => parseAlerts(label, j)))).finally(() => { Extras.alertBusy = false; });
@@ -210,8 +209,6 @@ extrasToggle('#alertbtn', 'alerts', on => {
   if (on) { Extras.alertList = []; loadAlerts().catch(() => {}); }
   else { clearTimeout(Extras.alertTimer); noticeEl.classList.remove('on'); noticeEl.hidden = true; Extras.alertList = []; }
 });
-$('#tdxgo').addEventListener('click', () => setTimeout(() => loadAlerts().catch(() => {}), 1500));
-$('#tdxclear').addEventListener('click', () => setAlerts([]));
 
 setInterval(checkSpots, 1000);
 // 分頁在背景時不讀；回到前景後 30 秒內補讀

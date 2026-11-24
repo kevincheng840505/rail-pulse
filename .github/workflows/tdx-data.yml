@@ -1,0 +1,46 @@
+name: 更新 TDX 即時資料
+
+# 用 repo 的 Secrets（TDX_CLIENT_ID、TDX_CLIENT_SECRET）抓台鐵誤點、時刻表、捷運、航班與營運快訊，
+# 存到 tdx-data 分支（只留最新一份，不累積歷史）。網站從 raw.githubusercontent.com 讀這些檔案，
+# 訪客不用自己的金鑰，金鑰也不會出現在網站上。
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/10 * * * *" # 每 10 分鐘（GitHub 排程常會晚幾分鐘）
+  push:
+    branches: [main]
+    paths:
+      - tools/fetch_tdx.py
+      - .github/workflows/tdx-data.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tdx-data
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: 取出上一次的資料
+        run: |
+          git clone --depth 1 --branch tdx-data "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" out || mkdir -p out
+          rm -rf out/.git
+      - name: 抓 TDX 資料
+        env:
+          TDX_CLIENT_ID: ${{ secrets.TDX_CLIENT_ID }}
+          TDX_CLIENT_SECRET: ${{ secrets.TDX_CLIENT_SECRET }}
+        run: python3 tools/fetch_tdx.py out
+      - name: 推到 tdx-data 分支（覆蓋，只留最新一份）
+        run: |
+          cd out
+          git init -q -b tdx-data
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -qm "TDX 資料 $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" tdx-data

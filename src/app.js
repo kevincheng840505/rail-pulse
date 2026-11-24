@@ -167,73 +167,38 @@ function paceOk(now) {
   return Pace.ok;
 }
 const DOT = COARSE ? 1.35 : 1; // 手機上列車圓點放大 // 這個縮放以上把列車畫成一節節車廂
-/* ---------- 列車 3D 圖層：車廂直接交給 WebGL 畫 ----------
-   以前車廂是 GeoJSON 的 fill-extrusion 圖層：每次更新都要送到背景執行緒切圖磚、再傳回來，
-   跟拍時幾乎每一格都這樣做，手機的主執行緒被佔滿，縮放就卡。
-   現在把同樣的車廂方塊（carFeatures 產生的多邊形與高度）在這裡直接變成三角形，當格上傳、當格畫出，
-   不經過背景執行緒，鏡頭和車身也一定是同一格的位置，不需要以前的雙緩衝與平移補償。
-   光線算法照 MapLibre 的 fill-extrusion，看起來跟原本一樣。 */
+/* ---------- 列車 3D 圖層：車廂、旅客的 3D 模型直接交給 WebGL 畫 ----------
+   每節車廂、每位旅客都是 models.js 做好的網格（只上傳一次），加上一個位置矩陣。
+   更新時只重算矩陣，不必重算三角形；鏡頭和車身一定是同一格的位置。 */
 const TrainGL = {
-  // 每組各自一份三角形：背景車廂、跟拍的列車、附近的列車、月台旅客
-  groups: {
-    cars: { base: 'b3', minz: CAR_ZOOM }, focus: { base: 'b3', minz: CAR_ZOOM },
-    near: { base: 'b3', minz: CAR_ZOOM }, people: { base: 'b', minz: 16 },
-  },
-  gl: null, prog: null, loc: null, colors: new Map(),
-  set(name, feats) {
+  // 每組各自一份清單：背景車廂、跟拍的列車、附近的列車、月台旅客
+  groups: { cars: { minz: CAR_ZOOM }, focus: { minz: CAR_ZOOM }, near: { minz: CAR_ZOOM }, people: { minz: 16 } },
+  gl: null, meshes: new Map(),
+  set(name, list) {
     const g = this.groups[name];
-    if (!feats.length && !g.f) return; // 已經是空的：不用重畫
-    g.f = feats.length ? feats : null; g.dirty = true;
+    if (!list.length && !g.f) return; // 已經是空的：不用重畫
+    g.f = list.length ? list : null;
     if (map) map.triggerRepaint();
   },
   has(name) { return !!this.groups[name].f; },
-  rgb(c) {
-    let v = this.colors.get(c);
-    if (!v) { const n = parseInt(c.slice(1), 16); v = [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255]; this.colors.set(c, v); }
-    return v;
+  /* 不會動的場景（車站、城市）：整片合成一個網格，換新的時候把舊的從顯示卡刪掉 */
+  statics: new Map(),
+  setStatic(name, data, ll) {
+    const old = this.statics.get(name);
+    if (old && old.mesh && this.gl) old.mesh.bufs.forEach(b => this.gl.deleteBuffer(b));
+    this.statics.delete(name);
+    if (data && data.n && this.gl) this.statics.set(name, { mesh: GL3D.upload(this.gl, data), m: GL3D.model(ll, 0, Math.PI / 2) });
+    if (map) map.triggerRepaint();
   },
-  // 多邊形（經緯度）＋底高、頂高（公尺）→ 以第一個點為原點、單位公尺的三角形（頂面與側面；底面看不到不畫）
-  build(g) {
-    const f = g.f, gl = this.gl;
-    g.dirty = false; g.n = 0;
-    if (!f || !gl) return;
-    const c0 = f[0].geometry.coordinates[0][0], R = Math.PI / 180;
-    const ox = (c0[0] + 180) / 360, oy = (1 - Math.log(Math.tan(Math.PI / 4 + c0[1] * R / 2)) / Math.PI) / 2;
-    const mpu = 40075016.686 * Math.cos(c0[1] * R); // 這個緯度上，每個墨卡托單位是幾公尺
-    let need = 0;
-    for (const q of f) need += (q.geometry.coordinates[0].length - 1) * 9 * 3; // 頂面 (n-2)*3 + 側面 n*6 ≤ n*9 個頂點
-    if (!g.P || g.P.length < need) { const cap = Math.ceil(need * 1.5); g.P = new Float32Array(cap); g.N = new Float32Array(cap); g.C = new Float32Array(cap); }
-    const P = g.P, N = g.N, C = g.C, bk = g.base;
-    let k = 0;
-    const xs = [], ys = [];
-    const vtx = (x, y, z, nx, ny, nz, col) => { P[k] = x; P[k + 1] = y; P[k + 2] = z; N[k] = nx; N[k + 1] = ny; N[k + 2] = nz; C[k] = col[0]; C[k + 1] = col[1]; C[k + 2] = col[2]; k += 3; };
-    for (const q of f) {
-      const pr = q.properties, lo = pr[bk] || 0, hi = pr.t;
-      if (!(hi - lo > 1e-3)) continue;
-      const ring = q.geometry.coordinates[0], n = ring.length - 1, col = this.rgb(pr.c);
-      let area = 0;
-      for (let i = 0; i < n; i++) {
-        const [lon, lat] = ring[i];
-        xs[i] = ((lon + 180) / 360 - ox) * mpu;
-        ys[i] = ((1 - Math.log(Math.tan(Math.PI / 4 + lat * R / 2)) / Math.PI) / 2 - oy) * mpu;
-      }
-      for (let i = 0; i < n; i++) { const j = (i + 1) % n; area += xs[i] * ys[j] - xs[j] * ys[i]; }
-      const sg = area >= 0 ? 1 : -1;
-      // 頂面：扇形三角化（車廂零件都是凸多邊形）
-      for (let i = 1; i < n - 1; i++) { vtx(xs[0], ys[0], hi, 0, 0, 1, col); vtx(xs[i], ys[i], hi, 0, 0, 1, col); vtx(xs[i + 1], ys[i + 1], hi, 0, 0, 1, col); }
-      // 側面：法向量朝外
-      for (let i = 0; i < n; i++) {
-        const j = (i + 1) % n, dx = xs[j] - xs[i], dy = ys[j] - ys[i], l = Math.hypot(dx, dy) || 1, nx = sg * dy / l, ny = -sg * dx / l;
-        vtx(xs[i], ys[i], lo, nx, ny, 0, col); vtx(xs[j], ys[j], lo, nx, ny, 0, col); vtx(xs[j], ys[j], hi, nx, ny, 0, col);
-        vtx(xs[i], ys[i], lo, nx, ny, 0, col); vtx(xs[j], ys[j], hi, nx, ny, 0, col); vtx(xs[i], ys[i], hi, nx, ny, 0, col);
-      }
-    }
-    g.n = k / 3;
-    // 模型矩陣：公尺 → 墨卡托單位，再移到原點
-    const s = 1 / mpu;
-    g.model = [s, 0, 0, 0, 0, s, 0, 0, 0, 0, s, 0, ox, oy, 0, 1];
-    if (!g.bufs) g.bufs = [gl.createBuffer(), gl.createBuffer(), gl.createBuffer()];
-    [P, N, C].forEach((arr, i) => { gl.bindBuffer(gl.ARRAY_BUFFER, g.bufs[i]); gl.bufferData(gl.ARRAY_BUFFER, arr.subarray(0, k), gl.DYNAMIC_DRAW); });
+  mesh(it) {
+    let m = this.meshes.get(it.key);
+    if (!m) { m = GL3D.upload(this.gl, it.make()); this.meshes.set(it.key, m); if (this.meshes.size > 400) this.trim(); }
+    return m;
+  },
+  // 模型太多（換了很多種車、日夜切換）時，把目前沒在畫的刪掉
+  trim() {
+    const used = new Set(); for (const g of Object.values(this.groups)) for (const it of g.f || []) used.add(it.key);
+    for (const [k, m] of this.meshes) if (!used.has(k)) { m.bufs.forEach(b => this.gl.deleteBuffer(b)); this.meshes.delete(k); }
   },
   // 點選：沿著畫出來的列車每節車廂取一點投到螢幕上，找最近的一列
   pick(pt) {
@@ -252,54 +217,26 @@ const TrainGL = {
   },
   layer: {
     id: 'trains3d', type: 'custom', renderingMode: '3d',
-    onAdd(m, gl) {
-      const T = TrainGL;
-      T.gl = gl;
-      for (const g of Object.values(T.groups)) { g.bufs = null; g.dirty = true; }
-      const sh = (type, src) => { const o = gl.createShader(type); gl.shaderSource(o, src); gl.compileShader(o); return o; };
-      const prog = gl.createProgram();
-      // 與 MapLibre fill-extrusion 相同的打光（vertical-gradient 關閉時）
-      gl.attachShader(prog, sh(gl.VERTEX_SHADER, `
-        uniform mat4 u_pm; uniform vec3 u_lightpos; uniform vec3 u_lightcolor; uniform float u_lightintensity;
-        attribute vec3 a_pos; attribute vec3 a_n; attribute vec3 a_c; varying vec3 v_c;
-        void main() {
-          float cv = a_c.r * 0.2126 + a_c.g * 0.7152 + a_c.b * 0.0722;
-          float d = clamp(dot(a_n, u_lightpos), 0.0, 1.0);
-          d = mix(1.0 - u_lightintensity, max(1.0 - cv + u_lightintensity, 1.0), d);
-          v_c = clamp(a_c * d * u_lightcolor, mix(vec3(0.0), vec3(0.3), 1.0 - u_lightcolor), vec3(1.0));
-          gl_Position = u_pm * vec4(a_pos, 1.0);
-        }`));
-      gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, `precision mediump float; varying vec3 v_c; void main() { gl_FragColor = vec4(v_c, 1.0); }`));
-      gl.linkProgram(prog);
-      T.prog = prog;
-      T.loc = { pm: gl.getUniformLocation(prog, 'u_pm'), lp: gl.getUniformLocation(prog, 'u_lightpos'), lc: gl.getUniformLocation(prog, 'u_lightcolor'), li: gl.getUniformLocation(prog, 'u_lightintensity'),
-        attrs: ['a_pos', 'a_n', 'a_c'].map(a => gl.getAttribLocation(prog, a)) };
-    },
-    onRemove() { TrainGL.gl = null; TrainGL.prog = null; },
+    onAdd(m, gl) { TrainGL.gl = gl; TrainGL.meshes.clear(); TrainGL.statics.clear(); },
+    onRemove() { TrainGL.gl = null; TrainGL.meshes.clear(); TrainGL.statics.clear(); },
     render(gl, matrix) {
-      const T = TrainGL; if (!T.prog) return;
-      const z = map.getZoom();
-      const live = Object.values(T.groups).filter(g => g.f && z >= g.minz);
-      if (!live.length) return;
-      const L = T.loc;
-      gl.useProgram(T.prog);
-      // 光線：跟地圖的 setLight 一樣（anchor: map），位置是 [半徑, 方位角, 仰角]
-      let lc = [1, 1, 1], li = 0.5, lp = [0, 0, 1.2];
-      try {
-        const lt = map.getLight() || {};
-        if (typeof lt.color === 'string' && lt.color[0] === '#') lc = T.rgb(lt.color);
-        if (typeof lt.intensity === 'number') li = lt.intensity;
-        if (Array.isArray(lt.position)) { const [r, a0, p0] = lt.position, a = (a0 + 90) * Math.PI / 180, pl = p0 * Math.PI / 180; lp = [r * Math.cos(a) * Math.sin(pl), r * Math.sin(a) * Math.sin(pl), r * Math.cos(pl)]; }
-      } catch {}
-      gl.uniform3fv(L.lp, lp); gl.uniform3fv(L.lc, lc); gl.uniform1f(L.li, li);
-      gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(true); gl.disable(gl.CULL_FACE); gl.disable(gl.BLEND);
-      for (const g of live) {
-        if (g.dirty) T.build(g);
-        if (!g.n) continue;
-        gl.uniformMatrix4fv(L.pm, false, new Float32Array(PlaneGLmul(matrix, g.model)));
-        g.bufs.forEach((b, i) => { gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.enableVertexAttribArray(L.attrs[i]); gl.vertexAttribPointer(L.attrs[i], 3, gl.FLOAT, false, 0, 0); });
-        gl.drawArrays(gl.TRIANGLES, 0, g.n);
-      }
+      const T = TrainGL, z = map.getZoom();
+      const live = Object.values(T.groups).filter(g => g.f && z >= g.minz), st = T.statics.get('stations');
+      if (!live.length && !st) return;
+      const p = GL3D.begin(gl);
+      if (st && z >= FACADE_ZOOM) GL3D.draw(gl, p, st.mesh, matrix, st.m);
+      for (const g of live) for (const it of g.f) GL3D.draw(gl, p, T.mesh(it), matrix, it.m);
+    },
+  },
+  // 城市建築、行道樹、路燈：畫在列車之後、半透明，隔著大樓也看得到列車
+  cityLayer: {
+    id: 'city3d', type: 'custom', renderingMode: '3d',
+    render(gl, matrix) {
+      const c = TrainGL.statics.get('city');
+      if (!c || !S.buildings || map.getZoom() < FACADE_ZOOM) return;
+      const p = GL3D.begin(gl);
+      GL3D.draw(gl, p, c.mesh, matrix, c.m);
+      gl.disable(gl.BLEND);
     },
   },
 };
@@ -353,12 +290,8 @@ function initMap() {
         'circle-radius': ['interpolate', ['exponential', 1.6], ['zoom'], 12, ['*', 1, ['get', 'k']], 16, ['*', 3, ['get', 'k']], 19, ['*', 10, ['get', 'k']]] } }, 'trains3d');
     // 半透明建築要畫在車廂之後：先畫的 3D 圖層會擋住後畫的，這樣隔著建築也看得到列車
     try { map.moveLayer('buildings'); } catch {}
-    map.addSource('facade', { type: 'geojson', data: EMPTY });
-    map.addLayer({ id: 'facade', type: 'fill-extrusion', source: 'facade', minzoom: FACADE_ZOOM,
-      paint: { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 't'], 'fill-extrusion-base': ['get', 'b'], 'fill-extrusion-opacity': 0.8, 'fill-extrusion-vertical-gradient': false } });
-    const solid = { 'fill-extrusion-color': ['get', 'c'], 'fill-extrusion-height': ['get', 't'], 'fill-extrusion-base': ['get', 'b'], 'fill-extrusion-opacity': 1, 'fill-extrusion-vertical-gradient': false };
-    map.addSource('platforms', { type: 'geojson', data: EMPTY });
-    map.addLayer({ id: 'platforms', type: 'fill-extrusion', source: 'platforms', minzoom: FACADE_ZOOM, paint: solid }, 'trains3d');
+    // 附近的大樓、行道樹、路燈（3D 模型，見 Facade 與 TrainGL.cityLayer）；車站月台、雨棚、高架橋畫在 trains3d 裡
+    map.addLayer(TrainGL.cityLayer);
     map.addSource('lamps', { type: 'geojson', data: EMPTY });
     map.addLayer({ id: 'lamp-glow', type: 'circle', source: 'lamps', minzoom: FACADE_ZOOM,
       paint: { 'circle-color': '#FFD48A', 'circle-blur': 1, 'circle-pitch-alignment': 'map', 'circle-opacity': 0,
@@ -374,7 +307,7 @@ function initMap() {
       paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, ['case', ['get', 'sel'], 6, ['==', ['get', 'g'], 'mrt'], 2.4 * DOT, 3 * DOT], 12, ['case', ['get', 'sel'], 9, 5.5]],
         'circle-color': ['get', 'color'], 'circle-stroke-color': '#FFFFFF', 'circle-stroke-width': ['case', ['get', 'sel'], 2, 0.6], 'circle-pitch-alignment': 'map' } });
     map.setLayoutProperty('buildings', 'visibility', S.buildings ? 'visible' : 'none');
-    for (const l of ['facade', 'lamp-glow']) map.setLayoutProperty(l, 'visibility', S.buildings ? 'visible' : 'none');
+    for (const l of ['city3d', 'lamp-glow']) map.setLayoutProperty(l, 'visibility', S.buildings ? 'visible' : 'none');
     S.mapReady = true;
     perfMark('地圖樣式就緒');
     applyQuality();
@@ -423,7 +356,7 @@ function applyQuality() {
   const low = Quality.low, vis = on => on ? 'visible' : 'none';
   try { if (map.getPixelRatio() !== Quality.pixelRatio) map.setPixelRatio(Quality.pixelRatio); } catch {}
   try { map.setLayoutProperty('hills', 'visibility', vis(!low)); } catch {}
-  for (const l of ['facade', 'lamp-glow']) try { map.setLayoutProperty(l, 'visibility', vis(S.buildings && !low)); } catch {}
+  for (const l of ['city3d', 'lamp-glow']) try { map.setLayoutProperty(l, 'visibility', vis(S.buildings && !low)); } catch {}
   syncTerrain(true); Facade.soon(true); pushTrains(true);
 }
 function renderQualityBtns() {
@@ -437,7 +370,7 @@ function setQuality(v) { Quality.pref = v === 'high' ? 'high' : 'low'; store.set
 const FACADE_ZOOM = 15.5;
 const Facade = (() => {
   let timer = 0, last = null;
-  const R = COARSE ? 0.3 : 0.45, FLOOR = 0.0034, MAX_FEAT = COARSE ? 2500 : 5000, MAX_TREES = COARSE ? 400 : 900;
+  const R = COARSE ? 0.3 : 0.45, MAX_VERT = COARSE ? 350e3 : 900e3, DETAIL_N = COARSE ? 25 : 60, MAX_TREES = COARSE ? 300 : 700;
   // 把外框往外推 d 公里（每個頂點沿兩條邊的外法線平均方向）
   function outset(pts, d) {
     let a = 0;
@@ -461,37 +394,36 @@ const Facade = (() => {
   const rect = (x, y, ux, uy, a, b) => { const vx = -uy, vy = ux, A = a / 2000, B = b / 2000; return [[1, 1], [-1, 1], [-1, -1], [1, -1], [1, 1]].map(([i, j]) => unproj(x + ux * A * i + vx * B * j, y + uy * A * i + vy * B * j)); };
   const SHEET = ['#4F7FA8', '#5E8F86', '#A8674A', '#C5CBD0', '#6E8FB0'];
   /* 台灣街景的屋頂：不鏽鋼水塔、頂樓鐵皮加蓋，外牆掛冷氣室外機 */
-  function roofs(cand, out, P) {
-    const steel = mixHex('#D9DEE3', P.bld, 0.25), legs = '#5A6068', acc = mixHex('#E4E6E8', P.bld, 0.2);
+  function roofs(cand, mb, P, L) {
+    const steel = mcol(mixHex('#D9DEE3', P.bld, 0.25)), legs = mcol('#5A6068'), acc = mcol(mixHex('#E4E6E8', P.bld, 0.2));
     for (const B of cand) {
-      if (out.length > MAX_FEAT * 1.4) break;
+      if (mb.P.length > MAX_VERT * 3 * 1.3) break;
       const seed = hash(B.key + 'r'), pts = B.pts, n = pts.length - 1;
       let gx = 0, gy = 0; for (let i = 0; i < n; i++) { gx += pts[i][0]; gy += pts[i][1]; } gx /= n; gy /= n;
       const top = B.h;
       // 鐵皮加蓋：中低樓層的建築才有，把外框往中心縮成一圈較小的棚子
       const shed = B.h < 40 && seed < 0.55;
       if (shed) {
-        const k = 0.55 + seed * 0.4, ring = pts.map(([x, y]) => unproj(gx + (x - gx) * k, gy + (y - gy) * k));
-        out.push(poly(ring, top, top + 2.6, mixHex(SHEET[Math.floor(seed * 100) % SHEET.length], P.bld, P.lit ? 0.5 : 0.15)));
+        const k = 0.55 + seed * 0.4, ring = pts.slice(0, n).map(([x, y]) => L(gx + (x - gx) * k, gy + (y - gy) * k));
+        shedMesh(mb, ring, top, mcol(mixHex(SHEET[Math.floor(seed * 100) % SHEET.length], P.bld, P.lit ? 0.5 : 0.15)), mcol(mixHex('#C9CCCF', P.bld, 0.3)));
       }
       // 水塔：架高的圓桶，靠在屋頂的一角
       if (B.h < 70) {
-        const v = pts[Math.floor(seed * n)], tx = gx + (v[0] - gx) * 0.55, ty = gy + (v[1] - gy) * 0.55, h0 = top + (shed ? 2.6 : 0);
-        out.push(poly(ngon(tx, ty, 0.9, 4, Math.PI / 4), h0, h0 + 1.0, legs));
-        out.push(poly(ngon(tx, ty, 1.0, 10), h0 + 1.0, h0 + 2.9, steel));
-        if (seed > 0.7) out.push(poly(ngon(tx + 0.0024, ty, 0.8, 10), h0 + 1.0, h0 + 2.5, steel));
+        const v = pts[Math.floor(seed * n)], tx = gx + (v[0] - gx) * 0.55, ty = gy + (v[1] - gy) * 0.55, h0 = top + (shed ? 2.9 : 0);
+        const [x, y] = L(tx, ty); tankMesh(mb, x, y, h0, steel, legs);
+        if (seed > 0.7) { const [x2, y2] = L(tx + 0.0024, ty); tankMesh(mb, x2, y2, h0, steel, legs); }
       }
       // 冷氣室外機：隨機掛在幾面外牆的幾層樓
       const nF = Math.floor((B.h - B.b0) / 3.4);
       for (let j = 0; j < Math.min(6, nF); j++) {
         const r = hash(B.key + 'ac' + j), e = Math.floor(r * n), a = pts[e], b = pts[e + 1];
-        const L = Math.hypot(b[0] - a[0], b[1] - a[1]); if (L < 0.003) continue;
-        const ux = (b[0] - a[0]) / L, uy = (b[1] - a[1]) / L, t = 0.2 + hash(B.key + 'at' + j) * 0.6;
-        // 外法線方向：朝離開中心的那一側
+        const Ln = Math.hypot(b[0] - a[0], b[1] - a[1]); if (Ln < 0.003) continue;
+        const ux = (b[0] - a[0]) / Ln, uy = (b[1] - a[1]) / Ln, t = 0.2 + hash(B.key + 'at' + j) * 0.6;
         let nx = -uy, ny = ux; const mx = a[0] + (b[0] - a[0]) * t, my = a[1] + (b[1] - a[1]) * t;
         if ((mx - gx) * nx + (my - gy) * ny < 0) { nx = -nx; ny = -ny; }
         const fl = 1 + Math.floor(hash(B.key + 'af' + j) * Math.max(1, nF - 1)), z = B.b0 + fl * 3.4 + 0.2;
-        out.push(poly(rect(mx + nx * 0.0006, my + ny * 0.0006, ux, uy, 0.9, 0.5), z, z + 0.65, acc));
+        const [x, y] = L(mx + nx * 0.0006, my + ny * 0.0006);
+        ellipsoid(mb, [x, y, z + 0.33], 0.45, 0.45, 0.33, acc, 6, 3, 6);
       }
     }
   }
@@ -518,7 +450,7 @@ const Facade = (() => {
   }
   /* 沿著街道種行道樹、立路燈；夜裡路燈在地面打出一圈暖光 */
   const ROAD_W = { primary: 11, secondary: 9, tertiary: 7, minor: 5 };
-  function streets(cx, cy, out, P, tiles) {
+  function streets(cx, cy, mb, P, tiles, L) {
     let roads;
     try { roads = nearFeatures(tiles, 'transportation', ['in', ['get', 'class'], ['literal', Object.keys(ROAD_W)]]); } catch { return []; }
     const lamps = [], seen = new Set(), RR = R * 0.8;
@@ -537,8 +469,8 @@ const Facade = (() => {
       const dx = bx - ax, dy = by - ay, t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy || 1)));
       return Math.hypot(ax + dx * t - x, ay + dy * t - y) < 0.014;
     });
-    const trunk = mixHex('#5B4636', P.land, 0.2), pole = mixHex('#7B838C', P.bld, 0.3);
-    const leaf = ['#4E7D4A', '#5F8F4E', '#3F6E47', '#6E9A55'].map(c => mixHex(c, P.wood, P.lit ? 0.35 : 0.2));
+    const trunk = mcol(mixHex('#5B4636', P.land, 0.2)), pole = mcol(mixHex('#7B838C', P.bld, 0.3));
+    const leaf = ['#4E7D4A', '#5F8F4E', '#3F6E47', '#6E9A55'].map(c => mcol(mixHex(c, P.wood, P.lit ? 0.35 : 0.2)));
     let trees = 0;
     for (const f of roads) {
       const w = ROAD_W[f.properties.class], g = f.geometry;
@@ -547,10 +479,10 @@ const Facade = (() => {
         const pts = line.map(([lon, lat]) => proj(lat, lon));
         let run = 0; // 沿整條路累計的距離，路燈間距才不受折線切段影響
         for (let i = 1; i < pts.length; i++) {
-          const [x1, y1] = pts[i - 1], [x2, y2] = pts[i], L = Math.hypot(x2 - x1, y2 - y1);
-          if (L < 1e-6) continue;
-          const ux = (x2 - x1) / L, uy = (y2 - y1) / L, nx = -uy, ny = ux;
-          for (let d = (0.012 - run % 0.012) % 0.012; d < L; d += 0.012) {
+          const [x1, y1] = pts[i - 1], [x2, y2] = pts[i], sl = Math.hypot(x2 - x1, y2 - y1);
+          if (sl < 1e-6) continue;
+          const ux = (x2 - x1) / sl, uy = (y2 - y1) / sl, nx = -uy, ny = ux;
+          for (let d = (0.012 - run % 0.012) % 0.012; d < sl; d += 0.012) {
             const x = x1 + ux * d, y = y1 + uy * d;
             if (Math.hypot(x - cx, y - cy) > RR) continue;
             const key = Math.round(x * 2e3) + ',' + Math.round(y * 2e3);
@@ -561,20 +493,17 @@ const Facade = (() => {
               if (onRail(tx, ty)) continue;
               if (k % 3 === 1 && side > 0) {
                 // 路燈：燈桿＋燈頭，夜裡地上一圈光
-                out.push(poly(ngon(tx, ty, 0.12, 4), 0, 7, pole));
-                out.push(poly(rect(tx - nx * 0.0006 * side, ty - ny * 0.0006 * side, nx, ny, 1.4, 0.35), 6.8, 7.1, P.lit ? '#FFE3A0' : pole));
+                { const [lx, ly] = L(tx, ty); lampMesh(mb, lx, ly, -nx * side, -ny * side, P.lit, pole); }
                 lamps.push({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: unproj(tx - nx * 0.0012 * side, ty - ny * 0.0012 * side) } });
                 continue;
               }
               if (trees > MAX_TREES || hash(key + side) < 0.25) continue;
               const r = 1.5 + hash(key + 's' + side) * 1.0, h = 4 + hs * 2.5;
-              out.push(poly(ngon(tx, ty, 0.18, 4), 0, h * 0.45, trunk));
-              out.push(poly(ngon(tx, ty, r, 7, hs), h * 0.4, h, leaf[Math.floor(hs * 97) % leaf.length]));
-              out.push(poly(ngon(tx, ty, r * 0.6, 7, hs + 0.3), h, h + 0.8, leaf[Math.floor(hs * 53) % leaf.length]));
+              { const [lx, ly] = L(tx, ty); treeMesh(mb, lx, ly, h + 0.8, r, leaf[Math.floor(hs * 97) % leaf.length], trunk, hs); }
               trees++;
             }
           }
-          run += L;
+          run += sl;
         }
       }
     }
@@ -583,24 +512,24 @@ const Facade = (() => {
   // 鏡頭附近車站的月台、雨棚與候車旅客（尖峰時段人多、深夜人少）
   let lastPf = '';
   function platforms() {
-    const src = map.getSource('platforms'); if (!src) return;
+    if (!map.getLayer('trains3d')) return;
     const z = map.getZoom(), c = map.getCenter(), [cx, cy] = proj(c.lat, c.lng);
     const near = z < FACADE_ZOOM ? [] : NODES.filter(n => Math.hypot(n.x - cx, n.y - cy) < 0.8);
     // 跟拍的列車在高架上時，車子前後也要有橋（站與站中間的高架段不在任何車站附近）
     const f = z < FACADE_ZOOM ? null : S.follow, fp = f && elevProfile(f) && tripPos(f, curMin());
     const key = near.map(n => n.id).join() + '|' + S.P.lit + '|' + TRIPS.length + '|' + (fp ? f.idx + ':' + Math.round(fp.km * 4) : '');
     if (key === lastPf) return; lastPf = key;
-    const out = [], seen = new Set();
-    for (const n of near) for (const [trip, idx] of stationReps(n)) stationFeatures(n, trip, idx, S.P, out, seen);
-    if (fp) viaductFeatures(f, fp.km - 1, fp.km + 1, S.P, out, seen);
-    src.setData({ type: 'FeatureCollection', features: out });
+    // 車站與高架橋合成一個網格，原點放在畫面中心
+    const mb = MB(), seen = new Set(), O = { x: cx, y: cy };
+    for (const n of near) for (const [trip, idx] of stationReps(n)) stationFeatures(n, trip, idx, S.P, mb, seen, O);
+    if (fp) viaductFeatures(f, fp.km - 1, fp.km + 1, S.P, mb, seen, O);
+    TrainGL.setStatic('stations', mb.P.length ? mbDone(mb) : null, unproj(cx, cy));
   }
   function build(force) {
     timer = 0;
-    if (!map || !S.mapReady || !map.getSource('facade')) return;
-    const src = map.getSource('facade');
+    if (!map || !S.mapReady || !map.getLayer('city3d')) return;
     platforms();
-    if (!S.buildings || Quality.low || map.getZoom() < FACADE_ZOOM) { if (last) { src.setData(EMPTY); last = null; } return; }
+    if (!S.buildings || Quality.low || map.getZoom() < FACADE_ZOOM) { if (last) { TrainGL.setStatic('city', null); last = null; } return; }
     const c = map.getCenter(), [cx, cy] = proj(c.lat, c.lng);
     let tiles = null; try { tiles = nearTiles(c, R); } catch {}
     // 只有附近的圖磚有變（新載入）或移動夠遠才重建；遠方圖磚載入不用重算
@@ -622,26 +551,21 @@ const Facade = (() => {
       cand.push({ pts, h, b0, d, key });
     }
     cand.sort((a, b) => a.d - b.d);
-    const out = [], glass = P.lit ? '#1A2330' : mixHex(P.bld, '#24384E', 0.65), lit = '#FFC25A', warm = '#FF9E45';
+    // 附近的建築、行道樹、路燈全部合成一個網格（以畫面中心為原點，單位公尺）
+    const mb = MB(), L = (x, y) => [(x - cx) * 1000, (y - cy) * 1000];
+    const glass = P.lit ? '#1A2330' : mixHex(P.bld, '#24384E', 0.65), shop = P.lit ? '#3A3226' : mixHex(P.bld, '#2C4258', 0.55);
     const rim = mixHex(P.bldEdge, '#FFFFFF', P.lit ? 0 : 0.3), band = mixHex(P.bld, P.land, 0.4);
-    for (const B of cand) {
-      if (out.length > MAX_FEAT) break;
-      const outer = outset(B.pts, 0.0003), inner = outset(B.pts, 0.00008), shell = [outer, inner.slice().reverse()];
-      const nF = Math.min(45, Math.floor((B.h - B.b0) / (FLOOR * 1000)));
+    const WALLS = ['#D8D3C8', '#C9CDD1', '#BFB6A8', '#E2DED6', '#A9B0B7', '#CFC6B6'];
+    cand.forEach((B, i) => {
+      if (mb.P.length > MAX_VERT * 3) return;
       const seed = hash(B.key);
-      // 一樓店面：較高的一整圈玻璃
-      if (B.b0 === 0) out.push({ type: 'Feature', properties: { b: 0.4, t: 2.9, c: P.lit ? (seed < 0.6 ? warm : glass) : glass }, geometry: { type: 'Polygon', coordinates: shell } });
-      for (let k = 1; k < nF; k++) {
-        const z = B.b0 + k * FLOOR * 1000, on = P.lit && hash(B.key + k) < 0.32 + seed * 0.25;
-        out.push({ type: 'Feature', properties: { b: z + 1.0, t: z + 2.3, c: on ? (hash(k + B.key) < 0.25 ? warm : lit) : glass }, geometry: { type: 'Polygon', coordinates: shell } });
-        // 每隔幾層加一道樓板線，讓立面有分段
-        if (k % 4 === 0) out.push({ type: 'Feature', properties: { b: z - 0.25, t: z + 0.15, c: band }, geometry: { type: 'Polygon', coordinates: shell } });
-      }
-      out.push({ type: 'Feature', properties: { b: B.h - 0.1, t: B.h + 0.7, c: rim }, geometry: { type: 'Polygon', coordinates: shell } });
-    }
-    roofs(cand, out, P);
-    const lamps = streets(cx, cy, out, P, tiles);
-    src.setData({ type: 'FeatureCollection', features: out });
+      const pts = outset(B.pts, 0.00025).slice(0, -1).map(([lon, lat]) => L(...proj(lat, lon)));
+      buildingMesh(mb, pts, B.h, B.b0, { detail: i < DETAIL_N, lit: P.lit, on: 0.32 + seed * 0.25, hash: k => hash(B.key + k),
+        wall: mixHex(WALLS[Math.floor(seed * 60) % WALLS.length], P.bld, P.lit ? 0.6 : 0.35), band, rim, glass, shop, roof: mixHex('#8E9296', P.bld, 0.4) });
+    });
+    roofs(cand, mb, P, L);
+    const lamps = streets(cx, cy, mb, P, tiles, L);
+    TrainGL.setStatic('city', mb.P.length ? mbDone(mb) : null, unproj(cx, cy));
     const ls = map.getSource('lamps'); if (ls) ls.setData({ type: 'FeatureCollection', features: lamps });
     last = { x: cx, y: cy, lit: P.lit, tkey };
   }
@@ -768,7 +692,7 @@ function pushFocus() {
   if (map.getZoom() >= 16 && !Quality.low) { // 省電畫質不畫旅客，也不計算（切到省電時下面送一次空資料清掉）
     const now = performance.now();
     if (!S.pplSt || now - S.pplSt.at > 1000) { const c = map.getCenter(), [cx, cy] = proj(c.lat, c.lng); S.pplSt = { at: now, list: NODES.filter(n => Math.hypot(n.x - cx, n.y - cy) < 0.5).sort((a, b) => Math.hypot(a.x - cx, a.y - cy) - Math.hypot(b.x - cx, b.y - cy)) }; }
-    const cap = (COARSE ? 140 : 260) * 6;
+    const cap = COARSE ? 140 : 260; // 最多畫幾位旅客
     for (const n of S.pplSt.list) for (const [R, idx] of stationReps(n)) stationPeople(n, R, idx, m, ppl, cap);
   }
   TrainGL.set('people', ppl);
@@ -1055,9 +979,7 @@ function renderCaption(force) {
   const progress = pos ? Math.min(1, pos.km / total) : (next === '已抵達終點' ? 1 : 0);
   const delay = t.sys === 'TRA' ? (t.delay ? `<span class="late">晚 ${t.delay} 分</span>` : '<span class="ok">準點</span>') : '';
   const speed = pos && !pos.atStation ? Math.round((t.cum[pos.seg + 1] - t.cum[pos.seg]) / Math.max(0.1, effTime(t, pos.seg + 1, 'arr') - effTime(t, pos.seg, 'dep')) * 60) : 0;
-  // 專注中：多一行「專注結束時大約到哪一站」（focus.js）
-  const frow = typeof Focus !== 'undefined' ? Focus.capRow(t) : '';
-  const key = [t.idx, next, eta, Math.round(progress * 200), S.followPaused, speed, t.delay, frow].join('|');
+  const key = [t.idx, next, eta, Math.round(progress * 200), S.followPaused, speed, t.delay].join('|');
   if (key === capKey && !force) return;
   capKey = key;
   cap.classList.toggle('mini', !S.capOpen);
@@ -1070,7 +992,6 @@ function renderCaption(force) {
     <div class="next"><div><div class="lab">${pos && pos.atStation ? '此刻' : '下一站'}</div><b>${esc(next)}</b></div><span class="eta">${esc(eta)}</span></div>
     <div class="bar"><i style="width:${(progress * 100).toFixed(1)}%"></i></div>
     <div class="meta"><span>已過 ${done} / ${stops} 站</span><span>${speed ? '約 ' + speed + ' km/h' : ''}</span></div>
-    ${frow}
     <div class="caprow"><button class="pillbtn small" id="leave2">離開</button></div>`;
 }
 // 字卡預設是一條細長的列，點一下展開完整資訊，再點一下收起
@@ -1229,7 +1150,7 @@ mseek.addEventListener('input', () => { seeking = true; $('#mcur').textContent =
 mseek.addEventListener('change', () => { seeking = false; Music.seek(mseek.value / 1000 * Music.tracks[Music.index].dur); });
 $('#setbtn').addEventListener('click', () => {
   settings.hidden = !settings.hidden;
-  if (!settings.hidden) { closePicker(); sky.hidden = true; musicPanel.hidden = true; const c = store.get('tdx', {}); $('#tdxid').value = c.id || ''; $('#tdxsecret').value = c.secret || ''; }
+  if (!settings.hidden) { closePicker(); sky.hidden = true; musicPanel.hidden = true; }
 });
 function toggleBtn(id, key, apply) {
   const b = $(id); b.setAttribute('aria-pressed', String(S[key]));
@@ -1238,7 +1159,7 @@ function toggleBtn(id, key, apply) {
 toggleBtn('#terrainbtn', 'terrain', () => syncTerrain(true));
 $('#qualityrow').addEventListener('click', e => { const b = e.target.closest('button[data-v]'); if (b) setQuality(b.dataset.v); });
 renderQualityBtns();
-toggleBtn('#buildbtn', 'buildings', on => { for (const l of ['buildings', 'facade', 'lamp-glow']) map.setLayoutProperty(l, 'visibility', on ? 'visible' : 'none'); });
+toggleBtn('#buildbtn', 'buildings', on => { for (const l of ['buildings', 'city3d', 'lamp-glow']) map.setLayoutProperty(l, 'visibility', on ? 'visible' : 'none'); });
 toggleBtn('#labelbtn', 'labels', on => map.setLayoutProperty('st-label', 'visibility', on ? 'visible' : 'none'));
 
 $('#viewbtn').addEventListener('click', cycleView);
@@ -1325,7 +1246,10 @@ async function connectTDX(cred, quiet) {
     if (metro && metro.trips.length) TDX.applyMetro(metro);
     perfMark('捷運官方資料套用');
     const ml = metro ? metro.covered.size : 0;
-    tdxStatus(`已載入 ${trips.length} 班台鐵與高鐵當日時刻，${d} 列台鐵即時誤點` + (ml ? `；${ml} 條捷運／輕軌改用官方行駛時間與班距（${metro.trips.length} 班）。` : metro && metro.trips.length ? `；捷運依官方資料加開 ${metro.trips.length} 班區間車，全線仍用班表推估。` : '；捷運與輕軌沿用班表推估。'));
+    let upd = '';
+    try { const mt = await (await fetch(TDX_DATA + 'meta.json', { cache: 'no-cache' })).json(); if (mt.updated) upd = `（TDX 資料更新於 ${new Date(mt.updated * 1000 + TW).toISOString().slice(11, 16)}，約每 10 分鐘更新）`; } catch {}
+    if (!isCurrent()) return;
+    tdxStatus(`已載入 ${trips.length} 班台鐵與高鐵當日時刻，${d} 列台鐵即時誤點` + (ml ? `；${ml} 條捷運／輕軌改用官方行駛時間與班距（${metro.trips.length} 班）。` : metro && metro.trips.length ? `；捷運依官方資料加開 ${metro.trips.length} 班區間車，全線仍用班表推估。` : '；捷運與輕軌沿用班表推估。') + upd);
     delayTimer = setInterval(() => {
       if (document.hidden) return; // 分頁在背景時不讀誤點，回到前景立刻補讀（見下方 visibilitychange）
       const now = Date.now();
@@ -1336,27 +1260,19 @@ async function connectTDX(cred, quiet) {
   } catch (err) {
     if (!isCurrent()) return;
     TDX.ok = false;
-    tdxStatus(err instanceof TypeError ? '無法連到 TDX，請確認網路連線。目前繼續使用班表推估。' : esc(err.message) + '。請確認金鑰正確；目前繼續使用班表推估。');
+    tdxStatus(err instanceof TypeError ? '讀不到 TDX 資料，請確認網路連線。目前繼續使用班表推估。' : esc(err.message) + '。目前改用班表推估，稍後會自動重試。');
     if (!quiet) console.warn(err);
+    setTimeout(() => { if (isCurrent() && !TDX.ok) connectTDX(cred, true); }, 3 * 60e3); // 資料暫時讀不到：三分鐘後再試
   }
 }
 // 回到前景：誤點超過一分鐘沒更新就馬上讀，跨日就重新載入當日時刻
 let delayAt = 0;
 document.addEventListener('visibilitychange', () => {
   if (document.hidden || !TDX.ok) return;
-  const cred = store.get('tdx', {}); if (!cred.id || !cred.secret) return;
+  const cred = TDX_CRED;
   const now = Date.now();
   if (twDate(now) !== TDX.date && minOfDay(now) >= 240) connectTDX(cred, true);
   else if (now - delayAt > 60e3) { delayAt = now; const g = tdxGen; TDX.loadDelays(cred, () => g === tdxGen).catch(() => {}); }
-});
-$('#tdxgo').addEventListener('click', () => {
-  const cred = { id: $('#tdxid').value.trim(), secret: $('#tdxsecret').value.trim() };
-  if (!cred.id || !cred.secret) { tdxStatus('請填入 Client ID 與 Client Secret。'); return; }
-  store.set('tdx', cred); connectTDX(cred);
-});
-$('#tdxclear').addEventListener('click', () => {
-  tdxGen++; store.set('tdx', {}); TDX.ok = false; clearInterval(delayTimer);
-  generateAll(); afterTripsChanged(); tdxStatus('已改回班表推估。');
 });
 
 /* ---------- 開場 ---------- */
@@ -1473,7 +1389,7 @@ async function boot() {
   startBtns.forEach(b => { b.disabled = false; });
   perfMark('開場按鈕可按');
   requestAnimationFrame(t => { last = t; frame(t); });
-  const cred = store.get('tdx', {});
-  if (cred.id && cred.secret) connectTDX(cred, true);
+  store.set('tdx', {}); // 以前存在瀏覽器裡的個人金鑰不再使用，清掉
+  connectTDX(TDX_CRED, true);
 }
 boot();

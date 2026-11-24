@@ -97,97 +97,39 @@ function rawCenter(trip, km) {
   return segPoint(trip.nodes[lo], trip.nodes[hi], (km - c[lo]) / span);
 }
 
-/* 把一列車拆成多節車廂的 3D 方塊：車身、窗帶、腰帶、車頂，車頭做成流線收窄 */
+/* 把一列車拆成一節節車廂的 3D 模型（models.js 的 carMesh）：每節車廂是一個剛體，
+   擺在車頭到車尾兩個軌道點的連線上，依坡度抬頭或低頭。停站時車門位置疊上打開的門洞 */
+const LIVERY_KEY = new Map(Object.entries(LIVERY).map(([k, v]) => [v, k]));
+const PANTO = { THSR: [2, 8], TEMU2000: [1, 5], TEMU1000: [1, 5], EMU3000: [2, 8], EMU900: [1, 6], E1000: [0] };
 function carFeatures(trip, pos, P, out, detail) {
-  const L = liveryOf(trip), key = Object.keys(LIVERY).find(k => LIVERY[k] === L);
+  const L = liveryOf(trip), key = LIVERY_KEY.get(L);
   const nDoor = DOORS[key] || 2, doorW = (L.len > 15 ? 1.4 : 1.1) / 1000;
   // 車門開合：停站一開始門向兩側滑開，快開車前關上（0 = 關、1 = 全開）
   const sm = x => x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x);
   const doorOpen = pos.atStation ? sm((pos.dwell - 0.03) / 0.07) * sm((0.97 - pos.dwell) / 0.07) : 0;
-  const doorColor = mixHex(L.body, '#2A3038', 0.16), under = '#24282E';
-  const w = L.w * EX / 1000, h = L.h * EX;
-  const winColor = '#141C26', paneColor = P.lit ? P.winLit : '#3A5068';
-  const quad = (a, b, wa, wb) => {
-    // 一節車廂是剛體：兩端都用車頭到車尾連線的方向，跨過彎道時不會扭成交叉的形狀
-    const d = Math.hypot(b.x - a.x, b.y - a.y), h = d > 1e-6 ? Math.atan2(b.y - a.y, b.x - a.x) : a.heading;
-    const ca = Math.cos(h), sa = Math.sin(h), cb = ca, sb = sa;
-    // 前後兩端各自用當地的軌道方向算出左右兩點，彎道上車廂也貼著軌道
-    const r = [unproj(a.x - sa * wa, a.y + ca * wa), unproj(b.x - sb * wb, b.y + cb * wb), unproj(b.x + sb * wb, b.y - cb * wb), unproj(a.x + sa * wa, a.y - ca * wa)];
-    r.push(r[0]); return [r];
-  };
-  // 3D 方塊整體抬高 0.6 公尺，避免與地形表面深度衝突（手機上特別明顯）；b 仍記原始值，b=0 代表車身底面
-  const add = (geom, base, top, color, e = 0) => out.push({ type: 'Feature', properties: { b: base, b3: base + LIFT + e, t: top + LIFT + e, c: color }, geometry: { type: 'Polygon', coordinates: geom } });
-  // 上下坡：每個零件抬到它所在位置的軌道高度；長條的車身在坡上切成幾小段，看起來是斜的而不是一階一階
+  const lit = P.lit ? P.winLit : '', line = !L.stripe ? trip.color || '' : '';
+  const lampF = P.lit ? '#FFF6DC' : '#E9E4D2', lampB = P.lit ? '#FF2D2D' : '#B3262A';
   const sloped = !!elevProfile(trip), E = k => sloped ? elevAt(trip, k) : 0;
+  const total = trip.cum[trip.cum.length - 1], panto = PANTO[key] || [];
   let km = pos.km;
-  const total = trip.cum[trip.cum.length - 1];
   for (let i = 0; i < L.n; i++) {
     const front = km, back = km - L.len / 1000;
     km = back - L.gap / 1000;
-    const lead = i === 0, tail = i === L.n - 1;
-    const nose = L.nose / 1000;
+    const lead = i === 0, tail = i === L.n - 1 && L.n > 1;
     const f = trackPoint(trip, Math.min(front, total + 0.02)), bk = trackPoint(trip, back);
-    // 整節車廂的零件（車門、車窗、轉向架、車頭）都放在車頭到車尾這條直線上，
-    // 彎道上才不會有零件沿著弧線跑出車身之外
-    const span0 = front - back, cp = k => { const t = (k - back) / span0; return { x: bk.x + (f.x - bk.x) * t, y: bk.y + (f.y - bk.y) * t, heading: f.heading }; };
-    // 車身主體（去掉車頭流線段）
-    const kF = lead && nose ? front - nose : front, kB = tail && nose ? back + nose : back;
-    const band = (wd, base, top, color) => {
-      const ef = E(kF), eb = E(kB), n = Math.abs(ef - eb) < 0.03 ? 1 : Math.min(12, Math.ceil(Math.abs(ef - eb) / 0.03));
-      if (n === 1) return add(quad(cp(kF), cp(kB), wd, wd), base, top, color, (ef + eb) / 2);
-      for (let j = 0; j < n; j++) { const k1 = kF + (kB - kF) * j / n, k2 = kF + (kB - kF) * (j + 1) / n; add(quad(cp(k1), cp(k2), wd, wd), base, top, color, E((k1 + k2) / 2)); }
-    };
-    // 車身底下留一段深色車底，看起來才像架在轉向架上
-    band(w * 0.42, 0, h * 0.12, under);
-    band(w / 2, h * 0.1, h, L.body);
-    // 窗帶與腰帶：比車身寬一點點，蓋在側面
-    const iw = w / 2 + 0.00008;
-    band(iw, h * 0.56, h * 0.8, winColor);
-    // 車門：跟拍的列車一定畫；其他列車停站時也畫，旅客上下車才是從門口進出，不會穿過車身
-    const span = (front - back) - (lead && nose ? nose : 0) - (tail && nose ? nose : 0);
-    const k0 = back + (tail && nose ? nose : 0);
-    const doors = [];
-    if (detail || pos.atStation) {
-      // 一節平均分布（單門、雙門的車型放在兩端）
-      for (let j = 0; j < nDoor; j++) doors.push(k0 + span * (nDoor === 1 ? 0.9 : nDoor === 2 ? (j ? 0.85 : 0.15) : (j + 0.5) / nDoor));
-      for (const dc of doors) {
-        const e = E(dc), half = doorW / 2, slide = doorOpen * half;
-        // 門洞：門打開多少就露出多少車廂內部
-        if (doorOpen > 0.02) add(quad(cp(dc - slide), cp(dc + slide), iw + 0.00004, iw + 0.00004), h * 0.12, h * 0.82, '#0B0F14', e);
-        // 兩片門板沿著車身往左右滑開
-        for (const sd of [-1, 1]) {
-          const c0 = dc + sd * (half / 2 + slide), a = cp(c0 - half / 2), b = cp(c0 + half / 2);
-          add(quad(a, b, iw + 0.00007, iw + 0.00007), h * 0.12, h * 0.82, doorColor, e);
-          if (detail) { const a2 = cp(c0 - half * 0.28), b2 = cp(c0 + half * 0.28); add(quad(a2, b2, iw + 0.00009, iw + 0.00009), h * 0.56, h * 0.78, paneColor, e); }
-        }
+    const hd = Math.atan2(f.y - bk.y, f.x - bk.x), ef = E(front), eb = E(back);
+    const pitch = Math.atan2(ef - eb, (front - back) * 1000), brg = hd + Math.PI / 2;
+    const o = { front: lead ? 'nose' : 'end', back: tail ? 'nose' : 'end', lampF: lead ? lampF : '', lampB: tail ? lampB : '', lit: detail ? lit : '', line, detail, panto: panto.includes(i) && !lead && !tail };
+    const mk = key + '|' + o.front + o.back + '|' + o.lampF + o.lampB + '|' + o.lit + '|' + line + '|' + (detail ? 1 : 0) + (o.panto ? 'p' : '');
+    out.push({ key: mk, make: () => carMesh(L, key, o), m: GL3D.model(unproj((f.x + bk.x) / 2, (f.y + bk.y) / 2), LIFT + (ef + eb) / 2, brg, pitch) });
+    // 打開的車門：門洞的寬度跟著開門的程度
+    if (doorOpen > 0.02 && (detail || pos.atStation)) {
+      const nose = L.nose / 1000, k0 = back + (tail && nose ? nose : 0), span = (front - back) - (lead && nose ? nose : 0) - (tail && nose ? nose : 0);
+      for (let j = 0; j < nDoor; j++) {
+        const dc = k0 + span * (nDoor === 1 ? 0.9 : nDoor === 2 ? (j ? 0.85 : 0.15) : (j + 0.5) / nDoor), u = (dc - back) / (front - back);
+        out.push({ key: 'gap|' + key, make: () => doorGapMesh(L), m: GL3D.model(unproj(bk.x + (f.x - bk.x) * u, bk.y + (f.y - bk.y) * u), LIFT + eb + (ef - eb) * u + 0.005, brg, pitch, doorOpen * doorW * 1000) });
       }
     }
-    // 近看時把窗帶切成一格格車窗，夜裡會亮
-    if (detail) {
-      // 車窗：避開車門的位置
-      const nw = Math.max(2, Math.round(span * 1000 / 3.4));
-      for (let k = 0; k < nw; k++) {
-        const ka = k0 + span * (k + 0.18) / nw, kb = k0 + span * (k + 0.82) / nw;
-        if (doors.some(dc => kb > dc - doorW * 0.7 && ka < dc + doorW * 0.7)) continue;
-        add(quad(cp(kb), cp(ka), iw + 0.00003, iw + 0.00003), h * 0.6, h * 0.77, paneColor, E((ka + kb) / 2));
-      }
-      // 轉向架（車頂不放冷氣機方塊：從上面跟拍時看起來像一塊塊灰色色塊）
-      for (const u of [0.13, 0.87]) {
-        const c = back + (front - back) * u, a = cp(c - 0.0013), b = cp(c + 0.0013);
-        add(quad(a, b, w * 0.47, w * 0.47), 0, h * 0.14, '#1A1D21', E(c));
-      }
-      // 車廂之間的貫通道
-      if (!tail && L.gap > 0) {
-        const a = cp(back - L.gap / 1000 - 0.0002), b = cp(back + 0.0002);
-        add(quad(a, b, w * 0.4, w * 0.4), h * 0.15, h * 0.9, under, E(back - L.gap / 2000));
-      }
-    }
-    if (L.stripe) band(iw + 0.00002, h * 0.4, h * 0.5, L.stripe);
-    if (L.stripe2) band(iw + 0.00002, h * 0.33, h * 0.37, L.stripe2);
-    band(w * 0.36, h, h * 1.07, L.roof);
-    if (!L.stripe && trip.color) band(iw + 0.00002, h * 0.42, h * 0.52, trip.color);
-    if (lead && nose) { const e = E(front - nose / 2); noseFeatures(trip, L, cp(front - nose), cp(front), nose, w, h, detail, (g, b, t, c) => add(g, b, t, c, e), winColor, trip.color, P.lit ? '#FFF6DC' : '#E9E4D2'); }
-    if (tail && nose && L.n > 1) { const e = E(back + nose / 2); noseFeatures(trip, L, cp(back + nose), cp(back), nose, w, h, detail, (g, b, t, c) => add(g, b, t, c, e), winColor, trip.color, P.lit ? '#FF2D2D' : '#B3262A'); }
   }
 }
 
@@ -205,8 +147,6 @@ function trainDoors(trip, headKm) {
 }
 
 const PERSON_COLOR = '#3F6FB8';
-const sfeat = (ring, b, t, c) => ({ type: 'Feature', properties: { b, t, c }, geometry: { type: 'Polygon', coordinates: [ring] } });
-const sngon = (x, y, r, n) => { const o = []; for (let i = 0; i <= n; i++) { const a = i / n * Math.PI * 2; o.push(unproj(x + Math.cos(a) * r / 1000, y + Math.sin(a) * r / 1000)); } return o; };
 // 中心線上 km 處的位置與方向
 function railFrame(trip, km) {
   const p = centerPoint(trip, km), a = centerPoint(trip, km - 0.008), b = centerPoint(trip, km + 0.008);
@@ -227,34 +167,9 @@ function railBand(trip, k0, k1, o0, o1) {
    走路時：前後腳交錯，往前邁的那隻腳會抬起來、膝蓋彎（小腿落在大腿後面），
    手臂跟同側的腳反向擺、前臂擺得比上臂多；身體每一步上下起伏一點、微微前傾。 */
 function personFig(out, x, y, base, hd, phase, walk) {
-  const c = Math.cos(hd), s = Math.sin(hd), k = EX / 1000;
-  // 以人為中心的橢圓柱：fwd 前後、lat 左右（公尺），rf/rl 兩個半徑，b/t 底與頂的高度
-  const ell = (fwd, lat, rf, rl, b, t, n = 6) => {
-    const cx = x + (c * fwd - s * lat) * k, cy = y + (s * fwd + c * lat) * k, r = [];
-    for (let i = 0; i <= n; i++) { const a = (i % n) / n * Math.PI * 2 + Math.PI / n, u = Math.cos(a) * rf, v = Math.sin(a) * rl; r.push(unproj(cx + (c * u - s * v) * k, cy + (s * u + c * v) * k)); }
-    out.push(sfeat(r, base + b * EX, base + t * EX, PERSON_COLOR));
-  };
-  const sw = Math.sin(phase) * walk, vel = Math.cos(phase) * walk;
-  const bob = (1 - Math.abs(Math.cos(phase))) * walk * 0.035, lean = walk * 0.035;
-  // 腿：L 是左腳（lat > 0）。腳往前移動的那一隻在擺盪，抬腳、膝蓋往後彎
-  for (const [side, f, v] of [[1, sw, vel], [-1, -sw, -vel]]) {
-    const foot = f * 0.21, swing = Math.max(0, v), lift = swing * 0.07;
-    const lat = side * 0.085;
-    ell(foot + 0.04, lat, 0.12, 0.05, lift, lift + 0.07);                              // 鞋子（前端比較長）
-    ell(foot * 0.75 - swing * 0.06, lat, 0.05, 0.05, lift + 0.06, 0.47 + lift * 0.6);   // 小腿
-    ell(foot * 0.38, lat * 0.95, 0.065, 0.065, 0.45 + lift * 0.6, 0.86 + bob);          // 大腿
-  }
-  ell(lean * 0.5, 0, 0.1, 0.16, 0.8 + bob, 0.97 + bob, 8);                              // 骨盆
-  ell(lean, 0, 0.11, 0.17, 0.95 + bob, 1.22 + bob, 8);                                  // 胸腔
-  ell(lean * 1.2, 0, 0.1, 0.205, 1.2 + bob, 1.34 + bob, 8);                             // 肩膀
-  // 手臂：跟同側的腳反向擺
-  for (const [side, a] of [[1, -sw], [-1, sw]]) {
-    const lat = side * 0.235;
-    ell(lean * 1.2 + a * 0.06, lat, 0.045, 0.045, 1.0 + bob, 1.33 + bob);               // 上臂
-    ell(lean + a * 0.17, lat * 0.97, 0.04, 0.04, 0.74 + bob, 1.02 + bob);               // 前臂與手
-  }
-  ell(lean * 1.3, 0, 0.045, 0.045, 1.33 + bob, 1.44 + bob);                             // 脖子
-  ell(lean * 1.4 + 0.01, 0, 0.115, 0.1, 1.42 + bob, 1.68 + bob, 8);                     // 頭
+  // 走路的姿勢量化成 16 個相位，同一個相位共用一個模型
+  const q = walk ? ((Math.round(phase / (Math.PI / 8)) % 16) + 16) % 16 : -1;
+  out.push({ key: 'person|' + q, make: () => personMesh(q < 0 ? 0 : q * Math.PI / 8, q < 0 ? 0 : 1), m: GL3D.model(unproj(x, y), base, hd + Math.PI / 2) });
 }
 // 沿著折線走 d 公尺後的位置與方向
 function alongPath(pts, d) {
@@ -341,17 +256,22 @@ function elevAt(trip, km) {
   const e0 = r0 > 0 ? (h0 - base) * ss(1 - (km - g0) / r0) : 0, e1 = r1 > 0 ? (h1 - base) * ss((km - (g1 - r1)) / r1) : 0;
   return base + Math.max(e0, e1);
 }
-// 高架橋：在軌道下面畫橋面（每 4 公尺一段，跟著坡度一段段升高）和橋墩
-function viaductFeatures(trip, k0, k1, P, out, seen) {
-  const o = Math.abs(sideOffset(trip)), w = liveryOf(trip).w * EX / 1000, half = o + w / 2 + 0.0007;
-  const deck = mixHex('#A8ACAE', P.land, 0.3), pier = mixHex('#8E9397', P.land, 0.3), step = 0.004;
+// 高架橋：箱型梁橋面沿著軌道放樣（跟著坡度升降），每 24 公尺一支圓柱橋墩
+function viaductFeatures(trip, k0, k1, P, mb, seen, O) {
+  const o = Math.abs(sideOffset(trip)), w = liveryOf(trip).w * EX / 1000, half = (o + w / 2 + 0.0007) * 1000;
+  const deck = mcol(mixHex('#A8ACAE', P.land, 0.3)), pier = mcol(mixHex('#8E9397', P.land, 0.3)), step = 0.004;
+  const sec = [[-half, -0.02], [half, -0.02], [half, -0.9], [half * 0.55, -1.05], [half * 0.4, -2.2], [-half * 0.4, -2.2], [-half * 0.55, -1.05], [-half, -0.9]];
+  let run = [];
+  const flush = () => { if (run.length > 1) loftPath(mb, run, sec, () => deck); run = []; };
   for (let i = Math.floor(k0 / step); i * step < k1; i++) {
-    const k = i * step, e = elevAt(trip, k + step / 2); if (e < 0.05) continue;
-    const f = railFrame(trip, k + step / 2), key = levelKey(trip) + Math.round(f.x * 250) + ',' + Math.round(f.y * 250);
-    if (seen.has(key)) continue; seen.add(key);
-    out.push(sfeat(railBand(trip, k, k + step, -half, half), Math.max(0, e - 0.9), e - 0.02, deck));
-    if (e > 2.5 && i % 6 === 0) out.push(sfeat(sngon(f.x, f.y, 0.9, 8), 0, e - 0.9, pier));
+    const k = i * step, e = elevAt(trip, k); if (e < 0.05) { flush(); continue; }
+    const f = railFrame(trip, k), key = levelKey(trip) + Math.round(f.x * 250) + ',' + Math.round(f.y * 250);
+    if (seen.has(key)) { flush(); continue; } seen.add(key);
+    const x = (f.x - O.x) * 1000, y = (f.y - O.y) * 1000;
+    run.push([x, y, f.nx, f.ny, e]);
+    if (e > 2.5 && i % 6 === 0) { tube(mb, [x, y, 0], [x, y, e - 2.1], 0.95, 0.85, 12, pier, false); ellipsoid(mb, [x, y, e - 2.15], 1.4, half * 0.5, 0.25, pier, 10, 3, 4); }
   }
+  flush();
 }
 
 /* ---------- 車站：月台、雨棚、樓梯、站名牌 ----------
@@ -386,40 +306,48 @@ function platformGeom(node, trip, idx, s) {
   const stairs = [0.35, 0.65].map(u => ka + (kb - ka) * u);
   return { spec, kS, ka, kb, inner, pw, outer, same, sg, at, stairs, e: elevAt(trip, kS), base: elevAt(trip, kS) + spec.h };
 }
-function stationFeatures(node, trip, idx, P, out, seen) {
+function stationFeatures(node, trip, idx, P, mb, seen, O) {
   const spec = platformSpec(trip), sg = Math.sign(sideOffset(trip)) || 1, hub = isHub(node);
-  const accent = spec.accent || trip.color || '#888888', concrete = mixHex('#B9B5AC', P.land, 0.3), roof = mixHex(spec.roof, P.bld, 0.15);
+  const accent = mcol(spec.accent || trip.color || '#888888'), concrete = mcol(mixHex('#B9B5AC', P.land, 0.3)), side = mcol(mixHex('#9C988F', P.land, 0.3));
+  const roof = mcol(mixHex(spec.roof, P.bld, 0.15)), yellow = mcol('#E8C547'), metal = mcol('#7A8288'), rail = mcol('#8A9096'), dark = mcol('#2E3338');
+  const pt = (k, lat, s) => { const f = railFrame(trip, k); return [(f.x + f.nx * s * lat - O.x) * 1000, (f.y + f.ny * s * lat - O.y) * 1000]; };
+  const path = (ka, kb, e, st = 0.005) => { const n = Math.max(1, Math.ceil((kb - ka) / st)), out = []; for (let i = 0; i <= n; i++) { const f = railFrame(trip, ka + (kb - ka) * i / n); out.push([(f.x - O.x) * 1000, (f.y - O.y) * 1000, f.nx, f.ny, e]); } return out; };
   for (const s of [sg, -sg]) {
-    const G = platformGeom(node, trip, idx, s), { ka, kb, inner, outer, e } = G, H = spec.h;
-    const F = (ring, b, t, c) => out.push(sfeat(ring, b + e, t + e, c));
-    F(railBand(trip, ka, kb, s * inner, s * outer), e > 0 ? -0.6 : -e, H, concrete);
-    F(railBand(trip, ka, kb, s * (inner + 0.0002), s * (inner + 0.0006)), H, H + 0.03, '#E8C547');
-    // 高架的月台底下有一排柱子撐著
-    if (e > 1) for (let k = ka + 0.004; k < kb; k += 0.012) { const [x, y] = G.at(k, (inner + outer) / 2); out.push(sfeat(sngon(x, y, 0.4, 8), 0, e - 0.6, mixHex('#9AA0A4', P.land, 0.3))); }
-    // 樓梯口：月台靠外側的一個開口加上兩側扶手，旅客從這裡上下
+    const G = platformGeom(node, trip, idx, s), { ka, kb, e } = G, H = spec.h, I = G.inner * 1000 * s, U = G.outer * 1000 * s, bz = e > 0 ? -0.6 : -e;
+    const m = v => v * s; // 往月台外側為正
+    // 月台：側面、月台邊的白線與黃色導盲磚、主要地坪，邊緣倒角
+    const sec = [[I, bz], [I, H - 0.12], [I + m(0.06), H], [I + m(0.3), H], [I + m(0.6), H], [U - m(0.08), H], [U, H - 0.1], [U, bz]];
+    loftPath(mb, path(ka, kb, e), sec, (i, j, c) => c ? side : j === 2 ? mcol('#E6E3DC') : j === 3 ? yellow : j === 4 ? concrete : side);
+    // 高架的月台底下有一排圓柱
+    if (e > 1) for (let k = ka + 0.004; k < kb; k += 0.012) { const [x, y] = pt(k, (G.inner + G.outer) / 2, s); tube(mb, [x, y, 0], [x, y, e - 0.6], 0.4, 0.4, 10, mcol(mixHex('#9AA0A4', P.land, 0.3)), false); }
+    // 樓梯口：月台上的深色開口，三面欄杆
     for (const k of G.stairs) {
-      F(railBand(trip, k - 0.0035, k + 0.0035, s * (outer - 0.0022), s * (outer - 0.0003)), H, H + 0.04, '#2E3338');
-      F(railBand(trip, k - 0.0035, k + 0.0035, s * (outer - 0.0023), s * (outer - 0.0021)), H, H + 1.0, '#8A9096');
-      F(railBand(trip, k - 0.0035, k + 0.0035, s * (outer - 0.0004), s * (outer - 0.0002)), H, H + 1.0, '#8A9096');
-      F(railBand(trip, k + 0.0033, k + 0.0036, s * (outer - 0.0023), s * (outer - 0.0002)), H, H + 1.0, '#8A9096');
+      loftPath(mb, path(k - 0.0035, k + 0.0035, e, 0.0035), [[U - m(2.2), H + 0.005], [U - m(0.3), H + 0.005], [U - m(0.3), H + 0.03], [U - m(2.2), H + 0.03]], () => dark);
+      for (const lat of [2.3, 0.2]) {
+        const a = pt(k - 0.0035, G.outer - lat / 1000, s), b = pt(k + 0.0035, G.outer - lat / 1000, s);
+        tube(mb, [a[0], a[1], e + H + 1.0], [b[0], b[1], e + H + 1.0], 0.04, 0.04, 6, rail, false);
+        for (const p of [a, b]) tube(mb, [p[0], p[1], e + H], [p[0], p[1], e + H + 1.0], 0.035, 0.035, 5, rail, false);
+      }
+      { const a = pt(k + 0.0035, G.outer - 0.0023, s), b = pt(k + 0.0035, G.outer - 0.0002, s); tube(mb, [a[0], a[1], e + H + 1.0], [b[0], b[1], e + H + 1.0], 0.04, 0.04, 6, rail, false); }
     }
-    // 雨棚只有多層的轉乘站才有，而且只蓋月台靠外側，從上面看得到停靠的列車
+    // 雨棚：多層的轉乘站才有，弧形屋頂架在一排圓柱上，只蓋月台靠外側，從上面看得到停靠的列車
     if (hub) {
-      const ca = ka + (kb - ka) * 0.12, cb = kb - (kb - ka) * 0.12, ci = inner + G.pw * 0.4;
-      F(railBand(trip, ca, cb, s * ci, s * (outer + 0.0004)), H + 3.4, H + 3.65, roof);
-      F(railBand(trip, ca, cb, s * ci, s * (ci + 0.0003)), H + 3.1, H + 3.65, accent);
-      for (let k = ca; k <= cb; k += 0.016) { const [x, y] = G.at(k, outer - 0.0012); out.push(sfeat(sngon(x, y, 0.18, 6), H + e, H + 3.4 + e, '#7A8288')); }
+      const ca = ka + (kb - ka) * 0.12, cb = kb - (kb - ka) * 0.12, ci = (G.inner + G.pw * 0.4) * 1000 * s, co = U + m(0.4);
+      const arc = [], N = 8;
+      for (let i = 0; i <= N; i++) { const t = i / N; arc.push([ci + (co - ci) * t, H + 3.45 + 0.35 * Math.sin(Math.PI * t)]); }
+      for (let i = N; i >= 0; i--) { const t = i / N; arc.push([ci + (co - ci) * t, H + 3.2 + 0.35 * Math.sin(Math.PI * t)]); }
+      loftPath(mb, path(ca, cb, e), arc, (i, j) => j === N * 2 || j === 0 ? accent : roof);
+      for (let k = ca; k <= cb; k += 0.016) { const [x, y] = pt(k, G.outer - 0.0012, s); tube(mb, [x, y, e + H], [x, y, e + H + 3.5], 0.16, 0.14, 8, metal, false); }
     }
     // 站名牌：沿軌道方向的一塊線色看板，立在一根柱子上
     for (const u of [0.2, 0.8]) {
-      const f = railFrame(trip, ka + (kb - ka) * u), lo = s * (outer - 0.0012), cx = f.x + f.nx * lo, cy = f.y + f.ny * lo;
-      const r = [[1.8, 0.08], [-1.8, 0.08], [-1.8, -0.08], [1.8, -0.08], [1.8, 0.08]].map(([a, b]) => unproj(cx + (f.ux * a + f.nx * b) / 1000, cy + (f.uy * a + f.ny * b) / 1000));
-      F(r, H + 2.0, H + 2.7, accent);
-      out.push(sfeat(sngon(cx, cy, 0.07, 6), H + e, H + 2.0 + e, '#7A8288'));
+      const k = ka + (kb - ka) * u, lo = U - m(1.2);
+      loftPath(mb, path(k - 0.0018, k + 0.0018, e, 0.0018), [[lo - 0.08, H + 2.0], [lo + 0.08, H + 2.0], [lo + 0.08, H + 2.7], [lo - 0.08, H + 2.7]], () => accent);
+      const [x, y] = pt(k, G.outer - 0.0012, s); tube(mb, [x, y, e + H], [x, y, e + H + 2.0], 0.07, 0.07, 6, metal, false);
     }
   }
   // 高架段的橋面與橋墩（坡道一路畫到落地）
-  if (elevProfile(trip)) { const r = platHalf(trip) + 1.0; viaductFeatures(trip, trip.cum[idx] - r, trip.cum[idx] + r, P, out, seen); }
+  if (elevProfile(trip)) { const r = platHalf(trip) + 1.0; viaductFeatures(trip, trip.cum[idx] - r, trip.cum[idx] + r, P, mb, seen, O); }
 }
 
 /* ---------- 月台上的旅客 ----------
@@ -503,55 +431,6 @@ function stationPeople(node, R, idx, m, out, cap) {
       const d = standAt(nowS);
       if (d < Lp) walker(out, path, d, base);
       else personFig(out, spot[0], spot[1], base, Math.atan2(face[1] - spot[1], face[0] - spot[0]), 0, 0);
-    }
-  }
-}
-
-/* 車頭：以平滑的俯視輪廓一層層往上疊。每一層的頂面高度越高、往前伸得越短，
-   疊起來就是一個往前下斜的圓弧車鼻；腰帶、窗帶的顏色也跟著繞過車頭 */
-function noseFeatures(trip, L, root, tip, nose, w, h, detail, add, winColor, lineColor, lamp) {
-  const key = Object.keys(LIVERY).find(k => LIVERY[k] === L);
-  const S = NOSE_SHAPE[key] || NOSE_SHAPE.EMU900;
-  const len = Math.hypot(tip.x - root.x, tip.y - root.y) || nose;
-  const ux = (tip.x - root.x) / len, uy = (tip.y - root.y) / len; // 往車頭方向
-  const nx = -uy, ny = ux;                                           // 側向
-  const pt = (s, y) => unproj(root.x + ux * s * len + nx * y, root.y + uy * s * len + ny * y);
-  const halfW = s => (w / 2) * (S.tipW + (1 - S.tipW) * Math.pow(Math.max(0, 1 - Math.pow(s, S.wp)), 1 / S.wp));
-  const reach = r => r <= S.tipH ? 1 : Math.pow((1 - r) / (1 - S.tipH), 1 / S.hp); // 高度比例 r 的那一層能伸到哪
-  // 分層：顏色交界一定要切，上半部再多切幾層讓斜面更平滑
-  const cuts = new Set([0, 0.1, 0.56, 0.8, 1]);
-  if (L.stripe) { cuts.add(0.4); cuts.add(0.5); }
-  if (L.stripe2) { cuts.add(0.33); cuts.add(0.37); }
-  if (!L.stripe && lineColor) { cuts.add(0.42); cuts.add(0.52); }
-  for (const r of detail ? [0.25, 0.66, 0.73, 0.87, 0.93, 0.97] : [0.68, 0.9]) cuts.add(r);
-  const H = [...cuts].sort((a, b) => a - b);
-  const nSide = detail ? 8 : 4, nFront = detail ? 7 : 3;
-  const colorAt = m => m < 0.1 ? '#24282E'
-    : L.stripe2 && m > 0.33 && m < 0.37 ? L.stripe2
-    : L.stripe && m > 0.4 && m < 0.5 ? L.stripe
-    : !L.stripe && lineColor && m > 0.42 && m < 0.52 ? lineColor
-    : m > 0.56 && m < 0.8 ? winColor
-    : m < 0.56 && L.cab ? L.cab : L.body;
-  for (let i = 0; i < H.length - 1; i++) {
-    const b0 = H[i], b1 = H[i + 1], m = (b0 + b1) / 2;
-    const sk = reach(b1), Wk = halfW(sk);
-    if (sk <= 0.001) continue;
-    // 俯視輪廓：左側弧線 → 前端圓角 → 右側弧線
-    const ring = [];
-    for (let j = 0; j <= nSide; j++) { const s = sk * j / nSide; ring.push(pt(s, halfW(s))); }
-    const bulge = Math.min(Wk * 0.45, (1 - sk) * len + Wk * 0.25);
-    for (let j = 1; j < nFront; j++) { const a = Math.PI / 2 - Math.PI * j / nFront; ring.push(pt(sk + bulge * Math.cos(a) / len, Wk * Math.sin(a))); }
-    for (let j = nSide; j >= 0; j--) { const s = sk * j / nSide; ring.push(pt(s, -halfW(s))); }
-    ring.push(ring[0]);
-    add([ring], h * b0, h * b1, colorAt(m));
-  }
-  // 車燈：車頭兩側各一顆小燈（車頭暖白、車尾紅），是車身的一部分，會被前面的東西擋住
-  if (lamp) {
-    const W = halfW(1), lo = 0.15, hi = Math.min(S.tipH, 0.34) - 0.03;
-    const s0 = 1 - 0.3 / 1000 / len, s1 = 1 + (W * 0.22 + 0.00005) / len;
-    for (const sd of [-1, 1]) {
-      const y0 = sd * W * 0.4, y1 = sd * W * 0.72;
-      add([[pt(s0, y0), pt(s1, y0), pt(s1, y1), pt(s0, y1), pt(s0, y0)]], h * lo, h * Math.max(lo + 0.05, hi), lamp);
     }
   }
 }
