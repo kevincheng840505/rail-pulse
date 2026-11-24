@@ -6,7 +6,8 @@ name: 更新 TDX 即時資料
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/10 * * * *" # 每 10 分鐘（GitHub 排程常會晚幾分鐘）
+    # 每 10 分鐘。避開整點與 0、5 分（GitHub 這些時刻排程最擠，常常延遲或整批跳過）
+    - cron: "3,13,23,33,43,53 * * * *"
   push:
     branches: [main]
     paths:
