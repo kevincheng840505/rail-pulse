@@ -173,11 +173,21 @@ function railBand(trip, k0, k1, o0, o1) {
    hd 是面向的方向，phase 是走路擺動的相位，walk（0~1）是擺動幅度。
    走路時：前後腳交錯，往前邁的那隻腳會抬起來、膝蓋彎（小腿落在大腿後面），
    手臂跟同側的腳反向擺、前臂擺得比上臂多；身體每一步上下起伏一點、微微前傾。 */
-function personFig(out, x, y, base, hd, phase, walk) {
-  // 走路的姿勢量化成 16 個相位，同一個相位共用一個模型
-  const q = walk ? ((Math.round(phase / (Math.PI / 8)) % 16) + 16) % 16 : -1;
-  out.push({ key: 'person|' + q, make: () => personMesh(q < 0 ? 0 : q * Math.PI / 8, q < 0 ? 0 : 1), m: GL3D.model(unproj(x, y), base, hd + Math.PI / 2) });
+function personFig(out, x, y, base, hd, phase, walk, id = '') {
+  // 走路的姿勢量化成 16 個相位，同一個角色、配色、相位共用一個模型
+  const q = walk ? ((Math.round(phase / (Math.PI / 8)) % 16) + 16) % 16 : -1, [sid, vi] = personStyle(id);
+  out.push({ key: 'person|' + sid + '|' + vi + '|' + q, make: () => personMesh(q < 0 ? 0 : q * Math.PI / 8, q < 0 ? 0 : 1, sid, vi), m: GL3D.model(unproj(x, y), base, hd + Math.PI / 2) });
 }
+// 依旅客的編號決定角色與配色（同一個人每一格都一樣）；角色越常見的越容易抽到
+const STYLE_W = [3, 2, 2, 2, 1.2, 0.8, 1.2, 2, 1.2, 0.8];
+function personStyle(id) {
+  if (!id) return [0, 0];
+  let r = hash(id + 'style') * STYLE_W.reduce((a, b) => a + b, 0), sid = 0;
+  while (sid < STYLE_W.length - 1 && r > STYLE_W[sid]) r -= STYLE_W[sid++];
+  return [sid, hash(id + 'tint') < 0.5 ? 0 : 1];
+}
+// 角色的走路速度：長輩、拉行李箱的人走得慢
+const styleSpeed = id => (PERSON_STYLES[personStyle(id)[0]] || {}).speed || 1;
 // 沿著折線走 d 公尺後的位置與方向
 function alongPath(pts, d) {
   for (let i = 1; i < pts.length; i++) {
@@ -189,7 +199,7 @@ function alongPath(pts, d) {
 }
 const pathLen = pts => { let s = 0; for (let i = 1; i < pts.length; i++) s += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]) * 1000; return s; };
 const STRIDE = 0.62; // 每半步的距離（公尺）
-const walker = (out, pts, d, base) => { const p = alongPath(pts, d); personFig(out, p.x, p.y, base, p.hd, d / STRIDE * Math.PI, 1); };
+const walker = (out, pts, d, base, id) => { const p = alongPath(pts, d); personFig(out, p.x, p.y, base, p.hd, d / STRIDE * Math.PI * (personStyle(id)[0] === 5 ? 1.4 : 1), 1, id); };
 
 /* ---------- 多層車站：捷運交會、台鐵高鐵共構的車站，每條線的月台放在不同樓層 ---------- */
 const LEVEL_H = 8;      // 一層樓高（公尺）
@@ -470,11 +480,11 @@ function stationPeople(node, R, idx, m, out, cap) {
         for (let q = 0; q < na && out.length < cap; q++) {
           const st = t0 + D * 0.09 + q * 1.3 + hash(key + q) * 1.0; if (st > t0 + D * 0.8) break;
           const tau = nowS - st; if (tau < 0) continue;
-          const v = 1.15 + hash(key + 'v' + q) * 0.4, side = (hash(key + 's' + q) - 0.5) * 0.0012;
+          const v = (1.15 + hash(key + 'v' + q) * 0.4) * styleSpeed(key + q), side = (hash(key + 's' + q) - 0.5) * 0.0012;
           const p1 = [dp.x + dp.nx * 0.0012 - dp.ny * side, dp.y + dp.ny * 0.0012 + dp.nx * side];
           const pts = [[dp.x, dp.y], p1, nearStair(dp.x, dp.y)], Lp = pathLen(pts);
           if (tau * v > Lp) continue;
-          walker(out, pts, tau * v, base);
+          walker(out, pts, tau * v, base, key + q);
         }
       });
     }
@@ -488,22 +498,28 @@ function stationPeople(node, R, idx, m, out, cap) {
       const di = Math.floor(hash(seed + 'd' + q) * spotDoors.length), rk = ranks[di]++;
       const along = spotDoors[di] + (rk % 2 ? 1 : -1) * (0.0009 + hash(seed + 'a' + q) * 0.0004), lat = Math.min(G.outer - 0.0006, G.inner + 0.0013 + Math.floor(rk / 2) * 0.0006);
       const spot = G.at(along, lat), face = G.at(along, 0), stair = stairPt(G.stairs[hash(seed + 's' + q) < 0.5 ? 0 : 1]);
-      const v = 1.1 + hash(seed + 'v' + q) * 0.4, path = [stair, spot], Lp = pathLen(path);
+      const pid = seed + q, v = (1.1 + hash(seed + 'v' + q) * 0.4) * styleSpeed(pid), path = [stair, spot], Lp = pathLen(path);
       const standAt = sec => Math.min(Lp, Math.max(0, sec - aq * 60) * v);
       // 上車：先等下車的人，再依到月台的先後走向最近的車門
       if (cur && doors.length) {
         const sb = cur.arr * 60 + D * (0.3 + 0.4 * q / Math.max(1, n)), d0 = standAt(sb), p0 = alongPath(path, d0);
         if (nowS >= sb) {
           let dp = doors[0], bd = 1e9; for (const o of doors) { const d = Math.hypot(o.x - spot[0], o.y - spot[1]); if (d < bd) { bd = d; dp = o; } }
-          const pts = [[p0.x, p0.y], [dp.x + dp.nx * 0.0007, dp.y + dp.ny * 0.0007], [dp.x - dp.nx * 0.0005, dp.y - dp.ny * 0.0005]], L2 = pathLen(pts);
-          const vb = Math.max(v, L2 / Math.max(1, cur.arr * 60 + D * 0.88 - sb)), d = (nowS - sb) * vb;
-          if (d < L2) walker(out, pts, d, base);
+          // 走到車門前、在門口停一下（看一下車廂、拉行李箱的人停久一點），再跨進車廂
+          const front = [dp.x + dp.nx * 0.0007, dp.y + dp.ny * 0.0007], pts = [[p0.x, p0.y], front, [dp.x - dp.nx * 0.0006, dp.y - dp.ny * 0.0006]], L2 = pathLen(pts);
+          const L1 = pathLen(pts.slice(0, 2)), pause = PERSON_STYLES[personStyle(pid)[0]].acc === 'suitcase' ? 1.1 : 0.45;
+          const vb = Math.max(v, L2 / Math.max(1, cur.arr * 60 + D * 0.88 - sb - pause)), tt = nowS - sb, t1 = L1 / vb;
+          const d = tt < t1 ? tt * vb : tt < t1 + pause ? L1 : L1 + (tt - t1 - pause) * vb * 0.8;
+          if (d < L2) {
+            if (tt >= t1 && tt < t1 + pause) personFig(out, front[0], front[1], base, Math.atan2(-dp.ny, -dp.nx), 0, 1, pid); // 站在門口（不滑手機）
+            else walker(out, pts, d, base, pid);
+          }
           continue;
         }
       }
       const d = standAt(nowS);
-      if (d < Lp) walker(out, path, d, base);
-      else personFig(out, spot[0], spot[1], base, Math.atan2(face[1] - spot[1], face[0] - spot[0]), 0, 0);
+      if (d < Lp) walker(out, path, d, base, pid);
+      else personFig(out, spot[0], spot[1], base, Math.atan2(face[1] - spot[1], face[0] - spot[0]), 0, 0, pid);
     }
   }
 }
