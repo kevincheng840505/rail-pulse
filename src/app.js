@@ -527,6 +527,8 @@ const Facade = (() => {
     const O = { x: cx, y: cy };
     if (base !== lastBase.key) {
       const mb = MB(), seen = new Set();
+      // 跟拍那條線的枕木和電車線桿跟著鏡頭走，不放進快取的網格，交給下面的軌道網格畫
+      seen._noDetail = fq ? levelKey(f) : null;
       for (const n of near) for (const [trip, idx] of stationReps(n)) stationFeatures(n, trip, idx, S.P, mb, seen, O);
       if (fp) viaductFeatures(f, fp.km - 1.5, fp.km + 1.5, S.P, mb, seen, O);
       TrainGL.setStatic('stations', mb.P.length ? mbDone(mb) : null, unproj(cx, cy));
@@ -535,6 +537,7 @@ const Facade = (() => {
     // 軌道避開車站已經畫過的股道（複製一份佔用表，不污染下次用）
     const mb = MB(), seen = new Set();
     seen._track = new Map([...lastBase.grid].map(([k, a]) => [k, a.slice()]));
+    seen._detailTaken = true;
     if (fq) trackFeatures(f, fq.km - 0.8, fq.km + 0.8, S.P, mb, seen, O, 0.35);
     TrainGL.setStatic('track', mb.P.length ? mbDone(mb) : null, unproj(cx, cy));
   }

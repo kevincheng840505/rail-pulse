@@ -2990,10 +2990,11 @@ function trackFeatures(trip, k0, k1, P, mb, seen, O, near) {
       const k = i * step, f = railFrame(trip, k), cx = f.x + f.nx * lat / 1000, cy = f.y + f.ny * lat / 1000;
       const r = runs[runs.length - 1], e = elevAt(trip, k), x = (cx - O.x) * 1000, y = (cy - O.y) * 1000, pt = [x, y, f.nx, f.ny, e];
       // 接到別班車已經畫好的那一段：多畫一格接上去，不留縫
-      if (trackTaken(seen, levelKey(trip), cx, cy, f.ux, f.uy)) { if (r.length) { r.push(pt); runs.push([]); } prevPt = pt; continue; }
-      if (!r.length && prevPt) r.push(prevPt);
-      r.push(pt); prevPt = null;
-      const d = Math.hypot(cx - O.x, cy - O.y);
+      // 跟車時車站的網格是快取的（跟拍的那條線不含枕木和電車線桿），所以就算這段股道車站畫過了，枕木和線桿仍由這裡補上
+      const taken = trackTaken(seen, levelKey(trip), cx, cy, f.ux, f.uy);
+      if (taken) { if (r.length) { r.push(pt); runs.push([]); } prevPt = pt; if (!seen._detailTaken) continue; }
+      else { if (!r.length && prevPt) r.push(prevPt); r.push(pt); prevPt = null; }
+      const d = seen._noDetail === levelKey(trip) ? Infinity : Math.hypot(cx - O.x, cy - O.y);
       if (d < near) {
         // 枕木：每 0.6 公尺一根（這一格 5 公尺裡排 8 根）
         // （用 slab 直接寫頂點；以前每根枕木是一顆橢球，跟拍高鐵時一次重建要畫二十幾萬個頂點，手機會卡半秒以上）
@@ -3851,6 +3852,8 @@ const Facade = (() => {
     const O = { x: cx, y: cy };
     if (base !== lastBase.key) {
       const mb = MB(), seen = new Set();
+      // 跟拍那條線的枕木和電車線桿跟著鏡頭走，不放進快取的網格，交給下面的軌道網格畫
+      seen._noDetail = fq ? levelKey(f) : null;
       for (const n of near) for (const [trip, idx] of stationReps(n)) stationFeatures(n, trip, idx, S.P, mb, seen, O);
       if (fp) viaductFeatures(f, fp.km - 1.5, fp.km + 1.5, S.P, mb, seen, O);
       TrainGL.setStatic('stations', mb.P.length ? mbDone(mb) : null, unproj(cx, cy));
@@ -3859,6 +3862,7 @@ const Facade = (() => {
     // 軌道避開車站已經畫過的股道（複製一份佔用表，不污染下次用）
     const mb = MB(), seen = new Set();
     seen._track = new Map([...lastBase.grid].map(([k, a]) => [k, a.slice()]));
+    seen._detailTaken = true;
     if (fq) trackFeatures(f, fq.km - 0.8, fq.km + 0.8, S.P, mb, seen, O, 0.35);
     TrainGL.setStatic('track', mb.P.length ? mbDone(mb) : null, unproj(cx, cy));
   }
