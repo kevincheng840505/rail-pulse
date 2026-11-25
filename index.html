@@ -306,8 +306,9 @@ body.clean #aircap { display:none !important; }
     <div class="row" id="baserow">
       <button data-v="art" aria-pressed="true" title="插畫風的簡潔底圖，配合時間與天氣變色">插畫</button>
       <button data-v="real" aria-pressed="false" title="真實的航空與衛星照片（內政部國土測繪中心正射影像），列車與 3D 模型疊在上面">真實</button>
+      <button data-v="land" aria-pressed="false" title="自然色的森林、農田、城鎮與水面，加深山影與 3D 地形；入夜後城鎮與道路亮起燈光">地景</button>
     </div>
-    <div class="note">真實地圖用國土測繪中心的航照影像，近看時會多下載一些圖片。</div>
+    <div class="note">真實：國土測繪中心航照影像，近看時會多下載一些圖片。地景：自然色地表、3D 地形與夜景燈光（手機要「高」畫質才有 3D 地形）。</div>
   </section>
   <section>
     <h4>畫面</h4>
@@ -3431,9 +3432,10 @@ const SAT_SRC = {
 // 插畫風才有的圖層：真實地圖時隱藏
 const ART_LAYERS = ['wood', 'park', 'grass', 'hills', 'water', 'roads', 'buildings', 'bld-edge'];
 const Basemap = {
-  pref: store.get('basemap', 'art') === 'real' ? 'real' : 'art',
+  pref: ['real', 'land'].includes(store.get('basemap', 'art')) ? store.get('basemap', 'art') : 'art',
   src: null, failed: false,
   get real() { return this.pref === 'real'; },
+  get land() { return this.pref === 'land'; },
   // 依時間與天氣調暗：夜裡照片壓暗、陰雨天降低飽和度，跟原本的光線系統一致
   paint(P, W) {
     const bmax = Math.max(0.28, Math.min(1, 1.15 - P.glow * 1.4)) * (1 - (W.dark || 0) * 0.5);
@@ -3457,16 +3459,55 @@ const Basemap = {
     for (const s of ['sat', 'sat-world']) try { map.removeSource(s); } catch {}
     this.src = null; this.apply();
   },
+  /* 地景：參考軌島的「地景」外觀。用自然的顏色畫森林、農田、城鎮、水面，山影加深、開 3D 地形；
+     入夜後城鎮與道路亮起暖色燈光，從高處看就是一片夜景 */
+  ensureLand() {
+    if (!map || map.getLayer('urban')) return;
+    map.addLayer({ id: 'urban', type: 'fill', source: 'omt', 'source-layer': 'landuse', minzoom: 8,
+      filter: ['in', ['get', 'class'], ['literal', ['residential', 'commercial', 'industrial', 'retail', 'suburb', 'neighbourhood', 'quarter']]],
+      paint: { 'fill-color': '#C9C1B4', 'fill-opacity': 0.75 } }, 'hills');
+    map.addLayer({ id: 'road-lights', type: 'line', source: 'omt', 'source-layer': 'transportation', minzoom: 8,
+      filter: ['in', ['get', 'class'], ['literal', ['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'minor']]],
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': '#FFB257', 'line-opacity': 0,
+        'line-width': ['interpolate', ['exponential', 1.6], ['zoom'], 8, ['match', ['get', 'class'], ['motorway', 'trunk'], 2.2, 1], 14, ['match', ['get', 'class'], ['motorway', 'trunk', 'primary'], 7, 4], 18, 26],
+        'line-blur': ['interpolate', ['linear'], ['zoom'], 8, 1.5, 14, 4, 18, 10] } }, 'buildings');
+  },
+  look(P, W, set) {
+    // 夜的程度：白天 0、深夜 1（黃昏、清晨在中間）
+    const n = Math.max(0, Math.min(1, (P.glow - 0.15) / 0.45)), wet = (W.grey || 0);
+    const c = (day, night, k) => mixHex(mixHex(day, night, n), P[k] || day, 0.22 + wet * 0.3);
+    set('bg', 'background-color', c('#2E5D7E', '#040A12', 'sea'));
+    set('land', 'fill-color', c('#B9BE95', '#0E1418', 'land'));
+    set('county', 'line-color', c('#8E9474', '#1A232B', 'edge'));
+    set('wood', 'fill-color', c('#4F7344', '#0A140F', 'wood')); set('wood', 'fill-opacity', 0.92);
+    set('park', 'fill-color', c('#6E9258', '#0C1711', 'wood'));
+    set('grass', 'fill-color', c('#A6B97E', '#121A14', 'wood')); set('grass', 'fill-opacity', 0.7);
+    set('water', 'fill-color', c('#3C6D90', '#06111D', 'water'));
+    set('urban', 'fill-color', c('#CBC3B5', '#3A2A1A', 'land')); set('urban', 'fill-opacity', 0.55 + n * 0.3);
+    set('roads', 'line-color', c('#EEE9DC', '#5A4126', 'road'));
+    set('road-lights', 'line-opacity', n * 0.85 * (1 - wet * 0.3));
+    set('hills', 'hillshade-exaggeration', 0.85);
+    set('hills', 'hillshade-shadow-color', mixHex('#2B3A2C', '#000000', n));
+    set('hills', 'hillshade-highlight-color', mixHex('#FFF6DE', '#1E2A36', n));
+    set('hills', 'hillshade-accent-color', mixHex('#4A5A3E', '#05090D', n));
+  },
   apply() {
     if (!map || !S.mapReady) return;
-    const real = this.real, vis = on => on ? 'visible' : 'none';
+    const real = this.real, land = this.land, vis = on => on ? 'visible' : 'none';
     if (real) this.ensure();
+    if (land) this.ensureLand();
     for (const l of ['sat', 'sat-world']) try { map.setLayoutProperty(l, 'visibility', vis(real)); } catch {}
-    for (const l of ART_LAYERS) try { map.setLayoutProperty(l, 'visibility', vis(!real && (l !== 'hills' || !Quality.low) && (!/^b/.test(l) || S.buildings))); } catch {}
+    for (const l of ['urban', 'road-lights']) try { map.setLayoutProperty(l, 'visibility', vis(land)); } catch {}
+    // 地景模式的山影在省電畫質也開（山影本身不貴，貴的是 3D 地形）
+    for (const l of ART_LAYERS) try { map.setLayoutProperty(l, 'visibility', vis(!real && (l !== 'hills' || !Quality.low || land) && (!/^b/.test(l) || S.buildings))); } catch {}
+    if (!land) try { map.setPaintProperty('hills', 'hillshade-exaggeration', 0.55); map.setPaintProperty('wood', 'fill-opacity', 0.6); map.setPaintProperty('grass', 'fill-opacity', 0.35); } catch {}
     document.body.classList.toggle('realmap', real);
+    document.body.classList.toggle('landmap', land);
+    syncTerrain(true);
     applyLook(true);
   },
-  set(v) { this.pref = v === 'real' ? 'real' : 'art'; store.set('basemap', this.pref); this.render(); this.apply(); },
+  set(v) { this.pref = ['real', 'land'].includes(v) ? v : 'art'; store.set('basemap', this.pref); this.render(); this.apply(); },
   render() { for (const b of document.querySelectorAll('#baserow button')) b.setAttribute('aria-pressed', String(b.dataset.v === this.pref)); },
 };
 
@@ -3699,7 +3740,7 @@ function initMap() {
     S.mapReady = true;
     perfMark('地圖樣式就緒');
     applyQuality();
-    if (Basemap.real) Basemap.apply();
+    if (Basemap.pref !== 'art') Basemap.apply();
     applyLook(true); pushTrains(true);
     map.on('click', onMapClick);
     for (const l of ['train', 'train-halo', 'st-dot']) {
@@ -3739,8 +3780,10 @@ function syncTerrain(force) {
   // 手機上只要還在跟車（就算手動拉遠）就不開地形：地形加上斜角大範圍視野會把手機 GPU 拖垮
   // 手機的地形只留給看全台、看整個縣市的大範圍：拉近到十多公里寬時，斜看的山區要把很多地形圖磚畫到離屏畫面，
   // 加上進出地形時重新編譯著色器，手機 GPU 會整個卡住（電腦可以放寬到更近）
-  const [zOn, zOff] = COARSE ? [9.6, 10.4] : [11.5, 12.5];
-  const want = S.terrain && S.started && !Quality.low && !(S.follow && (COARSE || !S.followPaused)) && (terrainOn ? z < zOff : z < zOn);
+  // 地景模式：電腦在省電畫質也開地形，而且可以拉得更近看山（手機仍要「高」畫質才開）
+  const land = typeof Basemap !== 'undefined' && Basemap.land;
+  const [zOn, zOff] = COARSE ? [9.6, 10.4] : land ? [13, 14] : [11.5, 12.5];
+  const want = S.terrain && S.started && (!Quality.low || (land && !COARSE)) && !(S.follow && (COARSE || !S.followPaused)) && (terrainOn ? z < zOff : z < zOn);
   if (want === terrainOn && !force) return;
   terrainOn = want;
   try { map.setTerrain(want ? { source: 'dem', exaggeration: 1.5 } : null); } catch {}
@@ -3750,7 +3793,7 @@ function applyQuality() {
   if (!map || !S.mapReady) return;
   const low = Quality.low, vis = on => on ? 'visible' : 'none';
   try { if (map.getPixelRatio() !== Quality.pixelRatio) map.setPixelRatio(Quality.pixelRatio); } catch {}
-  try { map.setLayoutProperty('hills', 'visibility', vis(!low && !Basemap.real)); } catch {}
+  try { map.setLayoutProperty('hills', 'visibility', vis((!low || Basemap.land) && !Basemap.real)); } catch {}
   for (const l of ['city3d', 'lamp-glow']) try { map.setLayoutProperty(l, 'visibility', vis(S.buildings && !low)); } catch {}
   syncTerrain(true); Facade.soon(true); pushTrains(true);
 }
@@ -3998,6 +4041,7 @@ function applyLook(force) {
   for (const l of ['places', 'street-names', 'poi']) { set(l, 'text-color', lab); set(l, 'text-halo-color', halo); }
   if (Basemap.real) { const sp = Basemap.paint(P, W); for (const l of ['sat', 'sat-world']) for (const k in sp) set(l, k, sp[k]); }
   set('park', 'fill-color', P.wood); set('grass', 'fill-color', P.wood);
+  if (Basemap.land) Basemap.look(P, W, set);
   // 高樓顏色亮一點、矮房暗一點，整片街區才有層次
   set('buildings', 'fill-extrusion-color', ['interpolate', ['linear'], ['coalesce', ['get', 'render_height'], 8], 4, mixHex(P.bld, P.land, 0.25), 30, P.bld, 120, mixHex(P.bld, P.bldEdge, 0.35)]);
   set('lamp-glow', 'circle-opacity', P.lit ? 0.55 : 0);
