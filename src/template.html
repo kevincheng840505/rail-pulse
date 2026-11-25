@@ -299,6 +299,14 @@ body.clean #aircap { display:none !important; }
     <div class="note">預設為省電。想看 3D 地形與完整細節可以改成「高」，手機會比較耗電、發熱。</div>
   </section>
   <section>
+    <h4>地圖</h4>
+    <div class="row" id="baserow">
+      <button data-v="art" aria-pressed="true" title="插畫風的簡潔底圖，配合時間與天氣變色">插畫</button>
+      <button data-v="real" aria-pressed="false" title="真實的航空與衛星照片（內政部國土測繪中心正射影像），列車與 3D 模型疊在上面">真實</button>
+    </div>
+    <div class="note">真實地圖用國土測繪中心的航照影像，近看時會多下載一些圖片。</div>
+  </section>
+  <section>
     <h4>畫面</h4>
     <div class="row">
       <button id="terrainbtn" aria-pressed="true">3D 地形</button>
@@ -316,7 +324,7 @@ body.clean #aircap { display:none !important; }
   </section>
   <section>
     <h4>說明</h4>
-    <div class="note">R 漫遊、V 切換視角、M 播放／暫停音樂、F 隱藏介面、Esc 離開跟車。軌道與底圖 © OpenStreetMap 貢獻者，地形 © Mapzen／AWS Terrain Tiles，音樂由瀏覽器即時合成。</div>
+    <div class="note">R 漫遊、V 切換視角、M 播放／暫停音樂、F 隱藏介面、Esc 離開跟車。軌道與底圖 © OpenStreetMap 貢獻者，真實地圖影像 © 內政部國土測繪中心（備援 Esri），地形 © Mapzen／AWS Terrain Tiles，音樂由瀏覽器即時合成。</div>
   </section>
 </section>
 
