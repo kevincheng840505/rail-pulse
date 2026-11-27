@@ -295,7 +295,7 @@ function generateAll() {
 function effTime(trip, i, which) {
   const t = trip.times[i][which];
   if (!trip.delay) return t;
-  if (i === 0) return t + Math.round(trip.delay * 0.5);
+  if (i === 0) return t + trip.delay * 0.5;
   return t + trip.delay;
 }
 function easePos(f, aS, aE) {
@@ -305,9 +305,22 @@ function easePos(f, aS, aE) {
   return v * (f - aS / 2);
 }
 
+/* 快照之間平滑銜接：TDX 誤點每 10 分鐘才更新一次，直接套用新數字，列車會瞬間往前跳或往後退。
+   改成慢慢追上：誤點變多時列車放慢（以原速約 25% 前進，或在月台多停一下），絕不倒退；
+   誤點變少時加速追上。差太多（例如剛載入、換日）才直接套用 */
+function shownDelay(trip) {
+  const tgt = trip.liveDelay, now = performance.now();
+  if (trip._dShown == null) { trip._dShown = tgt; trip._dAt = now; return tgt; }
+  const dt = Math.min(5, (now - trip._dAt) / 60000); trip._dAt = now;
+  let d = trip._dShown;
+  if (Math.abs(tgt - d) > 20) d = tgt;
+  else if (tgt > d) d = Math.min(tgt, d + dt * 0.75);
+  else if (tgt < d) d = Math.max(tgt, d - dt * 1.5);
+  return (trip._dShown = d);
+}
 /* 回傳 {x,y,heading,seg,atStation,nodeIdx} 或 null；m 為「營運日分鐘數」 */
 function tripPosAt(trip, m) {
-  if (trip.live && trip.liveDelay != null) trip.delay = trip.liveDelay;
+  if (trip.live && trip.liveDelay != null) trip.delay = shownDelay(trip);
   const n = trip.nodes.length;
   const first = effTime(trip, 0, 'dep'), last = effTime(trip, n - 1, 'arr');
   if (m < first || m > last) return null;
