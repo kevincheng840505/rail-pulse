@@ -1101,9 +1101,10 @@ function renderCaption(force) {
   }
   const total = t.cum[t.cum.length - 1] || 1;
   const progress = pos ? Math.min(1, pos.km / total) : (next === '已抵達終點' ? 1 : 0);
-  const delay = t.sys === 'TRA' ? (t.delay ? `<span class="late">晚 ${t.delay} 分</span>` : '<span class="ok">準點</span>') : '';
+  const dl = Math.round(t.liveDelay != null ? t.liveDelay : t.delay || 0);
+  const delay = t.sys === 'TRA' ? (dl ? `<span class="late">晚 ${dl} 分</span>` : '<span class="ok">準點</span>') : '';
   const speed = pos && !pos.atStation ? Math.round((t.cum[pos.seg + 1] - t.cum[pos.seg]) / Math.max(0.1, effTime(t, pos.seg + 1, 'arr') - effTime(t, pos.seg, 'dep')) * 60) : 0;
-  const key = [t.idx, next, eta, Math.round(progress * 200), S.followPaused, speed, t.delay].join('|');
+  const key = [t.idx, next, eta, Math.round(progress * 200), S.followPaused, speed, dl].join('|');
   if (key === capKey && !force) return;
   capKey = key;
   cap.classList.toggle('mini', !S.capOpen);
