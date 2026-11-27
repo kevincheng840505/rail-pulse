@@ -6221,21 +6221,22 @@ function scanEvents() {
     const was = HUD.prev.get(trip);
     const now = atSt ? 'S' + pos.seg : 'R' + pos.seg;
     HUD.prev.set(trip, now);
-    if (seed || was === now) continue;
+    if (seed) continue;
     const name = shortName(trip);
-    // 從大站開車
-    if (was && was[0] === 'S' && now[0] === 'R') {
-      const st = trip.nodes[+was.slice(1)];
-      if (isMajor(st) || +was.slice(1) === 0) pushEvent('dep', '發車', `${name} 由 ${stName(st)} 開出，往 ${trip.dest}`);
-    } else if (atSt && pos.seg === trip.nodes.length - 1) pushEvent('arr', '抵達', `${name} 抵達終點 ${stName(atSt)}`);
-    else if (atSt && isMajor(atSt) && was) pushEvent('arr', '進站', `${name} 停靠 ${stName(atSt)}`);
-    // 誤點變化（台鐵即時資料）
+    // 誤點變化（台鐵即時資料）：每次更新都檢查，不必等列車換站
     if (trip.liveDelay != null && trip.no) {
       const d = Math.round(trip.liveDelay), pd = HUD.delays.get(trip.no);
       if (pd != null && d >= 5 && d > pd) pushEvent('late', '誤點', `${name}（往${trip.dest}）誤點 ${d} 分`);
       else if (pd != null && pd >= 5 && d < 5) pushEvent('info', '恢復', `${name} 已恢復準點`);
       HUD.delays.set(trip.no, d);
     }
+    if (was === now) continue;
+    // 從大站開車
+    if (was && was[0] === 'S' && now[0] === 'R') {
+      const st = trip.nodes[+was.slice(1)];
+      if (isMajor(st) || +was.slice(1) === 0) pushEvent('dep', '發車', `${name} 由 ${stName(st)} 開出，往 ${trip.dest}`);
+    } else if (atSt && pos.seg === trip.nodes.length - 1) pushEvent('arr', '抵達', `${name} 抵達終點 ${stName(atSt)}`);
+    else if (atSt && isMajor(atSt) && was) pushEvent('arr', '進站', `${name} 停靠 ${stName(atSt)}`);
   }
   for (const t of HUD.prev.keys()) if (!seen.has(t)) HUD.prev.delete(t);
   if (seed) for (const { trip } of S.positions) if (trip.liveDelay != null && trip.no) HUD.delays.set(trip.no, Math.round(trip.liveDelay));
@@ -6605,7 +6606,7 @@ document.addEventListener('keydown', e => {
 /* ---------- 迴圈：統計每秒一次，跑馬燈與流動線每一格 ---------- */
 let hudLast = 0;
 function hudTick() {
-  if (!S.positions.length) return;
+  if (!TRIPS.length) return; // 班次還沒載入；載入後即使深夜沒有列車在跑，也照常更新（航班、清空看板）
   scanEvents();
   if (!HUD.on) return;
   renderHudL(); renderHudR(); drawTimeline();
