@@ -22,10 +22,24 @@ def fname(path):
 
 
 def token():
-    body = urllib.parse.urlencode({"grant_type": "client_credentials", "client_id": os.environ["TDX_CLIENT_ID"], "client_secret": os.environ["TDX_CLIENT_SECRET"]}).encode()
-    req = urllib.request.Request("https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token", data=body, headers={"content-type": "application/x-www-form-urlencoded"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.load(r)["access_token"]
+    cid, secret = os.environ.get("TDX_CLIENT_ID", "").strip(), os.environ.get("TDX_CLIENT_SECRET", "").strip()
+    if not cid or not secret:
+        sys.exit("::error::沒有 TDX 金鑰：請到 repo 的 Settings → Secrets and variables → Actions 設定 TDX_CLIENT_ID 與 TDX_CLIENT_SECRET")
+    body = urllib.parse.urlencode({"grant_type": "client_credentials", "client_id": cid, "client_secret": secret}).encode()
+    for attempt in range(3):
+        req = urllib.request.Request("https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token", data=body, headers={"content-type": "application/x-www-form-urlencoded"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return json.load(r)["access_token"]
+        except urllib.error.HTTPError as e:
+            # 印出 TDX 回的錯誤說明（例如 invalid_client、Account disabled），不含金鑰本身
+            detail = e.read()[:500].decode("utf-8", "replace").replace(cid, "<id>").replace(secret, "<secret>")
+            print(f"TDX 登入失敗 HTTP {e.code}：{detail}")
+            if e.code >= 500 or e.code == 429:
+                time.sleep(10 * (attempt + 1))
+                continue
+            sys.exit(f"::error::TDX 登入失敗 HTTP {e.code}：{detail}")
+    sys.exit("::error::TDX 登入伺服器一直沒回應")
 
 
 def get(tk, path):
