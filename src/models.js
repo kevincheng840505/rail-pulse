@@ -587,6 +587,15 @@ const GL3D = {
     const F = [fw[0] * cp, fw[1] * cp, sp], U = [-fw[0] * sp, -fw[1] * sp, cp];
     return [F[0] * s * sx, F[1] * s * sx, F[2] * s * sx, 0, rt[0] * s, rt[1] * s, 0, 0, U[0] * s, U[1] * s, U[2] * s, 0, mc.x, mc.y, mc.z, 1];
   },
+  /* 場景網格（車站、軌道、城市）的位置矩陣。網格的 x、y 是 proj() 的公里座標 ×1000，
+     但 proj() 是以北緯 23.7° 為準的等距投影，不是真的公尺：台北一帶東西方向差約 1%、南北差約 0.5%。
+     以前直接當公尺擺，離原點越遠偏越多，鏡頭一移動、原點換了，整片景物就跳一下，也跟列車對不齊。
+     這裡把 proj 單位直接換成墨卡托座標，位置就跟 unproj() 完全一致，不管原點在哪都一樣。 */
+  local(ll) {
+    const mc = maplibregl.MercatorCoordinate.fromLngLat(ll, 0), s = mc.meterInMercatorCoordinateUnits();
+    const ax = 1 / (KX * 1000 * 360), ay = 1 / (KY * 1000 * 360 * Math.cos(ll[1] * Math.PI / 180));
+    return [ax, 0, 0, 0, 0, ay, 0, 0, 0, 0, s, 0, mc.x, mc.y, mc.z, 1];
+  },
 };
 
 /* ===== 場景：車站、高架橋、城市建築、行道樹、路燈、機場 =====
