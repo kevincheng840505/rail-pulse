@@ -280,7 +280,7 @@ const TrainGL = {
     const old = this.statics.get(name);
     if (old && old.mesh && this.gl) old.mesh.bufs.forEach(b => this.gl.deleteBuffer(b));
     this.statics.delete(name);
-    if (data && data.n && this.gl) this.statics.set(name, { mesh: GL3D.upload(this.gl, data), m: GL3D.model(ll, 0, Math.PI / 2) });
+    if (data && data.n && this.gl) this.statics.set(name, { mesh: GL3D.upload(this.gl, data), m: GL3D.local(ll) });
     if (map) map.triggerRepaint();
   },
   mesh(it) {
@@ -575,41 +575,49 @@ const Facade = (() => {
     });
     const trunk = mcol(mixHex('#5B4636', P.land, 0.2)), pole = mcol(mixHex('#7B838C', P.bld, 0.3));
     const leaf = ['#4E7D4A', '#5F8F4E', '#3F6E47', '#6E9A55'].map(c => mcol(mixHex(c, P.wood, P.lit ? 0.35 : 0.2)));
-    let trees = 0;
+    // 行道樹、路燈的位置對齊一張固定的世界格線（沿路的主軸每 10 m 一格），不從圖磚切開的線段起點量。
+    // 以前從線段起點每 12 m 一棵，同一條路在不同圖磚被切在不同地方，鏡頭一移、換了圖磚，樹就整排挪位置。
+    const S = 0.010, cands = [];
     for (const f of roads) {
       const w = ROAD_W[f.properties.class], g = f.geometry;
       const lines = g.type === 'LineString' ? [g.coordinates] : g.type === 'MultiLineString' ? g.coordinates : [];
       for (const line of lines) {
         const pts = line.map(([lon, lat]) => proj(lat, lon));
-        let run = 0; // 沿整條路累計的距離，路燈間距才不受折線切段影響
         for (let i = 1; i < pts.length; i++) {
           const [x1, y1] = pts[i - 1], [x2, y2] = pts[i], sl = Math.hypot(x2 - x1, y2 - y1);
           if (sl < 1e-6) continue;
           const ux = (x2 - x1) / sl, uy = (y2 - y1) / sl, nx = -uy, ny = ux;
-          for (let d = (0.012 - run % 0.012) % 0.012; d < sl; d += 0.012) {
-            const x = x1 + ux * d, y = y1 + uy * d;
-            if (Math.hypot(x - cx, y - cy) > RR) continue;
-            const key = Math.round(x * 2e3) + ',' + Math.round(y * 2e3);
-            if (seen.has(key)) continue; seen.add(key);
-            const k = Math.round((run + d) / 0.012), hs = hash(key);
+          const ax = Math.abs(ux) >= Math.abs(uy) ? 0 : 1, c1 = ax ? y1 : x1, c2 = ax ? y2 : x2;
+          const lo = Math.min(c1, c2), hi = Math.max(c1, c2);
+          for (let k = Math.ceil(lo / S); k * S < hi; k++) {
+            const t = (k * S - c1) / (c2 - c1), x = x1 + (x2 - x1) * t, y = y1 + (y2 - y1) * t;
+            const dc = Math.hypot(x - cx, y - cy); if (dc > RR) continue;
+            // 同一條路可能出現在相鄰兩塊圖磚裡（端點量化有幾十公分誤差），用 4 m 的格子去重
+            const o = Math.round((ax ? x : y) * 250), key = ax + ':' + k + ':' + o;
+            if (seen.has(key) || seen.has(ax + ':' + k + ':' + (o - 1)) || seen.has(ax + ':' + k + ':' + (o + 1))) continue;
+            seen.add(key);
+            const hs = hash(key);
             for (const side of [-1, 1]) {
               const off = (w / 2 + 1.2) / 1000 * side, tx = x + nx * off, ty = y + ny * off;
               if (onRail(tx, ty)) continue;
-              if (k % 3 === 1 && side > 0) {
+              if (((k % 3) + 3) % 3 === 1 && side > 0) {
                 // 路燈：燈桿＋燈頭，夜裡地上一圈光
                 { const [lx, ly] = L(tx, ty); lampMesh(mb, lx, ly, -nx * side, -ny * side, P.lit, pole); }
                 lamps.push({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: unproj(tx - nx * 0.0012 * side, ty - ny * 0.0012 * side) } });
                 continue;
               }
-              if (trees > MAX_TREES || hash(key + side) < 0.25) continue;
-              const r = 1.5 + hash(key + 's' + side) * 1.0, h = 4 + hs * 2.5;
-              { const [lx, ly] = L(tx, ty); treeMesh(mb, lx, ly, h + 0.8, r, leaf[Math.floor(hs * 97) % leaf.length], trunk, hs); }
-              trees++;
+              if (hash(key + side) < 0.25) continue;
+              cands.push({ tx, ty, d: dc, key, side, hs });
             }
           }
-          run += sl;
         }
       }
+    }
+    // 樹太多時留最靠近畫面中心的，跟圖磚、道路的讀取順序無關
+    cands.sort((a, b) => a.d - b.d);
+    for (const t of cands.slice(0, MAX_TREES)) {
+      const r = 1.5 + hash(t.key + 's' + t.side) * 1.0, h = 4 + t.hs * 2.5, [lx, ly] = L(t.tx, t.ty);
+      treeMesh(mb, lx, ly, h + 0.8, r, leaf[Math.floor(t.hs * 97) % leaf.length], trunk, t.hs);
     }
     return lamps;
   }

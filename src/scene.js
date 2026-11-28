@@ -281,7 +281,9 @@ function viaductFeatures(trip, k0, k1, P, mb, seen, O) {
   // 斷面：兩側矮牆（防音牆）、橋面板，下面是收窄的箱型梁
   const plain = [[-half, 1.0], [-half, -0.9], [-half * 0.55, -1.05], [-half * 0.4, -2.2], [half * 0.4, -2.2], [half * 0.55, -1.05], [half, -0.9], [half, 1.0], [half - 0.22, 1.0], [half - 0.22, 0.05], [-half + 0.22, 0.05], [-half + 0.22, 1.0]];
   let run = [], prev = null, prevSeen = false;
-  const flush = () => { if (run.length > 1) loftPath(mb, run, plain, (i, j) => j === 9 ? deck : side); run = []; };
+  // 不封口：斷面是 U 形（兩側矮牆），封口是從斷面中心往外扇形展開，凹進去的地方會多出三角形，
+  // 剛好凸在矮牆上方；而且橋面常被別班車接成很多小段，每段頭尾都封一次，就沿著橋一路冒出閃爍的三角形
+  const flush = () => { if (run.length > 1) loftPath(mb, run, plain, (i, j) => j === 9 ? deck : side, false); run = []; };
   for (let i = Math.floor(k0 / step); i * step < k1; i++) {
     const k = i * step, e = elevAt(trip, k);
     if (e < 0.05) { flush(); prev = null; continue; }
